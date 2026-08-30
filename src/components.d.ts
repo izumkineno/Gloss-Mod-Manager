@@ -191,6 +191,7 @@ declare module 'vue' {
     Textarea: typeof import('./components/ui/textarea/Textarea.vue')['default']
     ThirdPartyMods: typeof import('./components/Explore/ThirdPartyMods.vue')['default']
     Thunderstore: typeof import('./components/Home/Thunderstore.vue')['default']
+    TitleBar: typeof import('./components/TitleBar.vue')['default']
     Toggle: typeof import('./components/ui/toggle/Toggle.vue')['default']
     ToggleGroup: typeof import('./components/ui/toggle-group/ToggleGroup.vue')['default']
     ToggleGroupItem: typeof import('./components/ui/toggle-group/ToggleGroupItem.vue')['default']

@@ -12,9 +12,15 @@
     "app": {
         "windows": [
             {
+                "label": "main",
                 "title": "Gloss Mod Manager",
                 "width": 1280,
                 "height": 720,
+                "minWidth": 960,
+                "minHeight": 600,
+                "decorations": false,
+                "shadow": true,
+                "resizable": true,
                 "dragDropEnabled": true
             }
         ],

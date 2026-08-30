@@ -115,6 +115,11 @@ declare global {
   const findGlossDuplicateTasks: typeof import('./lib/gloss-download').findGlossDuplicateTasks
   const findLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').findLegacyCustomGameDefinition
   const formatKeywordText: typeof import('./lib/custom-definition-utils').formatKeywordText
+  const framelessClose: typeof import('./lib/frameless-window').framelessClose
+  const framelessIsMaximized: typeof import('./lib/frameless-window').framelessIsMaximized
+  const framelessMinimize: typeof import('./lib/frameless-window').framelessMinimize
+  const framelessStartDragging: typeof import('./lib/frameless-window').framelessStartDragging
+  const framelessToggleMaximize: typeof import('./lib/frameless-window').framelessToggleMaximize
   const getActivePinia: typeof import('pinia').getActivePinia
   const getBundledAiChatSkills: typeof import('./lib/ai-chat-skills').getBundledAiChatSkills
   const getCurrentInstance: typeof import('vue').getCurrentInstance

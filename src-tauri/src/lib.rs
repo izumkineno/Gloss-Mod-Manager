@@ -311,8 +311,18 @@ pub fn run() {
                 app.handle()
                     .plugin(tauri_plugin_autostart::Builder::new().build())?;
                 app.handle().plugin(tauri_plugin_persisted_scope::init())?;
-                app.handle()
-                    .plugin(tauri_plugin_window_state::Builder::default().build())?;
+                // window-state 默认会恢复 decorations（StateFlags::all 包含 DECORATIONS），
+                // 会把已持久化的 decorated:true 写回覆盖 tauri.conf.json 的 decorations:false，
+                // 导致无边框配置看似未生效（https://github.com/tauri-apps/plugins-workspace/issues/2617）。
+                // 这里显式排除 DECORATIONS，仅持久化尺寸/位置/最大化等。
+                app.handle().plugin(
+                    tauri_plugin_window_state::Builder::default()
+                        .with_state_flags(
+                            tauri_plugin_window_state::StateFlags::all()
+                                - tauri_plugin_window_state::StateFlags::DECORATIONS,
+                        )
+                        .build(),
+                )?;
                 app.handle()
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
 
