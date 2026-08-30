@@ -1,16 +1,10 @@
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { appLogDir, join } from "@tauri-apps/api/path";
 import { readDir, readTextFile, stat } from "@tauri-apps/plugin-fs";
-import {
-    debug as writeDebugLog,
-    error as writeErrorLog,
-    info as writeInfoLog,
-    trace as writeTraceLog,
-    warn as writeWarnLog,
-} from "@tauri-apps/plugin-log";
 import { FileHandler } from "@/lib/FileHandler";
 
-type ConsoleMethodName = "debug" | "error" | "info" | "log" | "warn";
+// console 原生方法名，新增 trace 以对齐 tracing 的 trace 级别
+type ConsoleMethodName = "debug" | "error" | "info" | "log" | "trace" | "warn";
 type LogLevelName = "debug" | "error" | "info" | "trace" | "warn";
 
 interface IWriteLogOptions {
@@ -40,14 +34,19 @@ export class Log {
         error: console.error.bind(console),
         info: console.info.bind(console),
         log: console.log.bind(console),
+        trace: (console.trace?.bind(console) ?? console.debug.bind(console)) as (
+            ...args: unknown[]
+        ) => void,
         warn: console.warn.bind(console),
     };
-
     private static initializeTask: Promise<void> | null = null;
     private static isConsoleForwardingInstalled = false;
+    private static isInitialized = false;
+    // Tauri 注入前的早期调用缓冲，初始化后重放
+    private static pendingBuffer: Array<{ level: LogLevelName; args: unknown[] }> = [];
 
     /**
-     * 初始化日志系统：创建日志目录，并将现有 console 输出同步到日志文件。
+     * 初始化日志系统：安装 console 拦截、创建日志目录，并将现有 console 输出同步到日志文件。
      */
     public static async initialize() {
         if (Log.initializeTask) {
@@ -59,8 +58,11 @@ export class Log {
                 return;
             }
 
-            await Log.getLogDirectoryPath();
+            // 先装拦截，确保 getLogDirectoryPath 内的 console.log 也能被捕获（使用 originalConsole 避免递归）
             Log.installConsoleForwarding();
+            await Log.getLogDirectoryPath();
+            Log.isInitialized = true;
+            await Log.flushPendingBuffer();
             await Log.writeToPlugin("info", ["日志系统初始化完成。"], {
                 ensureInitialized: false,
             });
@@ -80,8 +82,6 @@ export class Log {
     public static async getLogDirectoryPath() {
         const directoryPath = await appLogDir();
         await FileHandler.createDirectory(directoryPath);
-        console.log({ directoryPath });
-
         return directoryPath;
     }
 
@@ -177,18 +177,55 @@ export class Log {
         await Log.writeToPlugin("error", args);
     }
 
-    private static installConsoleForwarding() {
+    /**
+     * 安装 console 拦截：所有 console.* 调用都会同步镜像到 Rust tracing。
+     * 模块加载时即调用，确保最早的日志也不丢失；方法幂等。
+     */
+    public static installConsoleForwarding() {
         if (Log.isConsoleForwardingInstalled) {
             return;
         }
 
+        // 劫持 console.*，映射到对应的 tracing level
+        // log -> info（与旧行为一致），trace -> trace
         console.log = Log.createConsoleForwarder("log", "info");
         console.info = Log.createConsoleForwarder("info", "info");
         console.warn = Log.createConsoleForwarder("warn", "warn");
         console.error = Log.createConsoleForwarder("error", "error");
         console.debug = Log.createConsoleForwarder("debug", "debug");
+        // 部分环境无 console.trace，用 debug 兜底
+        try {
+            (console as unknown as Record<string, unknown>).trace = Log.createConsoleForwarder(
+                "trace",
+                "trace",
+            );
+        } catch {
+            // 忽略只读属性的劫持失败
+        }
 
         Log.isConsoleForwardingInstalled = true;
+        Log.installGlobalErrorHandlers();
+    }
+
+    private static installGlobalErrorHandlers() {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        try {
+            window.addEventListener("error", (event) => {
+                const message = event.message || "Unknown window error";
+                const stack = (event.error as Error | undefined)?.stack;
+                void Log.writeToPlugin("error", stack ? [message, stack] : [message, event.error]);
+            });
+
+            window.addEventListener("unhandledrejection", (event) => {
+                const reason = (event as PromiseRejectionEvent).reason;
+                void Log.writeToPlugin("error", ["Unhandled rejection", reason]);
+            });
+        } catch {
+            // 忽略非浏览器环境的监听失败
+        }
     }
 
     private static createConsoleForwarder(
@@ -217,17 +254,45 @@ export class Log {
             : `${normalizedFileName}.log`;
     }
 
+    private static async flushPendingBuffer() {
+        if (Log.pendingBuffer.length === 0 || !isTauri()) {
+            return;
+        }
+
+        const toFlush = [...Log.pendingBuffer];
+        Log.pendingBuffer = [];
+
+        for (const { level, args } of toFlush) {
+            await Log.writeToPlugin(level, args, { ensureInitialized: false });
+        }
+    }
+
     private static async writeToPlugin(
         level: LogLevelName,
         args: unknown[],
         options: IWriteLogOptions = {},
     ) {
         if (!isTauri()) {
+            if (Log.isInitialized) {
+                return;
+            }
+
+            Log.pendingBuffer.push({ level, args: [...args] });
+            if (Log.pendingBuffer.length > 300) {
+                Log.pendingBuffer.shift();
+            }
+
             return;
         }
 
-        if (options.ensureInitialized !== false) {
-            await Log.initialize();
+        if (options.ensureInitialized !== false && !Log.isInitialized) {
+            // 未初始化时的常规路径：先初始化再写入，同时把本次调用排队避免递归
+            try {
+                await Log.initialize();
+            } catch {
+                // 初始化失败则本次日志丢弃，避免阻塞业务
+                return;
+            }
         }
 
         const message = Log.stringifyArgs(args);
@@ -237,23 +302,8 @@ export class Log {
         }
 
         try {
-            switch (level) {
-                case "trace":
-                    await writeTraceLog(message);
-                    return;
-                case "debug":
-                    await writeDebugLog(message);
-                    return;
-                case "info":
-                    await writeInfoLog(message);
-                    return;
-                case "warn":
-                    await writeWarnLog(message);
-                    return;
-                case "error":
-                    await writeErrorLog(message);
-                    return;
-            }
+            // 通过 Rust tracing 流水线落盘（stdout + session + latest）
+            await invoke("frontend_log", { level, message });
         } catch (error) {
             Log.originalConsole.error("写入日志失败。");
             Log.originalConsole.error(error);
@@ -301,5 +351,15 @@ export class Log {
         } catch {
             return String(value);
         }
+    }
+}
+
+// 模块加载时立即拦截，确保最早的 console.*（包括其他模块顶层执行期间的）也能进入 tracing
+// 幂等：重复调用无副作用；非 Tauri 预览下 writeToPlugin 会自动缓冲/丢弃
+if (typeof window !== "undefined" && typeof console !== "undefined") {
+    try {
+        Log.installConsoleForwarding();
+    } catch {
+        // 忽略极早期调用的异常
     }
 }

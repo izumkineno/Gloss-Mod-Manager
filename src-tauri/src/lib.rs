@@ -4,11 +4,14 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use tauri::{Emitter, Manager};
-use tauri_plugin_log::{Target, TargetKind, TimezoneStrategy};
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use time::OffsetDateTime;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::fmt::time::OffsetTime;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 const APP_LAUNCH_FILES_EVENT_NAME: &str = "app-launch-files";
 
@@ -120,6 +123,7 @@ where
         .collect()
 }
 
+#[allow(dead_code)]
 fn format_local_timestamp() -> String {
     OffsetDateTime::now_local()
         .unwrap_or_else(|_| OffsetDateTime::now_utc())
@@ -207,12 +211,89 @@ fn prepare_log_directory(bundle_identifier: &str) -> io::Result<PathBuf> {
     Ok(log_directory)
 }
 
+/// 持有 tracing-appender 的 WorkerGuard，防止后台线程提前退出导致日志丢失。
+static TRACING_GUARDS: OnceLock<(WorkerGuard, WorkerGuard)> = OnceLock::new();
+
+/// 初始化 tracing 订阅：stdout + session 文件 + latest.log 双写，格式对齐旧 `tauri-plugin-log`。
+fn init_tracing(log_directory: PathBuf, session_file_name: String) {
+    // 将依赖中 `log::` 的输出桥接到 tracing，避免 Tauri 内部日志丢失。
+    let _ = tracing_log::LogTracer::init();
+
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    // 使用本地时区的 Rfc3339，与旧 `format_local_timestamp` 保持一致。
+    let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+    // Rfc3339 为 'static 的 well-known 描述，可直接借用
+    let timer = OffsetTime::new(local_offset, &Rfc3339);
+
+    // 标准输出层（控制台，带颜色）
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .with_timer(timer.clone())
+        .with_target(true)
+        .with_level(true)
+        .with_ansi(true)
+        .with_writer(std::io::stdout);
+
+    // 会话文件层：`YYYY-MM-DD_HH-mm-ss.log`
+    let session_file_name_with_ext = if session_file_name.ends_with(".log") {
+        session_file_name.clone()
+    } else {
+        format!("{session_file_name}.log")
+    };
+    let session_appender =
+        tracing_appender::rolling::never(&log_directory, session_file_name_with_ext);
+    let (session_writer, session_guard) = tracing_appender::non_blocking(session_appender);
+    let session_layer = tracing_subscriber::fmt::layer()
+        .with_timer(timer.clone())
+        .with_target(true)
+        .with_level(true)
+        .with_ansi(false)
+        .with_writer(session_writer);
+
+    // latest.log 层：始终覆盖为本次会话的完整日志
+    let latest_appender = tracing_appender::rolling::never(&log_directory, "latest.log");
+    let (latest_writer, latest_guard) = tracing_appender::non_blocking(latest_appender);
+    let latest_layer = tracing_subscriber::fmt::layer()
+        .with_timer(timer)
+        .with_target(true)
+        .with_level(true)
+        .with_ansi(false)
+        .with_writer(latest_writer);
+
+    let subscriber = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stdout_layer)
+        .with(session_layer)
+        .with(latest_layer);
+
+    // 忽略重复初始化错误（测试环境可能已初始化）
+    let _ = subscriber.try_init();
+
+    // 持有 guard 直到进程结束
+    let _ = TRACING_GUARDS.set((session_guard, latest_guard));
+}
+
+/// 前端日志透传：将 JS 侧的 Log.* 调用写入 Rust tracing 流水线。
+#[tauri::command]
+fn frontend_log(level: String, message: String) {
+    match level.as_str() {
+        "trace" => tracing::trace!(target: "frontend", "{}", message),
+        "debug" => tracing::debug!(target: "frontend", "{}", message),
+        "info" => tracing::info!(target: "frontend", "{}", message),
+        "warn" => tracing::warn!(target: "frontend", "{}", message),
+        "error" => tracing::error!(target: "frontend", "{}", message),
+        _ => tracing::info!(target: "frontend", "{}", message),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let context = tauri::generate_context!();
     let log_directory = prepare_log_directory(&context.config().identifier)
         .expect("could not prepare log directory");
     let session_log_file_name = build_session_log_file_name();
+    // 初始化 tracing：stdout + session 文件 + latest.log
+    init_tracing(log_directory.clone(), session_log_file_name.clone());
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
@@ -252,36 +333,12 @@ pub fn run() {
             app_take_pending_launch_files,
             app_process_id,
             app_is_local_port_open,
+            frontend_log,
             mcp_server::mcp_get_server_state,
             mcp_server::mcp_start_server,
             mcp_server::mcp_stop_server,
             mcp_server::mcp_complete_request
         ])
-        .plugin(
-            tauri_plugin_log::Builder::new()
-                .targets([
-                    Target::new(TargetKind::Stdout),
-                    Target::new(TargetKind::Folder {
-                        path: log_directory.clone(),
-                        file_name: Some(session_log_file_name),
-                    }),
-                    Target::new(TargetKind::Folder {
-                        path: log_directory,
-                        file_name: Some("latest".to_string()),
-                    }),
-                ])
-                .timezone_strategy(TimezoneStrategy::UseLocal)
-                .format(|out, message, record| {
-                    out.finish(format_args!(
-                        "{} [{}] [{}] {}",
-                        format_local_timestamp(),
-                        record.level(),
-                        record.target(),
-                        message
-                    ))
-                })
-                .build(),
-        )
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -339,7 +396,7 @@ pub fn run() {
                 app.state::<AppLaunchState>().push_files(launch_files);
             }
 
-            log::info!(target: "gmm::startup", "日志系统初始化完成。");
+            tracing::info!(target: "gmm::startup", "日志系统初始化完成。");
             Ok(())
         })
         .run(context)

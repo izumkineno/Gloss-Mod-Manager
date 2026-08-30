@@ -83,7 +83,6 @@
         "stronghold:default",
         "stronghold:allow-remove-store-record",
         "dialog:default",
-        "log:default",
         "shell:default",
         "core:window:default",
         "core:window:allow-destroy",
