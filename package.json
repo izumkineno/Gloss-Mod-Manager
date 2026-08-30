@@ -6,9 +6,9 @@
     "license": "LGPL-3.0-or-later",
     "private": true,
     "scripts": {
-        "sync:version": "tsx --tsconfig tsconfig.scripts.json scripts/sync-version.ts",
-        "prepare:sidecars": "tsx --tsconfig tsconfig.scripts.json scripts/prepare-sidecars.ts",
-        "postinstall": "npm run prepare:sidecars",
+        "sync:version": "node ./node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.scripts.json scripts/sync-version.ts",
+        "prepare:sidecars": "node ./node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.scripts.json scripts/prepare-sidecars.ts",
+        "postinstall": "node ./node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.scripts.json scripts/prepare-sidecars.ts || echo \"[sidecars] skip prepare in postinstall (tsx not ready)\"",
         "predev": "npm run sync:version && npm run prepare:sidecars",
         "prebuild": "npm run sync:version && npm run prepare:sidecars",
         "pretauri": "npm run sync:version",
