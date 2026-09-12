@@ -84,7 +84,6 @@ V2 版本是对 V1 版本的全面升级，最显著的提升就是 安装包的
 - [x] 自动处理Mod冲突问题
 
 
-### [帮助翻译](https://gmm.aoe.top/Translate.html)
 
 
 ### 反馈问题
@@ -108,10 +107,10 @@ V2 版本是对 V1 版本的全面升级，最显著的提升就是 安装包的
 ### 标星历史
 
 
-<a href="https://www.star-history.com/#GlossMod/Gloss-Mod-Manager&type=date&legend=top-left">
+<a href="https://star-history.dera.page/#GlossMod/Gloss-Mod-Manager&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=GlossMod/Gloss-Mod-Manager&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=GlossMod/Gloss-Mod-Manager&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=GlossMod/Gloss-Mod-Manager&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=GlossMod/Gloss-Mod-Manager&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=GlossMod/Gloss-Mod-Manager&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=GlossMod/Gloss-Mod-Manager&type=date&legend=top-left" />
  </picture>
 </a>
