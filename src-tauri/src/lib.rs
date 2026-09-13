@@ -1,3 +1,4 @@
+mod downloader;
 mod mcp_server;
 
 use std::io;
@@ -53,7 +54,7 @@ fn app_process_id() -> u32 {
 
 /// 探测本地端口是否已有进程监听。
 ///
-/// aria2 未启动时若直接用 fetch 试探 RPC 端口，WebKit 会把每次失败都当成
+/// 本地端口试探：若直接用 fetch 试探端口，WebKit 会把每次失败都当成
 /// 网络错误打到控制台（且无法从 JS 侧捕获静音），所以放到 Rust 里做 TCP 连接判断。
 #[tauri::command]
 fn app_is_local_port_open(port: u16, timeout_ms: Option<u64>) -> bool {
@@ -329,11 +330,24 @@ pub fn run() {
     builder = builder
         .manage(AppLaunchState::default())
         .manage(Arc::new(mcp_server::McpRuntimeState::default()))
+        .manage(downloader::DownloaderState::default())
         .invoke_handler(tauri::generate_handler![
             app_take_pending_launch_files,
             app_process_id,
             app_is_local_port_open,
             frontend_log,
+            downloader::dl_probe_filename,
+            downloader::dl_enqueue,
+            downloader::dl_pause,
+            downloader::dl_resume,
+            downloader::dl_cancel,
+            downloader::dl_forget,
+            downloader::dl_change_option,
+            downloader::dl_tell_status,
+            downloader::dl_tell_active,
+            downloader::dl_tell_waiting,
+            downloader::dl_tell_stopped,
+            downloader::dl_global_stat,
             mcp_server::mcp_get_server_state,
             mcp_server::mcp_start_server,
             mcp_server::mcp_stop_server,

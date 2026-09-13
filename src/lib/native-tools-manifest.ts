@@ -1,16 +1,13 @@
 const embeddedToolVersions = {
     sevenZip: "26.00",
-    aria2: "1.37.0",
 } as const;
 
 const sidecarBaseNames = {
     sevenZip: "sevenzip",
-    aria2: "aria2c",
 } as const;
 
 const sidecarCommands = {
     sevenZip: "binaries/sevenzip",
-    aria2: "binaries/aria2c",
 } as const;
 
 const windowsSevenZipSupportFiles = ["7z.dll"] as const;

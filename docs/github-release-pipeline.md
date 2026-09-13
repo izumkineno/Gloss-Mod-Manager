@@ -78,11 +78,7 @@ git push origin v2.0.1
 
 ### Linux
 
-仓库的 `scripts/prepare-sidecars.ts` 会在 Linux 上从源码编译 aria2，因此工作流里额外安装了：
-
-- `build-essential`
-- `autoconf` / `automake` / `libtool`
-- `openssl` / `libxml2` / `zlib` / `sqlite` / `libssh2` / `c-ares` 相关开发包
+下载已改为 Rust 进程内 `simple_downloader`，无需额外系统依赖即可构建。
 
 ### Windows
 

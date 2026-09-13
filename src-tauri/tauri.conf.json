@@ -59,7 +59,7 @@
         "license": "LGPL-3.0-or-later",
         "shortDescription": "A modern game mod manager for fast download, install and update workflows.",
         "copyright": "Copyright (c) 2026 小莫sky",
-        "externalBin": ["binaries/sevenzip", "binaries/aria2c"],
+        "externalBin": ["binaries/sevenzip"],
         "icon": [
             "icons/32x32.png",
             "icons/128x128.png",

@@ -198,32 +198,4 @@ export class Sidecar {
             options,
         );
     }
-
-    /**
-     * 执行 aria2 sidecar。
-     */
-    public static async executeAria2(
-        args: readonly string[],
-        options: SidecarCommandOptions = {},
-    ) {
-        return Sidecar.execute(
-            NativeToolsManifest.SIDECAR_COMMANDS.aria2,
-            args,
-            options,
-        );
-    }
-
-    /**
-     * 启动 aria2 sidecar 子进程。
-     */
-    public static async spawnAria2(
-        args: readonly string[],
-        options: SidecarCommandOptions = {},
-    ) {
-        return Sidecar.spawn(
-            NativeToolsManifest.SIDECAR_COMMANDS.aria2,
-            args,
-            options,
-        );
-    }
 }

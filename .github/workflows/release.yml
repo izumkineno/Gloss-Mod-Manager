@@ -76,52 +76,15 @@ jobs:
                     libwebkit2gtk-4.1-dev \
                     libappindicator3-dev \
                     librsvg2-dev \
-                    patchelf \
-                    build-essential \
-                    pkg-config \
-                    autoconf \
-                    automake \
-                    libtool \
-                    gettext \
-                    libssl-dev \
-                    libxml2-dev \
-                    zlib1g-dev \
-                    libc-ares-dev \
-                    libsqlite3-dev \
-                    libssh2-1-dev
+                    patchelf
 
             - name: Install macOS build dependencies
               if: runner.os == 'macOS'
               shell: bash
               run: |
-                  formulae=(
-                    autoconf
-                    automake
-                    libtool
-                    pkg-config
-                    c-ares
-                    libssh2
-                    openssl@3
-                    sqlite
-                  )
-                  missing_formulae=()
-
-                  for formula in "${formulae[@]}"; do
-                      if ! brew list --versions "$formula" >/dev/null; then
-                          missing_formulae+=("$formula")
-                      fi
-                  done
-
-                  if [[ ${#missing_formulae[@]} -gt 0 ]]; then
-                      brew install "${missing_formulae[@]}"
+                  if ! brew list --versions pkg-config >/dev/null; then
+                      brew install pkg-config
                   fi
-
-                  brew_prefix="$(brew --prefix)"
-                  {
-                      echo "PKG_CONFIG_PATH=${brew_prefix}/opt/openssl@3/lib/pkgconfig:${brew_prefix}/opt/libssh2/lib/pkgconfig:${brew_prefix}/opt/sqlite/lib/pkgconfig:${brew_prefix}/opt/c-ares/lib/pkgconfig:${PKG_CONFIG_PATH}"
-                      echo "CPPFLAGS=-I${brew_prefix}/opt/openssl@3/include -I${brew_prefix}/opt/libssh2/include -I${brew_prefix}/opt/sqlite/include -I${brew_prefix}/opt/c-ares/include ${CPPFLAGS}"
-                      echo "LDFLAGS=-L${brew_prefix}/opt/openssl@3/lib -L${brew_prefix}/opt/libssh2/lib -L${brew_prefix}/opt/sqlite/lib -L${brew_prefix}/opt/c-ares/lib ${LDFLAGS}"
-                  } >> "$GITHUB_ENV"
 
             - name: Install frontend dependencies
               run: yarn install --frozen-lockfile

@@ -27,6 +27,8 @@ export interface IThirdPartyListQuery {
 export interface IThirdPartyModFile {
     id: string;
     name: string;
+    // Nexus 等来源的真实文件名（含后缀），优先于显示名用于落盘。
+    fileName?: string;
     version: string;
     size: number;
     createdAt: string;
@@ -1057,6 +1059,7 @@ function normalizeNexusModsFiles(
             return {
                 id: String(item.file_id),
                 name: item.name || item.file_name,
+                fileName: item.file_name || "",
                 version: item.version || item.mod_version || "",
                 size: item.size_in_bytes || item.size_kb * 1024 || 0,
                 createdAt:

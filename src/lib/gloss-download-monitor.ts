@@ -1,5 +1,6 @@
 import { ElMessage } from "element-plus-message";
-import { Aria2Rpc, type IAria2RpcTask } from "@/lib/aria2-rpc";
+import { Downloader } from "@/lib/native-downloader";
+import type { IDownloaderTask } from "@/lib/download-task-types";
 import { FileHandler } from "@/lib/FileHandler";
 import {
     findGlossDuplicateLocalMods,
@@ -10,7 +11,7 @@ import {
     importLocalModSources,
     type ILocalModImportSource,
 } from "@/lib/local-mod-import";
-import { mergeAria2TaskSnapshots } from "@/lib/aria2-task-cache";
+import { mergeDownloadTaskSnapshots } from "@/lib/download-task-cache";
 import { PersistentStore } from "@/lib/persistent-store";
 import { useManager } from "@/stores/manager";
 
@@ -26,7 +27,7 @@ interface ITaskMetaSyncResult {
     newlyCompletedTaskGids: string[];
 }
 
-const ARIA2_TASK_META_KEY = "aria2TaskMetaMap";
+const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
 const POLL_INTERVAL_MS = 2000;
 const importingTaskGids = new Set<string>();
 
@@ -38,7 +39,7 @@ function getTaskExternalId(metadata?: IGlossDownloadTaskMeta) {
     return metadata?.externalId ?? metadata?.modId;
 }
 
-function getTaskPrimaryFile(task: IAria2RpcTask) {
+function getTaskPrimaryFile(task: IDownloaderTask) {
     return task.files.find((item) => item.path) ?? task.files[0] ?? null;
 }
 
@@ -53,7 +54,7 @@ function getBaseName(filePath?: string) {
 async function readTaskMetaMap() {
     return (
         (await PersistentStore.get<Record<string, IGlossDownloadTaskMeta>>(
-            ARIA2_TASK_META_KEY,
+            DOWNLOAD_TASK_META_KEY,
             {},
         )) ?? {}
     );
@@ -70,7 +71,7 @@ async function updateTaskMeta(
         return;
     }
 
-    await PersistentStore.set(ARIA2_TASK_META_KEY, {
+    await PersistentStore.set(DOWNLOAD_TASK_META_KEY, {
         ...taskMetaMap,
         [gid]: {
             ...currentMeta,
@@ -81,7 +82,7 @@ async function updateTaskMeta(
 
 function syncTaskMetaStatuses(
     taskMetaMap: Record<string, IGlossDownloadTaskMeta>,
-    tasks: IAria2RpcTask[],
+    tasks: IDownloaderTask[],
 ): ITaskMetaSyncResult {
     const nextTaskMetaMap = { ...taskMetaMap };
     const newlyCompletedTaskGids: string[] = [];
@@ -137,7 +138,7 @@ function syncTaskMetaStatuses(
 export async function autoImportCompletedDownloadTasks(
     settings: IGlossDownloadMonitorSettings,
     completedTaskGids: string[],
-    tasks: IAria2RpcTask[],
+    tasks: IDownloaderTask[],
 ) {
     const manager = useManager();
 
@@ -317,9 +318,9 @@ export class GlossDownloadMonitor {
 
             const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all(
                 [
-                    Aria2Rpc.tellActive(),
-                    Aria2Rpc.tellWaiting(0, 100),
-                    Aria2Rpc.tellStopped(0, 100),
+                    Downloader.tellActive(),
+                    Downloader.tellWaiting(0, 100),
+                    Downloader.tellStopped(0, 100),
                 ],
             );
             const liveTasks = [
@@ -327,16 +328,16 @@ export class GlossDownloadMonitor {
                 ...waitingTasks,
                 ...stoppedTasks,
             ];
-            const allTasks = await mergeAria2TaskSnapshots(
+            const allTasks = await mergeDownloadTaskSnapshots(
                 liveTasks,
                 taskMetaMap,
-                await Aria2Rpc.resolveDownloadDirectory(),
+                await Downloader.resolveDownloadDirectory(),
             );
             const syncResult = syncTaskMetaStatuses(taskMetaMap, allTasks);
 
             if (syncResult.changed) {
                 await PersistentStore.set(
-                    ARIA2_TASK_META_KEY,
+                    DOWNLOAD_TASK_META_KEY,
                     syncResult.nextTaskMetaMap,
                 );
             }

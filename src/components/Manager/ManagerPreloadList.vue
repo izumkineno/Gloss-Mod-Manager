@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus-message";
-import { Aria2Rpc, type IAria2RpcTask } from "@/lib/aria2-rpc";
+import { Downloader } from "@/lib/native-downloader";
+import type { IDownloaderTask } from "@/lib/download-task-types";
 import {
     queueGlossModDownloadWithSelection,
     queueThirdPartyModDownloadWithSelection,
@@ -51,7 +52,7 @@ const queueingPreloadId = ref("");
 const resolvedPreloadCriteriaMap = ref<Record<string, IPreloadLookupCriteria>>(
     {},
 );
-const taskSnapshots = ref<Record<string, IAria2RpcTask>>({});
+const taskSnapshots = ref<Record<string, IDownloaderTask>>({});
 
 const currentGame = computed(() => manager.managerGame);
 const currentGameId = computed(() => currentGame.value?.GlossGameId ?? 0);
@@ -275,7 +276,7 @@ function toNumber(value?: string | number) {
     return Number.isFinite(normalized) ? normalized : 0;
 }
 
-function getTaskProgress(task?: IAria2RpcTask | null) {
+function getTaskProgress(task?: IDownloaderTask | null) {
     if (!task) {
         return 0;
     }
@@ -465,9 +466,9 @@ async function refreshTaskSnapshots() {
 
     try {
         const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-            Aria2Rpc.tellActive(),
-            Aria2Rpc.tellWaiting(0, 100),
-            Aria2Rpc.tellStopped(0, 100),
+            Downloader.tellActive(),
+            Downloader.tellWaiting(0, 100),
+            Downloader.tellStopped(0, 100),
         ]);
 
         taskSnapshots.value = Object.fromEntries(

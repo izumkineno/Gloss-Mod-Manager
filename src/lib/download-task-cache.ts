@@ -1,12 +1,12 @@
 import { join } from "@tauri-apps/api/path";
-import type { IAria2RpcTask } from "@/lib/aria2-rpc";
+import type { IDownloaderTask } from "@/lib/download-task-types";
 import type { IGlossDownloadTaskMeta } from "@/lib/gloss-download";
 import { PersistentStore } from "@/lib/persistent-store";
 
-const ARIA2_TASK_SNAPSHOT_KEY = "aria2TaskSnapshotMap";
+const DOWNLOAD_TASK_SNAPSHOT_KEY = "aria2TaskSnapshotMap";
 const RESTORED_TASK_ERROR_CODE = "GMM_RESTORED_TASK";
 const RESTORED_TASK_ERROR_MESSAGE =
-    "任务未从 aria2 会话恢复，可点击“重试”重新加入下载队列。";
+    "任务未能从本地快照恢复，可点击“重试”重新加入下载队列。";
 
 function toNumber(value?: string | number) {
     const normalized = Number(value ?? 0);
@@ -14,14 +14,14 @@ function toNumber(value?: string | number) {
     return Number.isFinite(normalized) ? normalized : 0;
 }
 
-function isFinishedByProgress(task: IAria2RpcTask) {
+function isFinishedByProgress(task: IDownloaderTask) {
     const totalLength = toNumber(task.totalLength);
     const completedLength = toNumber(task.completedLength);
 
     return totalLength > 0 && completedLength >= totalLength;
 }
 
-function normalizeRestoredTask(task: IAria2RpcTask, liveGids: Set<string>) {
+function normalizeRestoredTask(task: IDownloaderTask, liveGids: Set<string>) {
     if (liveGids.has(task.gid) || task.status === "removed") {
         return task;
     }
@@ -109,30 +109,30 @@ async function createTaskFromMetadata(
             metadata.taskStatus === "complete"
                 ? undefined
                 : RESTORED_TASK_ERROR_MESSAGE,
-    } satisfies IAria2RpcTask;
+    } satisfies IDownloaderTask;
 }
 
-export function isRestoredAria2Task(task?: IAria2RpcTask | null) {
+export function isRestoredDownloadTask(task?: IDownloaderTask | null) {
     return task?.errorCode === RESTORED_TASK_ERROR_CODE;
 }
 
-export async function readAria2TaskSnapshots() {
+export async function readDownloadTaskSnapshots() {
     return (
-        (await PersistentStore.get<Record<string, IAria2RpcTask>>(
-            ARIA2_TASK_SNAPSHOT_KEY,
+        (await PersistentStore.get<Record<string, IDownloaderTask>>(
+            DOWNLOAD_TASK_SNAPSHOT_KEY,
             {},
         )) ?? {}
     );
 }
 
-export async function mergeAria2TaskSnapshots(
-    liveTasks: IAria2RpcTask[],
+export async function mergeDownloadTaskSnapshots(
+    liveTasks: IDownloaderTask[],
     taskMetaMap: Record<string, IGlossDownloadTaskMeta> = {},
     fallbackDirectory?: string,
 ) {
-    const storedSnapshots = await readAria2TaskSnapshots();
+    const storedSnapshots = await readDownloadTaskSnapshots();
     const liveGids = new Set(liveTasks.map((task) => task.gid));
-    const nextSnapshots: Record<string, IAria2RpcTask> = {
+    const nextSnapshots: Record<string, IDownloaderTask> = {
         ...storedSnapshots,
     };
 
@@ -157,7 +157,7 @@ export async function mergeAria2TaskSnapshots(
         );
     }
 
-    const normalizedSnapshots: Record<string, IAria2RpcTask> = {};
+    const normalizedSnapshots: Record<string, IDownloaderTask> = {};
 
     for (const [gid, task] of Object.entries(nextSnapshots)) {
         const normalizedTask = normalizeRestoredTask(task, liveGids);
@@ -167,13 +167,13 @@ export async function mergeAria2TaskSnapshots(
         }
     }
 
-    await PersistentStore.set(ARIA2_TASK_SNAPSHOT_KEY, normalizedSnapshots);
+    await PersistentStore.set(DOWNLOAD_TASK_SNAPSHOT_KEY, normalizedSnapshots);
 
     return Object.values(normalizedSnapshots);
 }
 
-export async function removeAria2TaskSnapshot(gid: string) {
-    const storedSnapshots = await readAria2TaskSnapshots();
+export async function removeDownloadTaskSnapshot(gid: string) {
+    const storedSnapshots = await readDownloadTaskSnapshots();
 
     if (!storedSnapshots[gid]) {
         return;
@@ -181,19 +181,19 @@ export async function removeAria2TaskSnapshot(gid: string) {
 
     const nextSnapshots = { ...storedSnapshots };
     delete nextSnapshots[gid];
-    await PersistentStore.set(ARIA2_TASK_SNAPSHOT_KEY, nextSnapshots, true);
+    await PersistentStore.set(DOWNLOAD_TASK_SNAPSHOT_KEY, nextSnapshots, true);
 }
 
-export async function removeAria2TaskSnapshots(gids: string[]) {
+export async function removeDownloadTaskSnapshots(gids: string[]) {
     if (gids.length === 0) {
         return;
     }
 
     const gidSet = new Set(gids);
-    const storedSnapshots = await readAria2TaskSnapshots();
+    const storedSnapshots = await readDownloadTaskSnapshots();
     const nextSnapshots = Object.fromEntries(
         Object.entries(storedSnapshots).filter(([gid]) => !gidSet.has(gid)),
     );
 
-    await PersistentStore.set(ARIA2_TASK_SNAPSHOT_KEY, nextSnapshots, true);
+    await PersistentStore.set(DOWNLOAD_TASK_SNAPSHOT_KEY, nextSnapshots, true);
 }

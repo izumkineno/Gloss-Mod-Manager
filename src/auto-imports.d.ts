@@ -9,11 +9,10 @@ declare global {
   const ARCHIVE_EXTENSIONS: typeof import('./lib/local-mod-import').ARCHIVE_EXTENSIONS
   const AiChat: typeof import('./lib/AiChat').AiChat
   const AppAnalytics: typeof import('./lib/Analytics').AppAnalytics
-  const Aria2: typeof import('./lib/aria2').Aria2
-  const Aria2Rpc: typeof import('./lib/aria2-rpc').Aria2Rpc
   const AutoStart: typeof import('./lib/auto-start').AutoStart
   const DEFAULT_AI_CHAT_SYSTEM_PROMPT: typeof import('./lib/AiChat').DEFAULT_AI_CHAT_SYSTEM_PROMPT
   const DotNetTool: typeof import('./lib/dotnet-tool').DotNetTool
+  const Downloader: typeof import('./lib/native-downloader').Downloader
   const EMBEDDED_TOOL_VERSIONS: typeof import('./lib/native-tools-manifest').EMBEDDED_TOOL_VERSIONS
   const EffectScope: typeof import('vue').EffectScope
   const FileHandler: typeof import('./lib/FileHandler').FileHandler
@@ -50,8 +49,6 @@ declare global {
   const autoImportCompletedGlossTasks: typeof import('./lib/gloss-download-monitor').autoImportCompletedGlossTasks
   const autoResetRef: typeof import('@vueuse/core').autoResetRef
   const buildAiChatAttachmentPromptText: typeof import('./lib/ai-chat-attachments').buildAiChatAttachmentPromptText
-  const buildAria2DownloadArgs: typeof import('./lib/aria2').buildAria2DownloadArgs
-  const buildAria2RpcServerArgs: typeof import('./lib/aria2').buildAria2RpcServerArgs
   const buildBundledAiChatSkillsPrompt: typeof import('./lib/ai-chat-skills').buildBundledAiChatSkillsPrompt
   const buildGlossOutputFileName: typeof import('./lib/gloss-download-queue').buildGlossOutputFileName
   const buildMcpToolDriftWarnings: typeof import('./lib/mcp-tool-drift').buildMcpToolDriftWarnings
@@ -94,11 +91,9 @@ declare global {
   const defineStore: typeof import('pinia').defineStore
   const deleteLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').deleteLegacyCustomGameDefinition
   const deleteLegacyCustomTypeDefinition: typeof import('./lib/legacy-custom-data').deleteLegacyCustomTypeDefinition
-  const downloadWithAria2: typeof import('./lib/aria2').downloadWithAria2
   const eagerComputed: typeof import('@vueuse/core').eagerComputed
   const effectScope: typeof import('vue').effectScope
   const escapeHtmlText: typeof import('./lib/html-sanitizer').escapeHtmlText
-  const executeAria2Sidecar: typeof import('./lib/sidecar').executeAria2Sidecar
   const executeSevenZipSidecar: typeof import('./lib/sidecar').executeSevenZipSidecar
   const executeSidecar: typeof import('./lib/sidecar').executeSidecar
   const extendRef: typeof import('@vueuse/core').extendRef
@@ -159,7 +154,7 @@ declare global {
   const isReactive: typeof import('vue').isReactive
   const isReadonly: typeof import('vue').isReadonly
   const isRef: typeof import('vue').isRef
-  const isRestoredAria2Task: typeof import('./lib/aria2-task-cache').isRestoredAria2Task
+  const isRestoredDownloadTask: typeof import('./lib/download-task-cache').isRestoredDownloadTask
   const isShallow: typeof import('vue').isShallow
   const isThirdPartyProviderSupported: typeof import('./lib/third-party-mod-api').isThirdPartyProviderSupported
   const joinRelativePath: typeof import('./lib/custom-definition-utils').joinRelativePath
@@ -181,7 +176,7 @@ declare global {
   const mcpPromptDefinitions: typeof import('./lib/mcp-service').mcpPromptDefinitions
   const mcpResourceDefinitions: typeof import('./lib/mcp-service').mcpResourceDefinitions
   const mcpToolDefinitions: typeof import('./lib/mcp-service').mcpToolDefinitions
-  const mergeAria2TaskSnapshots: typeof import('./lib/aria2-task-cache').mergeAria2TaskSnapshots
+  const mergeDownloadTaskSnapshots: typeof import('./lib/download-task-cache').mergeDownloadTaskSnapshots
   const mergeLegacyCustomTypesIntoGame: typeof import('./lib/legacy-custom-data').mergeLegacyCustomTypesIntoGame
   const nextTick: typeof import('vue').nextTick
   const normalizeCompareText: typeof import('./lib/gloss-download').normalizeCompareText
@@ -223,7 +218,7 @@ declare global {
   const reactiveComputed: typeof import('@vueuse/core').reactiveComputed
   const reactiveOmit: typeof import('@vueuse/core').reactiveOmit
   const reactivePick: typeof import('@vueuse/core').reactivePick
-  const readAria2TaskSnapshots: typeof import('./lib/aria2-task-cache').readAria2TaskSnapshots
+  const readDownloadTaskSnapshots: typeof import('./lib/download-task-cache').readDownloadTaskSnapshots
   const readGmmPackageDetails: typeof import('./lib/gmm-package').readGmmPackageDetails
   const readonly: typeof import('vue').readonly
   const ref: typeof import('vue').ref
@@ -233,8 +228,8 @@ declare global {
   const refManualReset: typeof import('@vueuse/core').refManualReset
   const refThrottled: typeof import('@vueuse/core').refThrottled
   const refWithControl: typeof import('@vueuse/core').refWithControl
-  const removeAria2TaskSnapshot: typeof import('./lib/aria2-task-cache').removeAria2TaskSnapshot
-  const removeAria2TaskSnapshots: typeof import('./lib/aria2-task-cache').removeAria2TaskSnapshots
+  const removeDownloadTaskSnapshot: typeof import('./lib/download-task-cache').removeDownloadTaskSnapshot
+  const removeDownloadTaskSnapshots: typeof import('./lib/download-task-cache').removeDownloadTaskSnapshots
   const requestWithRetry: typeof import('./lib/http-client').requestWithRetry
   const resolveAiChatAttachmentMediaType: typeof import('./lib/ai-chat-attachments').resolveAiChatAttachmentMediaType
   const resolveComponent: typeof import('vue').resolveComponent
@@ -245,7 +240,6 @@ declare global {
   const resolveRef: typeof import('@vueuse/core').resolveRef
   const resolveThirdPartyDownloadUrl: typeof import('./lib/third-party-mod-api').resolveThirdPartyDownloadUrl
   const resolveUnref: typeof import('@vueuse/core').resolveUnref
-  const runAria2Command: typeof import('./lib/aria2').runAria2Command
   const sanitizeFileName: typeof import('./lib/file-name-utils').sanitizeFileName
   const sanitizeHtml: typeof import('./lib/html-sanitizer').sanitizeHtml
   const saveLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').saveLegacyCustomGameDefinition
@@ -257,11 +251,7 @@ declare global {
   const shallowReactive: typeof import('vue').shallowReactive
   const shallowReadonly: typeof import('vue').shallowReadonly
   const shallowRef: typeof import('vue').shallowRef
-  const spawnAria2Download: typeof import('./lib/aria2').spawnAria2Download
-  const spawnAria2Sidecar: typeof import('./lib/sidecar').spawnAria2Sidecar
-  const spawnSidecar: typeof import('./lib/sidecar').spawnSidecar
   const splitRelativePath: typeof import('./lib/custom-definition-utils').splitRelativePath
-  const startAria2RpcServer: typeof import('./lib/aria2').startAria2RpcServer
   const startManagerModDrag: typeof import('./lib/manager-internal-drag').startManagerModDrag
   const startManagerTagDrag: typeof import('./lib/manager-internal-drag').startManagerTagDrag
   const storeToRefs: typeof import('pinia').storeToRefs
@@ -518,12 +508,6 @@ declare global {
   export type { IAiChatBundledSkill } from './lib/ai-chat-skills'
   import('./lib/ai-chat-skills')
   // @ts-ignore
-  export type { Aria2Rpc, IAria2RpcTaskUri, IAria2RpcTaskFile, IAria2RpcTask, IAria2GlobalStat, IAria2RpcEnsureOptions, IAria2RuntimeSettings } from './lib/aria2-rpc'
-  import('./lib/aria2-rpc')
-  // @ts-ignore
-  export type { Aria2, Aria2DownloadOptions, Aria2RpcServerOptions } from './lib/aria2'
-  import('./lib/aria2')
-  // @ts-ignore
   export type { AutoStart } from './lib/auto-start'
   import('./lib/auto-start')
   // @ts-ignore
@@ -538,6 +522,9 @@ declare global {
   // @ts-ignore
   export type { DotNetTool } from './lib/dotnet-tool'
   import('./lib/dotnet-tool')
+  // @ts-ignore
+  export type { IDownloaderTaskUri, IDownloaderTaskFile, IDownloaderTask, IDownloaderGlobalStat, IDownloaderEnsureOptions, IDownloaderSettings } from './lib/download-task-types'
+  import('./lib/download-task-types')
   // @ts-ignore
   export type { IExploreTranslationSourceItem, IExploreTranslationEntry, IExploreTranslationRequest } from './lib/explore-ai-translation'
   import('./lib/explore-ai-translation')
@@ -574,6 +561,9 @@ declare global {
   // @ts-ignore
   export type { McpToolFingerprintMap, IMcpToolDriftResult } from './lib/mcp-tool-drift'
   import('./lib/mcp-tool-drift')
+  // @ts-ignore
+  export type { Downloader } from './lib/native-downloader'
+  import('./lib/native-downloader')
   // @ts-ignore
   export type { NativeToolsManifest, EmbeddedToolName, EmbeddedSidecarCommand } from './lib/native-tools-manifest'
   import('./lib/native-tools-manifest')

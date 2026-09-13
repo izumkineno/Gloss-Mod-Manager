@@ -9,7 +9,6 @@ import {
     rm,
     writeFile,
 } from "node:fs/promises";
-import { cpus } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -63,16 +62,6 @@ const sevenZipWindowsInstallerAssetByArch: Record<RuntimeArch, string | null> = 
     arm64: "https://github.com/ip7z/7zip/releases/download/26.00/7z2600-arm64.exe",
     arm: "https://github.com/ip7z/7zip/releases/download/26.00/7z2600-arm.exe",
 };
-
-const aria2WindowsAssetByArch: Record<RuntimeArch, string | null> = {
-    x64: "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip",
-    x86: "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-32bit-build1.zip",
-    arm64: "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip",
-    arm: null,
-};
-
-const aria2SourceAsset =
-    "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0.tar.xz";
 
 const legacyWindowsSevenZipSupportFiles = ["7za.dll", "7zxa.dll"] as const;
 const allKnownWindowsSevenZipSupportFiles = new Set<string>([
@@ -285,58 +274,6 @@ function runCommand(command: string, args: string[], cwd?: string) {
     });
 }
 
-/**
- * 校验产物没有链接到构建机特有的第三方库目录。
- *
- * autotools 会自动探测构建机上存在的可选依赖，在装有 Homebrew/MacPorts 的机器上
- * 会把 /opt/homebrew 等路径写进产物，导致其他机器上 dyld 加载失败、进程启动即退出。
- */
-function assertNoForeignDynamicLibraries(
-    binaryPath: string,
-    platform: RuntimePlatform,
-) {
-    if (platform === "windows") {
-        return;
-    }
-
-    const inspector = platform === "macos" ? "otool" : "ldd";
-    const inspectorArgs = platform === "macos" ? ["-L", binaryPath] : [binaryPath];
-
-    let output = "";
-
-    try {
-        output = execFileSync(inspector, inspectorArgs, {
-            encoding: "utf8",
-            env: process.env,
-        });
-    } catch {
-        log(`Unable to run ${inspector}; skipping dynamic library verification`);
-        return;
-    }
-
-    const foreignPrefixes = [
-        "/opt/homebrew",
-        "/usr/local/opt",
-        "/usr/local/Cellar",
-        "/opt/local",
-    ];
-    const offendingLines = output
-        .split(/\r?\n/u)
-        .map((line) => line.trim())
-        .filter((line) =>
-            foreignPrefixes.some((prefix) => line.includes(prefix)),
-        );
-
-    if (offendingLines.length > 0) {
-        throw new Error(
-            [
-                "Built binary links against build-machine-specific libraries:",
-                ...offendingLines.map((line) => `  ${line}`),
-                "These paths will not exist on user machines and the process would fail to start.",
-            ].join("\n"),
-        );
-    }
-}
 
 async function extractZipOnWindows(archivePath: string, outputDir: string) {
     await mkdir(outputDir, { recursive: true });
@@ -407,7 +344,6 @@ async function ensureExecutable(filePath: string) {
 async function cleanupManagedArtifacts(target: ResolvedTarget) {
     const entries = await readdir(binariesDir, { withFileTypes: true });
     const currentSevenZip = `${SIDECAR_BASE_NAMES.sevenZip}-${target.triple}${target.extension}`;
-    const currentAria2 = `${SIDECAR_BASE_NAMES.aria2}-${target.triple}${target.extension}`;
     const legacySevenZipPrefix = "7zip-";
 
     for (const entry of entries) {
@@ -421,9 +357,6 @@ async function cleanupManagedArtifacts(target: ResolvedTarget) {
         const shouldDeleteLegacySevenZip =
             entry.name.startsWith(legacySevenZipPrefix) &&
             entry.name !== currentSevenZip;
-        const shouldDeleteAria2 =
-            entry.name.startsWith(`${SIDECAR_BASE_NAMES.aria2}-`) &&
-            entry.name !== currentAria2;
         const shouldDeleteWindowsSupport =
             allKnownWindowsSevenZipSupportFiles.has(entry.name) &&
             (target.platform !== "windows" ||
@@ -432,8 +365,8 @@ async function cleanupManagedArtifacts(target: ResolvedTarget) {
         if (
             shouldDeleteSevenZip ||
             shouldDeleteLegacySevenZip ||
-            shouldDeleteAria2 ||
-            shouldDeleteWindowsSupport
+            shouldDeleteWindowsSupport ||
+            entry.name.startsWith("aria2c-")
         ) {
             await rm(join(binariesDir, entry.name), { force: true });
         }
@@ -449,7 +382,8 @@ async function cleanupManagedArtifacts(target: ResolvedTarget) {
 async function cleanupStaleTargetCopies() {
     const staleNames = [
         SIDECAR_BASE_NAMES.sevenZip,
-        SIDECAR_BASE_NAMES.aria2,
+        // 历史遗留：旧版曾打包 aria2c sidecar，清掉 target 下的旧副本。
+        "aria2c",
     ];
 
     for (const profile of ["debug", "release"]) {
@@ -476,7 +410,6 @@ async function cleanupStaleTargetCopies() {
 function hasPreparedOutputs(target: ResolvedTarget) {
     const requiredFiles = [
         sidecarOutputPath(SIDECAR_BASE_NAMES.sevenZip, target),
-        sidecarOutputPath(SIDECAR_BASE_NAMES.aria2, target),
     ];
 
     if (target.platform === "windows") {
@@ -499,8 +432,7 @@ function stateMatches(state: PreparedState | null, target: ResolvedTarget) {
         state.targetTriple === target.triple &&
         state.platform === target.platform &&
         state.arch === target.arch &&
-        state.versions.sevenZip === EMBEDDED_TOOL_VERSIONS.sevenZip &&
-        state.versions.aria2 === EMBEDDED_TOOL_VERSIONS.aria2
+        state.versions.sevenZip === EMBEDDED_TOOL_VERSIONS.sevenZip
     );
 }
 
@@ -566,103 +498,6 @@ async function prepareSevenZip(target: ResolvedTarget) {
     await ensureExecutable(outputPath);
 }
 
-async function prepareAria2(target: ResolvedTarget) {
-    log(`Preparing aria2 ${EMBEDDED_TOOL_VERSIONS.aria2} for ${target.triple}`);
-
-    const outputPath = sidecarOutputPath(SIDECAR_BASE_NAMES.aria2, target);
-    const aria2WorkDir = join(tempDir, "aria2");
-
-    await rm(aria2WorkDir, { recursive: true, force: true });
-    await mkdir(aria2WorkDir, { recursive: true });
-
-    if (target.platform === "windows") {
-        const assetUrl = aria2WindowsAssetByArch[target.arch];
-
-        if (!assetUrl) {
-            throw new Error(
-                `No official aria2 Windows asset mapping for ${target.arch}`,
-            );
-        }
-
-        if (target.arch === "arm64") {
-            log(
-                "aria2 does not publish a native Windows ARM64 binary; using the official x64 build",
-            );
-        }
-
-        const archivePath = join(aria2WorkDir, "aria2.zip");
-        const extractDir = join(aria2WorkDir, "out");
-
-        await downloadFile(assetUrl, archivePath);
-        await extractZipOnWindows(archivePath, extractDir);
-
-        const binaryPath = await findFirstMatch(extractDir, ["aria2c.exe"]);
-
-        if (!binaryPath) {
-            throw new Error(
-                "Unable to find aria2c.exe in the downloaded archive",
-            );
-        }
-
-        await copyFile(binaryPath, outputPath);
-        return;
-    }
-
-    const archivePath = join(aria2WorkDir, "aria2.tar.xz");
-    const extractDir = join(aria2WorkDir, "out");
-
-    await downloadFile(aria2SourceAsset, archivePath);
-    await extractTarXz(archivePath, extractDir);
-
-    const configurePath = await findFirstMatch(extractDir, ["configure"]);
-
-    if (!configurePath) {
-        throw new Error(
-            "Unable to find aria2 configure script after extracting source archive",
-        );
-    }
-
-    const sourceRoot = dirname(configurePath);
-
-    log("Building aria2 from the official source tarball for this platform");
-    // 显式关掉全部可选依赖，否则 configure 会自动链接构建机上的 Homebrew 库
-    // （如 c-ares、libssh2），产物拷到其他机器后会因找不到 dylib 而无法启动。
-    // aria2 在这些选项关闭时会使用自带实现，HTTPS 仍由系统原生 TLS 提供。
-    const configureArgs = [
-        "./configure",
-        "--without-libcares",
-        "--without-libssh2",
-        "--without-libxml2",
-        "--without-libexpat",
-        "--without-sqlite3",
-        "--without-libgmp",
-        "--without-libnettle",
-        "--without-libgcrypt",
-        "--without-gnutls",
-        "--without-openssl",
-        "--disable-nls",
-    ];
-
-    if (target.platform === "macos") {
-        // macOS 下使用系统 Security.framework 提供 TLS。
-        configureArgs.push("--with-appletls");
-    }
-
-    runCommand("sh", configureArgs, sourceRoot);
-    runCommand("make", ["-j", String(Math.max(1, cpus().length))], sourceRoot);
-
-    const binaryPath = join(sourceRoot, "src", "aria2c");
-
-    if (!existsSync(binaryPath)) {
-        throw new Error("aria2 build completed without producing src/aria2c");
-    }
-
-    assertNoForeignDynamicLibraries(binaryPath, target.platform);
-
-    await copyFile(binaryPath, outputPath);
-    await ensureExecutable(outputPath);
-}
-
 async function main() {
     if (process.env.GMM_SKIP_SIDECAR_PREPARE === "1") {
         log("Skipping sidecar preparation because GMM_SKIP_SIDECAR_PREPARE=1");
@@ -690,7 +525,6 @@ async function main() {
 
     try {
         await prepareSevenZip(target);
-        await prepareAria2(target);
         await cleanupManagedArtifacts(target);
         // 产物刚重新生成，必须同步清掉 target/ 下的旧副本，否则 Tauri 会继续用旧文件。
         await cleanupStaleTargetCopies();

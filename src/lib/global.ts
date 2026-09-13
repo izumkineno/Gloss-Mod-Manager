@@ -4,7 +4,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { TrayIcon } from "@tauri-apps/api/tray";
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Aria2Rpc } from "@/lib/aria2-rpc";
+import { Downloader } from "@/lib/native-downloader";
 import {
     hasPendingAppUpdateInstall,
     installPendingAppUpdate,
@@ -53,10 +53,10 @@ async function prepareQuitApplication() {
     }
 
     try {
-        // 退出应用前主动关闭 aria2 sidecar，避免 dev 构建时目标文件被占用。
-        await Aria2Rpc.stopServer();
+        // 退出前停掉下载服务（无实际连接，但保持调用对称）。
+        await Downloader.stopServer();
     } catch (error) {
-        console.error("停止 aria2 服务失败");
+        console.error("停止下载服务失败");
         console.error(error);
     }
 }

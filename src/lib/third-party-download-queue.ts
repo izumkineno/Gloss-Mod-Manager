@@ -1,9 +1,9 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Downloader } from "@/lib/native-downloader";
 import {
-    Aria2Rpc,
-    type IAria2RpcTask,
-    type IAria2RuntimeSettings,
-} from "@/lib/aria2-rpc";
+    type IDownloaderTask,
+    type IDownloaderSettings,
+} from "@/lib/download-task-types";
 import { FileHandler } from "@/lib/FileHandler";
 import { getUrlFileName, sanitizeFileName } from "@/lib/file-name-utils";
 import {
@@ -20,9 +20,9 @@ import {
     type ThirdPartyProvider,
 } from "@/lib/third-party-mod-api";
 import {
-    mergeAria2TaskSnapshots,
-    removeAria2TaskSnapshot,
-} from "@/lib/aria2-task-cache";
+    mergeDownloadTaskSnapshots,
+    removeDownloadTaskSnapshot,
+} from "@/lib/download-task-cache";
 
 export type ThirdPartyQueueDownloadStatus =
     | "created"
@@ -54,12 +54,12 @@ export interface IQueueThirdPartyDownloadResult {
 interface IQueueRuntimeContext {
     outputDirectory: string;
     proxy: string;
-    settings: IAria2RuntimeSettings;
+    settings: IDownloaderSettings;
     taskMetaMap: Record<string, IGlossDownloadTaskMeta>;
-    allTasks: IAria2RpcTask[];
+    allTasks: IDownloaderTask[];
 }
 
-const ARIA2_TASK_META_KEY = "aria2TaskMetaMap";
+const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
 const THIRD_PARTY_DOWNLOAD_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 const FILE_EXTENSION_PATTERN =
@@ -95,8 +95,13 @@ function buildOutputFileName(
     file: IThirdPartyModFile,
     downloadUrl: string,
 ) {
+    // 真实文件名（含 Nexus file_name）优先：自带后缀，直接可用。
+    const realName = sanitizeFileName(file.fileName || "");
+    if (realName && getFileNameExtension(realName)) {
+        return realName;
+    }
     const baseName = sanitizeFileName(
-        file.name || `${mod.source}-${mod.id}-${file.id}`,
+        file.name || realName || `${mod.source}-${mod.id}-${file.id}`,
     );
     const currentExtension = getFileNameExtension(baseName);
 
@@ -129,23 +134,23 @@ function shouldOpenExternally(
 }
 
 async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
-    const outputDirectory = await Aria2Rpc.resolveDownloadDirectory();
+    const outputDirectory = await Downloader.resolveDownloadDirectory();
     await FileHandler.createDirectory(outputDirectory);
-    await Aria2Rpc.ensureServer({ outputDirectory });
+    await Downloader.ensureServer({ outputDirectory });
 
-    const settings = await Aria2Rpc.getStoredSettings();
+    const settings = await Downloader.getStoredSettings();
     const proxy = (
         (await PersistentStore.get<string>("downloadProxy", "")) ?? ""
     ).trim();
     const taskMetaMap =
         (await PersistentStore.get<Record<string, IGlossDownloadTaskMeta>>(
-            ARIA2_TASK_META_KEY,
+            DOWNLOAD_TASK_META_KEY,
             {},
         )) ?? {};
     const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-        Aria2Rpc.tellActive(),
-        Aria2Rpc.tellWaiting(0, 100),
-        Aria2Rpc.tellStopped(0, 100),
+        Downloader.tellActive(),
+        Downloader.tellWaiting(0, 100),
+        Downloader.tellStopped(0, 100),
     ]);
 
     return {
@@ -160,10 +165,10 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
 async function saveTaskMetaMap(
     taskMetaMap: Record<string, IGlossDownloadTaskMeta>,
 ) {
-    await PersistentStore.set(ARIA2_TASK_META_KEY, taskMetaMap);
+    await PersistentStore.set(DOWNLOAD_TASK_META_KEY, taskMetaMap);
 }
 
-function buildAria2Options(
+function buildDownloadOptions(
     runtime: IQueueRuntimeContext,
     mod: IThirdPartyModDetail,
     outputFileName: string,
@@ -189,17 +194,17 @@ function buildAria2Options(
     return options;
 }
 
-function getTaskPrimaryFile(task: IAria2RpcTask) {
+function getTaskPrimaryFile(task: IDownloaderTask) {
     return task.files.find((item) => item.path) ?? task.files[0] ?? null;
 }
 
 async function removeCompletedDuplicateTask(
     runtime: IQueueRuntimeContext,
-    task: IAria2RpcTask,
+    task: IDownloaderTask,
 ) {
     const primaryFile = getTaskPrimaryFile(task);
 
-    await Aria2Rpc.removeDownloadResult(task.gid);
+    await Downloader.removeDownloadResult(task.gid);
 
     if (primaryFile?.path) {
         const deleted = await FileHandler.deleteFile(primaryFile.path);
@@ -212,7 +217,7 @@ async function removeCompletedDuplicateTask(
     const nextTaskMetaMap = { ...runtime.taskMetaMap };
     delete nextTaskMetaMap[task.gid];
     await saveTaskMetaMap(nextTaskMetaMap);
-    await removeAria2TaskSnapshot(task.gid);
+    await removeDownloadTaskSnapshot(task.gid);
     runtime.taskMetaMap = nextTaskMetaMap;
     runtime.allTasks = runtime.allTasks.filter((item) => item.gid !== task.gid);
 }
@@ -224,9 +229,9 @@ async function createThirdPartyDownloadTask(
     downloadUrl: string,
     outputFileName: string,
 ) {
-    const gid = await Aria2Rpc.addUri(
+    const gid = await Downloader.addUri(
         [downloadUrl],
-        buildAria2Options(runtime, options.mod, outputFileName),
+        buildDownloadOptions(runtime, options.mod, outputFileName),
     );
     const now = new Date().toISOString();
 
@@ -256,8 +261,8 @@ async function createThirdPartyDownloadTask(
     };
 
     await saveTaskMetaMap(nextTaskMetaMap);
-    const createdTask = await Aria2Rpc.tellStatus(gid);
-    await mergeAria2TaskSnapshots(
+    const createdTask = await Downloader.tellStatus(gid);
+    await mergeDownloadTaskSnapshots(
         [...runtime.allTasks, createdTask],
         nextTaskMetaMap,
         runtime.outputDirectory,
@@ -268,7 +273,7 @@ async function createThirdPartyDownloadTask(
     return gid;
 }
 
-function getExistingTaskMessage(task: IAria2RpcTask, file: IThirdPartyModFile) {
+function getExistingTaskMessage(task: IDownloaderTask, file: IThirdPartyModFile) {
     if (task.status === "complete") {
         return `${file.name} 已下载完成，可前往下载页查看。`;
     }
@@ -312,8 +317,8 @@ export async function queueThirdPartyModDownload(
         };
     }
 
-    const outputFileName = buildOutputFileName(options.mod, file, downloadUrl);
-    const duplicateCriteria = {
+    let outputFileName = buildOutputFileName(options.mod, file, downloadUrl);
+    let duplicateCriteria = {
         sourceType: options.provider as sourceType,
         externalId: options.mod.id,
         resourceId: file.id,
@@ -340,6 +345,17 @@ export async function queueThirdPartyModDownload(
     }
 
     const runtime = await getQueueRuntimeContext();
+    // 本地名缺后缀时从服务器探测补全（Nexus CDN 等哈希直链），失败回退本地名。
+    outputFileName = await Downloader.ensureFileName(
+        downloadUrl,
+        outputFileName,
+        {
+            Referer: options.mod.website || "https://www.nexusmods.com/",
+            "User-Agent": THIRD_PARTY_DOWNLOAD_USER_AGENT,
+        },
+        runtime.proxy || null,
+    );
+    duplicateCriteria = { ...duplicateCriteria, fileName: outputFileName };
     const duplicateTasks = findGlossDuplicateTasks(
         runtime.taskMetaMap,
         duplicateCriteria,
@@ -352,7 +368,7 @@ export async function queueThirdPartyModDownload(
         .filter(
             (
                 item,
-            ): item is { task: IAria2RpcTask; meta: IGlossDownloadTaskMeta } =>
+            ): item is { task: IDownloaderTask; meta: IGlossDownloadTaskMeta } =>
                 item.task !== null && item.task.status !== "removed",
         );
 
@@ -392,7 +408,7 @@ export async function queueThirdPartyModDownload(
         };
 
         if (currentTask.status === "paused") {
-            await Aria2Rpc.unpause(currentTask.gid);
+            await Downloader.unpause(currentTask.gid);
             nextTaskMetaMap[currentTask.gid].taskStatus = "waiting";
             await saveTaskMetaMap(nextTaskMetaMap);
 

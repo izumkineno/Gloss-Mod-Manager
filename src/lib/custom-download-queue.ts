@@ -1,15 +1,15 @@
+import { Downloader } from "@/lib/native-downloader";
 import {
-    Aria2Rpc,
-    type IAria2RpcTask,
-    type IAria2RuntimeSettings,
-} from "@/lib/aria2-rpc";
+    type IDownloaderTask,
+    type IDownloaderSettings,
+} from "@/lib/download-task-types";
 import { FileHandler } from "@/lib/FileHandler";
 import { getUrlFileName, sanitizeFileName } from "@/lib/file-name-utils";
 import {
     findGlossDuplicateTasks,
     type IGlossDownloadTaskMeta,
 } from "@/lib/gloss-download";
-import { mergeAria2TaskSnapshots } from "@/lib/aria2-task-cache";
+import { mergeDownloadTaskSnapshots } from "@/lib/download-task-cache";
 import { PersistentStore } from "@/lib/persistent-store";
 
 export type CustomQueueDownloadStatus =
@@ -33,12 +33,12 @@ export interface IQueueCustomDownloadResult {
 interface IQueueRuntimeContext {
     outputDirectory: string;
     proxy: string;
-    settings: IAria2RuntimeSettings;
+    settings: IDownloaderSettings;
     taskMetaMap: Record<string, IGlossDownloadTaskMeta>;
-    allTasks: IAria2RpcTask[];
+    allTasks: IDownloaderTask[];
 }
 
-const ARIA2_TASK_META_KEY = "aria2TaskMetaMap";
+const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
 const CUSTOM_DOWNLOAD_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 
@@ -53,23 +53,23 @@ function buildOutputFileName(options: IQueueCustomDownloadOptions) {
 }
 
 async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
-    const outputDirectory = await Aria2Rpc.resolveDownloadDirectory();
+    const outputDirectory = await Downloader.resolveDownloadDirectory();
     await FileHandler.createDirectory(outputDirectory);
-    await Aria2Rpc.ensureServer({ outputDirectory });
+    await Downloader.ensureServer({ outputDirectory });
 
-    const settings = await Aria2Rpc.getStoredSettings();
+    const settings = await Downloader.getStoredSettings();
     const proxy = (
         (await PersistentStore.get<string>("downloadProxy", "")) ?? ""
     ).trim();
     const taskMetaMap =
         (await PersistentStore.get<Record<string, IGlossDownloadTaskMeta>>(
-            ARIA2_TASK_META_KEY,
+            DOWNLOAD_TASK_META_KEY,
             {},
         )) ?? {};
     const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-        Aria2Rpc.tellActive(),
-        Aria2Rpc.tellWaiting(0, 100),
-        Aria2Rpc.tellStopped(0, 100),
+        Downloader.tellActive(),
+        Downloader.tellWaiting(0, 100),
+        Downloader.tellStopped(0, 100),
     ]);
 
     return {
@@ -84,10 +84,10 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
 async function saveTaskMetaMap(
     taskMetaMap: Record<string, IGlossDownloadTaskMeta>,
 ) {
-    await PersistentStore.set(ARIA2_TASK_META_KEY, taskMetaMap);
+    await PersistentStore.set(DOWNLOAD_TASK_META_KEY, taskMetaMap);
 }
 
-function buildAria2Options(runtime: IQueueRuntimeContext, fileName: string) {
+function buildDownloadOptions(runtime: IQueueRuntimeContext, fileName: string) {
     const options: Record<string, string> = {
         dir: runtime.outputDirectory,
         out: fileName,
@@ -108,7 +108,7 @@ function buildAria2Options(runtime: IQueueRuntimeContext, fileName: string) {
     return options;
 }
 
-function resolveExistingTaskStatus(task?: IAria2RpcTask | null) {
+function resolveExistingTaskStatus(task?: IDownloaderTask | null) {
     switch (task?.status) {
         case "error":
             return "retried" as const;
@@ -142,7 +142,15 @@ export async function queueCustomDownload(
         throw new Error("自定义下载地址必须是 http 或 https 链接。");
     }
 
-    const outputFileName = buildOutputFileName(options);
+    let outputFileName = buildOutputFileName(options);
+    const runtime = await getQueueRuntimeContext();
+    // 本地名缺后缀时从服务器探测补全，失败回退本地名。
+    outputFileName = await Downloader.ensureFileName(
+        downloadUrl,
+        outputFileName,
+        { "User-Agent": CUSTOM_DOWNLOAD_USER_AGENT },
+        runtime.proxy || null,
+    );
     const duplicateCriteria = {
         sourceType: "Customize" as const,
         externalId: downloadUrl,
@@ -150,7 +158,6 @@ export async function queueCustomDownload(
         fileName: outputFileName,
         modTitle: (options.title || outputFileName).trim(),
     };
-    const runtime = await getQueueRuntimeContext();
     const duplicateTasks = findGlossDuplicateTasks(
         runtime.taskMetaMap,
         duplicateCriteria,
@@ -164,15 +171,15 @@ export async function queueCustomDownload(
         const status = resolveExistingTaskStatus(targetTask);
 
         if (status === "resumed") {
-            await Aria2Rpc.unpause(matchedTask.gid);
+            await Downloader.unpause(matchedTask.gid);
         }
 
         if (status === "retried") {
-            await Aria2Rpc.changeOption(
+            await Downloader.changeOption(
                 matchedTask.gid,
-                buildAria2Options(runtime, outputFileName),
+                buildDownloadOptions(runtime, outputFileName),
             );
-            await Aria2Rpc.unpause(matchedTask.gid);
+            await Downloader.unpause(matchedTask.gid);
         }
 
         return {
@@ -182,9 +189,9 @@ export async function queueCustomDownload(
         };
     }
 
-    const gid = await Aria2Rpc.addUri(
+    const gid = await Downloader.addUri(
         [downloadUrl],
-        buildAria2Options(runtime, outputFileName),
+        buildDownloadOptions(runtime, outputFileName),
     );
     const now = new Date().toISOString();
     const nextTaskMetaMap = {
@@ -204,8 +211,8 @@ export async function queueCustomDownload(
     };
 
     await saveTaskMetaMap(nextTaskMetaMap);
-    const createdTask = await Aria2Rpc.tellStatus(gid);
-    await mergeAria2TaskSnapshots(
+    const createdTask = await Downloader.tellStatus(gid);
+    await mergeDownloadTaskSnapshots(
         [...runtime.allTasks, createdTask],
         nextTaskMetaMap,
         runtime.outputDirectory,

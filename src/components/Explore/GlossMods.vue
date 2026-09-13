@@ -2,7 +2,8 @@
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import { ElMessage } from "element-plus-message";
 import { useI18n } from "vue-i18n";
-import { Aria2Rpc, type IAria2RpcTask } from "@/lib/aria2-rpc";
+import { Downloader } from "@/lib/native-downloader";
+import type { IDownloaderTask } from "@/lib/download-task-types";
 import {
     findGlossDuplicateTasks,
     getGlossModPresence,
@@ -181,7 +182,7 @@ const translationErrorMessage = ref("");
 const translationMap = ref<Record<string, IExploreTranslationEntry>>({});
 const manualTranslationVisible = ref(false);
 const queueingModId = ref("");
-const taskSnapshots = ref<Record<string, IAria2RpcTask>>({});
+const taskSnapshots = ref<Record<string, IDownloaderTask>>({});
 const glossGameModTypeMap = ref<Record<string, IGlossGameModType[]>>({});
 const glossGameTypeLoading = ref(false);
 const glossGameTypeError = ref("");
@@ -1029,7 +1030,7 @@ function getMatchedTask(item: IGlossExploreMod) {
     return null;
 }
 
-function getTaskProgress(task?: IAria2RpcTask | null) {
+function getTaskProgress(task?: IDownloaderTask | null) {
     if (!task) {
         return 0;
     }
@@ -1223,9 +1224,9 @@ async function refreshTaskSnapshots() {
 
     try {
         const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-            Aria2Rpc.tellActive(),
-            Aria2Rpc.tellWaiting(0, 100),
-            Aria2Rpc.tellStopped(0, 100),
+            Downloader.tellActive(),
+            Downloader.tellWaiting(0, 100),
+            Downloader.tellStopped(0, 100),
         ]);
 
         taskSnapshots.value = Object.fromEntries(

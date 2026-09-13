@@ -359,14 +359,6 @@ interface IInfo {
     gameID?: number;
     author?: string;
 }
-
-interface IAria2Request {
-    jsonrpc: string;
-    id?: string;
-    method: string;
-    params: any[];
-}
-
 interface ITag {
     name: string;
     color: string;

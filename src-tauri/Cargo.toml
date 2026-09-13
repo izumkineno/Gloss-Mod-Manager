@@ -39,6 +39,8 @@ tracing-log = "0.2"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 # MCP 服务鉴权令牌需要密码学安全的随机源。
 uuid = { version = "1", features = ["v4"] }
+# 本地下载器：替代 aria2 sidecar，单源多线程 + 断点续传 + 进度回调
+simple_downloader = { path = "E:/Code/sdownload/simple_downloader", default-features = false, features = ["resume", "progress"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

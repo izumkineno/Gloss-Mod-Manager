@@ -3,13 +3,13 @@ import { documentDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import { ElMessage } from "element-plus-message";
+import { Downloader } from "@/lib/native-downloader";
 import {
-    Aria2Rpc,
-    type IAria2GlobalStat,
-    type IAria2RpcEnsureOptions,
-    type IAria2RpcTask,
-    type IAria2RuntimeSettings,
-} from "@/lib/aria2-rpc";
+    type IDownloaderGlobalStat,
+    type IDownloaderEnsureOptions,
+    type IDownloaderTask,
+    type IDownloaderSettings,
+} from "@/lib/download-task-types";
 import {
     importLocalModSources,
     type ILocalModImportSource,
@@ -27,11 +27,11 @@ import {
     resolveGlossDownloadImportSourceType,
 } from "@/lib/gloss-download-queue";
 import {
-    isRestoredAria2Task,
-    mergeAria2TaskSnapshots,
-    removeAria2TaskSnapshot,
-    removeAria2TaskSnapshots,
-} from "@/lib/aria2-task-cache";
+    isRestoredDownloadTask,
+    mergeDownloadTaskSnapshots,
+    removeDownloadTaskSnapshot,
+    removeDownloadTaskSnapshots,
+} from "@/lib/download-task-cache";
 
 type QueueFilter = "all" | "active" | "waiting" | "paused" | "stopped";
 type DuplicateDecisionAction =
@@ -81,7 +81,7 @@ interface IAddResourceTaskResult {
 }
 
 interface IResourceDuplicateTask {
-    task: IAria2RpcTask;
+    task: IDownloaderTask;
     meta: IGlossDownloadTaskMeta;
     score: number;
 }
@@ -104,10 +104,10 @@ const EMPTY_POSTER =
 			<circle cx="120" cy="84" r="72" fill="rgba(255,255,255,0.08)" />
 			<circle cx="540" cy="280" r="96" fill="rgba(255,255,255,0.08)" />
 			<text x="42" y="206" fill="#fff5df" font-size="40" font-family="Arial, sans-serif">Gloss Download</text>
-			<text x="42" y="246" fill="#ffe0a3" font-size="22" font-family="Arial, sans-serif">内置详情与 aria2 下载</text>
+			<text x="42" y="246" fill="#ffe0a3" font-size="22" font-family="Arial, sans-serif">内置详情与下载</text>
 		</svg>
 	`);
-const defaultGlobalStat = (): IAria2GlobalStat => ({
+const defaultGlobalStat = (): IDownloaderGlobalStat => ({
     downloadSpeed: "0",
     uploadSpeed: "0",
     numActive: "0",
@@ -147,7 +147,7 @@ const TASK_STATUS_SORT_ORDER: Record<string, number> = {
     error: 4,
     removed: 5,
 };
-const ARIA2_TASK_META_KEY = "aria2TaskMetaMap";
+const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
 
 const manager = useManager();
 const settings = useSettings();
@@ -164,21 +164,21 @@ const downloadDirectory = PersistentStore.useValue<string>(
     "",
 );
 const downloadProxy = PersistentStore.useValue<string>("downloadProxy", "");
-const aria2Settings = PersistentStore.useValue<IAria2RuntimeSettings>(
+const downloaderSettings = PersistentStore.useValue<IDownloaderSettings>(
     "aria2Settings",
-    Aria2Rpc.getDefaultSettings(),
+    Downloader.getDefaultSettings(),
 );
 const taskMetaMap = PersistentStore.useValue<
     Record<string, IGlossDownloadTaskMeta>
->(ARIA2_TASK_META_KEY, {});
+>(DOWNLOAD_TASK_META_KEY, {});
 
 const rpcState = ref<"idle" | "starting" | "ready" | "error">("idle");
 const rpcErrorMessage = ref("");
 const refreshingTasks = ref(false);
-const globalStat = ref<IAria2GlobalStat>(defaultGlobalStat());
-const activeTasks = ref<IAria2RpcTask[]>([]);
-const waitingTasks = ref<IAria2RpcTask[]>([]);
-const stoppedTasks = ref<IAria2RpcTask[]>([]);
+const globalStat = ref<IDownloaderGlobalStat>(defaultGlobalStat());
+const activeTasks = ref<IDownloaderTask[]>([]);
+const waitingTasks = ref<IDownloaderTask[]>([]);
+const stoppedTasks = ref<IDownloaderTask[]>([]);
 const taskOperatingIds = ref<string[]>([]);
 const taskImportingIds = ref<string[]>([]);
 
@@ -195,7 +195,7 @@ const selectedTaskGid = ref("");
 const defaultDownloadDirectory = ref("");
 const showAddModDialog = ref(false);
 const showTaskDetailDialog = ref(false);
-const showAria2SettingsDialog = ref(false);
+const showDownloaderSettingsDialog = ref(false);
 const duplicateDialog = reactive<IDuplicateDialogState>({
     open: false,
     title: "",
@@ -204,8 +204,8 @@ const duplicateDialog = reactive<IDuplicateDialogState>({
     items: [],
     options: [],
 });
-const aria2SettingsDraft = ref<IAria2RuntimeSettings>(
-    Aria2Rpc.getDefaultSettings(),
+const downloaderSettingsDraft = ref<IDownloaderSettings>(
+    Downloader.getDefaultSettings(),
 );
 const downloadProxyDraft = ref("");
 
@@ -216,8 +216,8 @@ let duplicateDialogResolver:
     | null = null;
 let hasCompletedInitialTaskSync = false;
 
-const normalizedAria2Settings = computed(() =>
-    Aria2Rpc.normalizeSettings(aria2Settings.value),
+const normalizedDownloaderSettings = computed(() =>
+    Downloader.normalizeSettings(downloaderSettings.value),
 );
 const resolvedDownloadDirectory = computed(
     () => downloadDirectory.value || defaultDownloadDirectory.value,
@@ -234,7 +234,7 @@ const allTasks = computed(() => [
     ...stoppedTasks.value,
 ]);
 const filteredTasks = computed(() => {
-    let tasks: IAria2RpcTask[] = [];
+    let tasks: IDownloaderTask[] = [];
 
     switch (queueFilter.value) {
         case "active":
@@ -494,8 +494,8 @@ function getErrorMessage(error: unknown) {
 
 function buildRpcEnsureOptions(
     outputDirectory?: string,
-): IAria2RpcEnsureOptions {
-    const settings = normalizedAria2Settings.value;
+): IDownloaderEnsureOptions {
+    const settings = normalizedDownloaderSettings.value;
 
     return {
         outputDirectory: outputDirectory || resolvedDownloadDirectory.value,
@@ -512,15 +512,15 @@ function openAddModDialog() {
     showAddModDialog.value = true;
 }
 
-function openTaskDetail(task: IAria2RpcTask) {
+function openTaskDetail(task: IDownloaderTask) {
     selectedTaskGid.value = task.gid;
     showTaskDetailDialog.value = true;
 }
 
-function openAria2SettingsDialog() {
-    aria2SettingsDraft.value = Aria2Rpc.normalizeSettings(aria2Settings.value);
+function openDownloaderSettingsDialog() {
+    downloaderSettingsDraft.value = Downloader.normalizeSettings(downloaderSettings.value);
     downloadProxyDraft.value = downloadProxy.value ?? "";
-    showAria2SettingsDialog.value = true;
+    showDownloaderSettingsDialog.value = true;
 }
 
 function extractModId(input: string) {
@@ -564,7 +564,7 @@ async function ensureDownloadDirectoryReady() {
 async function ensureRpcReady() {
     const outputDirectory = await ensureDownloadDirectoryReady();
 
-    await Aria2Rpc.ensureServer(buildRpcEnsureOptions(outputDirectory));
+    await Downloader.ensureServer(buildRpcEnsureOptions(outputDirectory));
 
     return outputDirectory;
 }
@@ -585,7 +585,7 @@ async function initializeDownloadPage() {
 }
 
 async function hydrateCachedTaskLists() {
-    const cachedTasks = await mergeAria2TaskSnapshots(
+    const cachedTasks = await mergeDownloadTaskSnapshots(
         [],
         taskMetaMap.value,
         resolvedDownloadDirectory.value,
@@ -692,10 +692,10 @@ async function refreshTaskLists(silent: boolean = false) {
         const outputDirectory = await ensureRpcReady();
 
         const [stat, active, waiting, stopped] = await Promise.all([
-            Aria2Rpc.getGlobalStat(),
-            Aria2Rpc.tellActive(),
-            Aria2Rpc.tellWaiting(0, 100),
-            Aria2Rpc.tellStopped(0, 100),
+            Downloader.getGlobalStat(),
+            Downloader.tellActive(),
+            Downloader.tellWaiting(0, 100),
+            Downloader.tellStopped(0, 100),
         ]);
 
         if (currentSequence !== refreshSequence) {
@@ -703,7 +703,7 @@ async function refreshTaskLists(silent: boolean = false) {
         }
 
         const liveTasks = [...active, ...waiting, ...stopped];
-        const mergedTasks = await mergeAria2TaskSnapshots(
+        const mergedTasks = await mergeDownloadTaskSnapshots(
             liveTasks,
             taskMetaMap.value,
             outputDirectory,
@@ -770,7 +770,7 @@ async function selectDownloadDirectory() {
     }
 
     downloadDirectory.value = selected;
-    await restartAria2Service("下载目录已更新。");
+    await restartDownloaderService("下载目录已更新。");
 }
 
 async function openDownloadDirectory() {
@@ -778,14 +778,14 @@ async function openDownloadDirectory() {
     await FileHandler.openFolder(directory);
 }
 
-async function restartAria2Service(successMessage?: string) {
+async function restartDownloaderService(successMessage?: string) {
     try {
         stopTaskPolling();
         rpcState.value = "starting";
         rpcErrorMessage.value = "";
 
         const outputDirectory = await ensureDownloadDirectoryReady();
-        await Aria2Rpc.restartServer(buildRpcEnsureOptions(outputDirectory));
+        await Downloader.restartServer(buildRpcEnsureOptions(outputDirectory));
 
         rpcState.value = "ready";
         await refreshTaskLists();
@@ -801,12 +801,12 @@ async function restartAria2Service(successMessage?: string) {
     }
 }
 
-async function saveAria2Settings() {
-    aria2Settings.value = Aria2Rpc.normalizeSettings(aria2SettingsDraft.value);
+async function saveDownloaderSettings() {
+    downloaderSettings.value = Downloader.normalizeSettings(downloaderSettingsDraft.value);
     downloadProxy.value = (downloadProxyDraft.value ?? "").trim();
-    showAria2SettingsDialog.value = false;
+    showDownloaderSettingsDialog.value = false;
 
-    await restartAria2Service("Aria2 配置已保存。");
+    await restartDownloaderService("下载配置已保存。");
 }
 
 async function loadModDetail(explicitModId?: string): Promise<IMod | null> {
@@ -950,7 +950,7 @@ function parseTaskTimestamp(value?: string) {
     return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
-function getTaskCreatedTimestamp(task: IAria2RpcTask) {
+function getTaskCreatedTimestamp(task: IDownloaderTask) {
     const metadata = taskMetaMap.value[task.gid];
 
     return (
@@ -963,7 +963,7 @@ function getTaskStatusSortOrder(status: string) {
     return TASK_STATUS_SORT_ORDER[status] ?? Number.MAX_SAFE_INTEGER;
 }
 
-function sortTasksByCreatedAt(tasks: IAria2RpcTask[]) {
+function sortTasksByCreatedAt(tasks: IDownloaderTask[]) {
     return [...tasks].sort((left, right) => {
         const statusDifference =
             getTaskStatusSortOrder(left.status) -
@@ -984,7 +984,7 @@ function sortTasksByCreatedAt(tasks: IAria2RpcTask[]) {
     });
 }
 
-function getTaskProgress(task: IAria2RpcTask) {
+function getTaskProgress(task: IDownloaderTask) {
     if (task.status === "complete") {
         return 100;
     }
@@ -1001,7 +1001,7 @@ function getTaskProgress(task: IAria2RpcTask) {
     );
 }
 
-function getTaskPrimaryFile(task: IAria2RpcTask) {
+function getTaskPrimaryFile(task: IDownloaderTask) {
     return task.files.find((item) => item.path) ?? task.files[0] ?? null;
 }
 
@@ -1013,7 +1013,7 @@ function getBaseName(filePath?: string) {
     return filePath.split(/[\\/]+/u).pop() ?? filePath;
 }
 
-function getTaskDisplayName(task: IAria2RpcTask) {
+function getTaskDisplayName(task: IDownloaderTask) {
     const metadata = taskMetaMap.value[task.gid];
 
     if (metadata?.fileName) {
@@ -1074,7 +1074,7 @@ function buildOutputFileName(resource: IResource) {
     return buildGlossOutputFileName(resource);
 }
 
-function syncTaskMetaStatuses(tasks: IAria2RpcTask[]) {
+function syncTaskMetaStatuses(tasks: IDownloaderTask[]) {
     const nextMap = { ...taskMetaMap.value };
     let changed = false;
     const newlyCompletedTaskGids: string[] = [];
@@ -1128,7 +1128,7 @@ function syncTaskMetaStatuses(tasks: IAria2RpcTask[]) {
 
 async function autoImportCompletedTasks(
     completedTaskGids: string[],
-    tasks: IAria2RpcTask[],
+    tasks: IDownloaderTask[],
 ) {
     await autoImportCompletedDownloadTasks(
         {
@@ -1142,7 +1142,7 @@ async function autoImportCompletedTasks(
 }
 
 function getDuplicateDialogItemBadges(
-    task: IAria2RpcTask,
+    task: IDownloaderTask,
     metadata: IGlossDownloadTaskMeta,
 ) {
     const badges = [getTaskStatusLabel(task.status)];
@@ -1273,7 +1273,7 @@ function getAllDuplicateTaskFileNames(resource: IResource) {
     return fileNames;
 }
 
-function getTaskRetryUris(task: IAria2RpcTask) {
+function getTaskRetryUris(task: IDownloaderTask) {
     const uriSet = new Set<string>();
     const metadataDownloadUrl =
         taskMetaMap.value[task.gid]?.downloadUrl?.trim();
@@ -1297,7 +1297,7 @@ function getTaskRetryUris(task: IAria2RpcTask) {
     return [...uriSet];
 }
 
-function getTaskOutputFileName(task: IAria2RpcTask) {
+function getTaskOutputFileName(task: IDownloaderTask) {
     const metadata = taskMetaMap.value[task.gid];
 
     if (metadata?.fileName) {
@@ -1342,7 +1342,7 @@ function removeTaskMeta(gid: string) {
 async function readLatestTaskMetaMap() {
     const storedTaskMetaMap =
         (await PersistentStore.get<Record<string, IGlossDownloadTaskMeta>>(
-            ARIA2_TASK_META_KEY,
+            DOWNLOAD_TASK_META_KEY,
             {},
         )) ?? {};
 
@@ -1355,7 +1355,7 @@ async function readLatestTaskMetaMap() {
 async function saveTaskMetaMap(
     nextMap: Record<string, IGlossDownloadTaskMeta>,
 ) {
-    await PersistentStore.set(ARIA2_TASK_META_KEY, nextMap, true);
+    await PersistentStore.set(DOWNLOAD_TASK_META_KEY, nextMap, true);
 }
 
 function startTaskOperation(gid: string) {
@@ -1386,9 +1386,19 @@ async function createResourceTask(resource: IResource, outputFileName: string) {
 
     try {
         const outputDirectory = await ensureRpcReady();
-        const settings = normalizedAria2Settings.value;
+        const settings = normalizedDownloaderSettings.value;
         const trimmedProxy = (downloadProxy.value ?? "").trim();
-
+        // 本地名缺后缀时从服务器探测补全，失败回退原名。
+        outputFileName = await Downloader.ensureFileName(
+            resource.mods_resource_url,
+            outputFileName,
+            {
+                referer: `${GLOSS_MOD_WEB_BASE_URL}/mod/${selectedMod.value.id}`,
+                "user-agent":
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            },
+            trimmedProxy || null,
+        );
         const options: Record<string, string> = {
             dir: outputDirectory,
             out: outputFileName,
@@ -1408,7 +1418,7 @@ async function createResourceTask(resource: IResource, outputFileName: string) {
             options["all-proxy"] = trimmedProxy;
         }
 
-        const gid = await Aria2Rpc.addUri(
+        const gid = await Downloader.addUri(
             [resource.mods_resource_url],
             options,
         );
@@ -1452,7 +1462,7 @@ async function createResourceTask(resource: IResource, outputFileName: string) {
     }
 }
 
-async function continueExistingTask(task: IAria2RpcTask) {
+async function continueExistingTask(task: IDownloaderTask) {
     showAddModDialog.value = false;
 
     if (task.status === "paused") {
@@ -1587,7 +1597,7 @@ async function addResourceTask(
     };
 }
 
-async function retryTask(task: IAria2RpcTask) {
+async function retryTask(task: IDownloaderTask) {
     startTaskOperation(task.gid);
 
     try {
@@ -1598,7 +1608,7 @@ async function retryTask(task: IAria2RpcTask) {
         }
 
         const outputDirectory = task.dir || (await ensureRpcReady());
-        const settings = normalizedAria2Settings.value;
+        const settings = normalizedDownloaderSettings.value;
         const trimmedProxy = (downloadProxy.value ?? "").trim();
         const metadata = taskMetaMap.value[task.gid] ?? null;
         const options: Record<string, string> = {
@@ -1624,7 +1634,7 @@ async function retryTask(task: IAria2RpcTask) {
             options["all-proxy"] = trimmedProxy;
         }
 
-        const gid = await Aria2Rpc.addUri(uris, options);
+        const gid = await Downloader.addUri(uris, options);
         const now = new Date().toISOString();
 
         setTaskMeta(gid, {
@@ -1635,9 +1645,9 @@ async function retryTask(task: IAria2RpcTask) {
             updatedAt: now,
         });
 
-        if (isRestoredAria2Task(task) && gid !== task.gid) {
+        if (isRestoredDownloadTask(task) && gid !== task.gid) {
             removeTaskMeta(task.gid);
-            await removeAria2TaskSnapshot(task.gid);
+            await removeDownloadTaskSnapshot(task.gid);
         }
 
         await refreshTaskLists();
@@ -1670,7 +1680,7 @@ function isTaskImporting(gid: string) {
     return taskImportingIds.value.includes(gid);
 }
 
-async function importTaskToLocalManager(task?: IAria2RpcTask | null) {
+async function importTaskToLocalManager(task?: IDownloaderTask | null) {
     const targetTask = task ?? selectedTask.value;
 
     if (!targetTask) {
@@ -1847,11 +1857,11 @@ async function importTaskToLocalManager(task?: IAria2RpcTask | null) {
     }
 }
 
-async function pauseTask(task: IAria2RpcTask) {
+async function pauseTask(task: IDownloaderTask) {
     startTaskOperation(task.gid);
 
     try {
-        await Aria2Rpc.pause(task.gid, true);
+        await Downloader.pause(task.gid, true);
         await refreshTaskLists();
     } catch (error: unknown) {
         ElMessage.error(getErrorMessage(error));
@@ -1860,11 +1870,11 @@ async function pauseTask(task: IAria2RpcTask) {
     }
 }
 
-async function resumeTask(task: IAria2RpcTask) {
+async function resumeTask(task: IDownloaderTask) {
     startTaskOperation(task.gid);
 
     try {
-        await Aria2Rpc.unpause(task.gid);
+        await Downloader.unpause(task.gid);
         await refreshTaskLists();
     } catch (error: unknown) {
         ElMessage.error(getErrorMessage(error));
@@ -1873,7 +1883,7 @@ async function resumeTask(task: IAria2RpcTask) {
     }
 }
 
-async function removeTaskLocalFile(task: IAria2RpcTask) {
+async function removeTaskLocalFile(task: IDownloaderTask) {
     const primaryFile = getTaskPrimaryFile(task);
 
     if (!primaryFile?.path) {
@@ -1892,7 +1902,7 @@ async function removeTaskDownloadRecord(gid: string) {
 
     for (let index = 0; index < 6; index += 1) {
         try {
-            await Aria2Rpc.removeDownloadResult(gid);
+            await Downloader.removeDownloadResult(gid);
             return;
         } catch (error: unknown) {
             lastError = error;
@@ -1903,23 +1913,23 @@ async function removeTaskDownloadRecord(gid: string) {
     throw lastError ?? new Error("清理下载记录失败，请稍后重试。");
 }
 
-async function removeTask(task: IAria2RpcTask) {
+async function removeTask(task: IDownloaderTask) {
     startTaskOperation(task.gid);
 
     try {
         if (
-            !isRestoredAria2Task(task) &&
+            !isRestoredDownloadTask(task) &&
             ["active", "waiting", "paused"].includes(task.status)
         ) {
-            await Aria2Rpc.remove(task.gid, true);
+            await Downloader.remove(task.gid, true);
             await waitForRemovedTask(task.gid);
         }
 
         await removeTaskLocalFile(task);
-        if (!isRestoredAria2Task(task)) {
+        if (!isRestoredDownloadTask(task)) {
             await removeTaskDownloadRecord(task.gid);
         }
-        await removeAria2TaskSnapshot(task.gid);
+        await removeDownloadTaskSnapshot(task.gid);
         removeTaskMeta(task.gid);
         await refreshTaskLists();
     } catch (error: unknown) {
@@ -1932,7 +1942,7 @@ async function removeTask(task: IAria2RpcTask) {
 async function waitForRemovedTask(gid: string) {
     for (let index = 0; index < 6; index += 1) {
         try {
-            const task = await Aria2Rpc.tellStatus(gid);
+            const task = await Downloader.tellStatus(gid);
 
             if (["removed", "complete", "error"].includes(task.status)) {
                 return;
@@ -1960,7 +1970,7 @@ async function purgeStoppedTasks() {
         for (const task of stoppedTasks.value) {
             try {
                 await removeTaskLocalFile(task);
-                if (!isRestoredAria2Task(task)) {
+                if (!isRestoredDownloadTask(task)) {
                     await removeTaskDownloadRecord(task.gid);
                 }
                 delete nextMap[task.gid];
@@ -1973,7 +1983,7 @@ async function purgeStoppedTasks() {
             }
         }
 
-        await removeAria2TaskSnapshots(removedGids);
+        await removeDownloadTaskSnapshots(removedGids);
         await saveTaskMetaMap(nextMap);
         await refreshTaskLists();
 
@@ -1994,7 +2004,7 @@ async function purgeStoppedTasks() {
     }
 }
 
-async function openTaskFolder(task?: IAria2RpcTask | null) {
+async function openTaskFolder(task?: IDownloaderTask | null) {
     const target = task ?? selectedTask.value;
 
     if (!target?.dir) {
@@ -2005,7 +2015,7 @@ async function openTaskFolder(task?: IAria2RpcTask | null) {
     await FileHandler.openFolder(target.dir);
 }
 
-async function openTaskFile(task?: IAria2RpcTask | null) {
+async function openTaskFile(task?: IDownloaderTask | null) {
     const targetTask = task ?? selectedTask.value;
     const primaryFile = targetTask ? getTaskPrimaryFile(targetTask) : null;
 
@@ -2017,7 +2027,7 @@ async function openTaskFile(task?: IAria2RpcTask | null) {
     await FileHandler.openFile(primaryFile.path);
 }
 
-async function loadRelatedModDetail(task?: IAria2RpcTask | null) {
+async function loadRelatedModDetail(task?: IDownloaderTask | null) {
     const targetTask = task ?? selectedTask.value;
 
     if (!targetTask) {
@@ -2085,18 +2095,18 @@ async function loadRelatedModDetail(task?: IAria2RpcTask | null) {
                     <Button
                         variant="outline"
                         size="sm"
-                        @click="openAria2SettingsDialog"
+                        @click="openDownloaderSettingsDialog"
                     >
                         <IconSettings2 />
-                        Aria2 设置
+                        下载设置
                     </Button>
                     <Button
                         variant="outline"
                         size="sm"
-                        @click="restartAria2Service()"
+                        @click="restartDownloaderService()"
                     >
                         <IconRefreshCw />
-                        重启 Aria2
+                        重启下载服务
                     </Button>
                     <Button
                         variant="outline"
@@ -2427,7 +2437,7 @@ async function loadRelatedModDetail(task?: IAria2RpcTask | null) {
                     <DialogTitle>添加 Mod</DialogTitle>
                     <DialogDescription>
                         输入 3DM Mod ID
-                        或详情链接后，直接在弹窗里查看详情并添加到 aria2 队列。
+                        或详情链接后，直接在弹窗里查看详情并添加到下载队列。
                     </DialogDescription>
                 </DialogHeader>
 
@@ -2760,12 +2770,12 @@ async function loadRelatedModDetail(task?: IAria2RpcTask | null) {
             </DialogScrollContent>
         </Dialog>
 
-        <Dialog v-model:open="showAria2SettingsDialog" modal>
+        <Dialog v-model:open="showDownloaderSettingsDialog" modal>
             <DialogContent class="sm:max-w-2xl">
                 <DialogHeader>
-                    <DialogTitle>Aria2 设置</DialogTitle>
+                    <DialogTitle>下载设置</DialogTitle>
                     <DialogDescription>
-                        修改后会立即重启 aria2 服务，并对后续任务生效。
+                        修改后会立即重启下载服务，并对后续任务生效。
                     </DialogDescription>
                 </DialogHeader>
 
@@ -2775,39 +2785,39 @@ async function loadRelatedModDetail(task?: IAria2RpcTask | null) {
                     >
                         <div>
                             <div class="text-sm font-medium">
-                                启动时自动启动 Aria2
+                                启动时自动启动下载服务
                             </div>
                             <div class="mt-1 text-xs text-muted-foreground">
-                                开启后，程序启动时会自动拉起 aria2 RPC 服务。
+                                开启后，程序启动时会自动拉起下载服务。
                             </div>
                         </div>
-                        <Switch v-model="aria2SettingsDraft.autoStart" />
+                        <Switch v-model="downloaderSettingsDraft.autoStart" />
                     </div>
 
                     <div class="grid gap-2">
-                        <Label for="aria2-rpc-port">RPC 端口</Label>
+                        <Label for="download-rpc-port">RPC 端口</Label>
                         <Input
-                            id="aria2-rpc-port"
-                            v-model.number="aria2SettingsDraft.rpcPort"
+                            id="download-rpc-port"
+                            v-model.number="downloaderSettingsDraft.rpcPort"
                             type="number"
                             min="1"
                         />
                     </div>
 
                     <div class="grid gap-2">
-                        <Label for="aria2-rpc-secret">RPC 密钥</Label>
+                        <Label for="download-rpc-secret">RPC 密钥</Label>
                         <Input
-                            id="aria2-rpc-secret"
-                            v-model="aria2SettingsDraft.rpcSecret"
+                            id="download-rpc-secret"
+                            v-model="downloaderSettingsDraft.rpcSecret"
                         />
                     </div>
 
                     <div class="grid gap-2">
-                        <Label for="aria2-max-concurrent">最大并发任务</Label>
+                        <Label for="download-max-concurrent">最大并发任务</Label>
                         <Input
-                            id="aria2-max-concurrent"
+                            id="download-max-concurrent"
                             v-model.number="
-                                aria2SettingsDraft.maxConcurrentDownloads
+                                downloaderSettingsDraft.maxConcurrentDownloads
                             "
                             type="number"
                             min="5"
@@ -2820,21 +2830,21 @@ async function loadRelatedModDetail(task?: IAria2RpcTask | null) {
                     </div>
 
                     <div class="grid gap-2">
-                        <Label for="aria2-split">单任务分片数</Label>
+                        <Label for="download-split">单任务分片数</Label>
                         <Input
-                            id="aria2-split"
-                            v-model.number="aria2SettingsDraft.split"
+                            id="download-split"
+                            v-model.number="downloaderSettingsDraft.split"
                             type="number"
                             min="1"
                         />
                     </div>
 
                     <div class="grid gap-2">
-                        <Label for="aria2-max-connection">单服务器连接数</Label>
+                        <Label for="download-max-connection">单服务器连接数</Label>
                         <Input
-                            id="aria2-max-connection"
+                            id="download-max-connection"
                             v-model.number="
-                                aria2SettingsDraft.maxConnectionPerServer
+                                downloaderSettingsDraft.maxConnectionPerServer
                             "
                             type="number"
                             min="1"
@@ -2842,18 +2852,18 @@ async function loadRelatedModDetail(task?: IAria2RpcTask | null) {
                     </div>
 
                     <div class="grid gap-2">
-                        <Label for="aria2-min-split-size">最小分片大小</Label>
+                        <Label for="download-min-split-size">最小分片大小</Label>
                         <Input
-                            id="aria2-min-split-size"
-                            v-model="aria2SettingsDraft.minSplitSize"
+                            id="download-min-split-size"
+                            v-model="downloaderSettingsDraft.minSplitSize"
                             placeholder="例如 1M"
                         />
                     </div>
 
                     <div class="grid gap-2 sm:col-span-2">
-                        <Label for="aria2-download-proxy">下载代理</Label>
+                        <Label for="download-download-proxy">下载代理</Label>
                         <Input
-                            id="aria2-download-proxy"
+                            id="download-download-proxy"
                             v-model="downloadProxyDraft"
                             placeholder="例如 http://127.0.0.1:7890，可留空"
                         />
@@ -2863,11 +2873,11 @@ async function loadRelatedModDetail(task?: IAria2RpcTask | null) {
                 <DialogFooter>
                     <Button
                         variant="outline"
-                        @click="showAria2SettingsDialog = false"
+                        @click="showDownloaderSettingsDialog = false"
                     >
                         取消
                     </Button>
-                    <Button @click="saveAria2Settings"> 保存并重启 </Button>
+                    <Button @click="saveDownloaderSettings"> 保存并重启 </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>

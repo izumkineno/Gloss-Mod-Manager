@@ -1,4 +1,4 @@
-import { Aria2Rpc } from "@/lib/aria2-rpc";
+import { Downloader } from "@/lib/native-downloader";
 import { FileHandler } from "@/lib/FileHandler";
 import { getUrlFileName, sanitizeFileName } from "@/lib/file-name-utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -18,9 +18,9 @@ import {
     type LocalModImportSourceType,
 } from "@/lib/local-mod-import";
 import {
-    mergeAria2TaskSnapshots,
-    removeAria2TaskSnapshot,
-} from "@/lib/aria2-task-cache";
+    mergeDownloadTaskSnapshots,
+    removeDownloadTaskSnapshot,
+} from "@/lib/download-task-cache";
 import { PersistentStore } from "@/lib/persistent-store";
 
 export type GlossQueueDownloadStatus =
@@ -62,12 +62,12 @@ export interface IQueueGlossDownloadResult {
 interface IQueueRuntimeContext {
     outputDirectory: string;
     proxy: string;
-    settings: IAria2RuntimeSettings;
+    settings: IDownloaderSettings;
     taskMetaMap: Record<string, IGlossDownloadTaskMeta>;
-    allTasks: IAria2RpcTask[];
+    allTasks: IDownloaderTask[];
 }
 
-const ARIA2_TASK_META_KEY = "aria2TaskMetaMap";
+const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
 const GLOSS_DOWNLOAD_USER_AGENT =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const ARCHIVE_EXTENSION_PATTERN =
@@ -279,23 +279,23 @@ function getDuplicateCriteria(
 }
 
 async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
-    const outputDirectory = await Aria2Rpc.resolveDownloadDirectory();
+    const outputDirectory = await Downloader.resolveDownloadDirectory();
     await FileHandler.createDirectory(outputDirectory);
-    await Aria2Rpc.ensureServer({ outputDirectory });
+    await Downloader.ensureServer({ outputDirectory });
 
-    const settings = await Aria2Rpc.getStoredSettings();
+    const settings = await Downloader.getStoredSettings();
     const proxy = (
         (await PersistentStore.get<string>("downloadProxy", "")) ?? ""
     ).trim();
     const taskMetaMap =
         (await PersistentStore.get<Record<string, IGlossDownloadTaskMeta>>(
-            ARIA2_TASK_META_KEY,
+            DOWNLOAD_TASK_META_KEY,
             {},
         )) ?? {};
     const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-        Aria2Rpc.tellActive(),
-        Aria2Rpc.tellWaiting(0, 100),
-        Aria2Rpc.tellStopped(0, 100),
+        Downloader.tellActive(),
+        Downloader.tellWaiting(0, 100),
+        Downloader.tellStopped(0, 100),
     ]);
 
     return {
@@ -310,10 +310,10 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
 async function saveTaskMetaMap(
     taskMetaMap: Record<string, IGlossDownloadTaskMeta>,
 ) {
-    await PersistentStore.set(ARIA2_TASK_META_KEY, taskMetaMap);
+    await PersistentStore.set(DOWNLOAD_TASK_META_KEY, taskMetaMap);
 }
 
-function buildAria2Options(
+function buildDownloadOptions(
     runtime: IQueueRuntimeContext,
     mod: IMod,
     outputFileName: string,
@@ -346,9 +346,9 @@ async function createGlossDownloadTask(
     outputFileName: string,
     replaceLocalModId?: number,
 ) {
-    const gid = await Aria2Rpc.addUri(
+    const gid = await Downloader.addUri(
         [resource.mods_resource_url],
-        buildAria2Options(runtime, mod as IMod, outputFileName),
+        buildDownloadOptions(runtime, mod as IMod, outputFileName),
     );
     const now = new Date().toISOString();
 
@@ -380,8 +380,8 @@ async function createGlossDownloadTask(
     };
 
     await saveTaskMetaMap(nextTaskMetaMap);
-    const createdTask = await Aria2Rpc.tellStatus(gid);
-    await mergeAria2TaskSnapshots(
+    const createdTask = await Downloader.tellStatus(gid);
+    await mergeDownloadTaskSnapshots(
         [...runtime.allTasks, createdTask],
         nextTaskMetaMap,
         runtime.outputDirectory,
@@ -392,7 +392,7 @@ async function createGlossDownloadTask(
     return gid;
 }
 
-function getExistingTaskMessage(task: IAria2RpcTask, resource: IResource) {
+function getExistingTaskMessage(task: IDownloaderTask, resource: IResource) {
     if (task.status === "complete") {
         return `${resource.mods_resource_name} 已下载完成，可前往下载页查看。`;
     }
@@ -400,17 +400,17 @@ function getExistingTaskMessage(task: IAria2RpcTask, resource: IResource) {
     return `${resource.mods_resource_name} 已在下载队列中。`;
 }
 
-function getTaskPrimaryFile(task: IAria2RpcTask) {
+function getTaskPrimaryFile(task: IDownloaderTask) {
     return task.files.find((item) => item.path) ?? task.files[0] ?? null;
 }
 
 async function removeCompletedDuplicateTask(
     runtime: IQueueRuntimeContext,
-    task: IAria2RpcTask,
+    task: IDownloaderTask,
 ) {
     const primaryFile = getTaskPrimaryFile(task);
 
-    await Aria2Rpc.removeDownloadResult(task.gid);
+    await Downloader.removeDownloadResult(task.gid);
 
     if (primaryFile?.path) {
         const deleted = await FileHandler.deleteFile(primaryFile.path);
@@ -423,7 +423,7 @@ async function removeCompletedDuplicateTask(
     const nextTaskMetaMap = { ...runtime.taskMetaMap };
     delete nextTaskMetaMap[task.gid];
     await saveTaskMetaMap(nextTaskMetaMap);
-    await removeAria2TaskSnapshot(task.gid);
+    await removeDownloadTaskSnapshot(task.gid);
     runtime.taskMetaMap = nextTaskMetaMap;
     runtime.allTasks = runtime.allTasks.filter((item) => item.gid !== task.gid);
 }
@@ -455,7 +455,18 @@ export async function queueGlossModDownload(
         };
     }
 
-    const outputFileName = buildGlossOutputFileName(resource);
+    let outputFileName = buildGlossOutputFileName(resource);
+    const runtime = await getQueueRuntimeContext();
+    // 本地名缺后缀时从服务器探测补全，失败回退本地名。
+    outputFileName = await Downloader.ensureFileName(
+        resource.mods_resource_url,
+        outputFileName,
+        {
+            Referer: `${GLOSS_MOD_WEB_BASE_URL}/mod/${mod.id}`,
+            "User-Agent": GLOSS_DOWNLOAD_USER_AGENT,
+        },
+        runtime.proxy || null,
+    );
     const duplicateCriteria = getDuplicateCriteria(
         mod,
         resource,
@@ -478,8 +489,6 @@ export async function queueGlossModDownload(
             message: `${mod.mods_title} 已在本地管理列表中。`,
         };
     }
-
-    const runtime = await getQueueRuntimeContext();
     const duplicateTasks = findGlossDuplicateTasks(
         runtime.taskMetaMap,
         duplicateCriteria,
@@ -492,7 +501,7 @@ export async function queueGlossModDownload(
         .filter(
             (
                 item,
-            ): item is { task: IAria2RpcTask; meta: IGlossDownloadTaskMeta } =>
+            ): item is { task: IDownloaderTask; meta: IGlossDownloadTaskMeta } =>
                 item.task !== null && item.task.status !== "removed",
         );
 
@@ -532,7 +541,7 @@ export async function queueGlossModDownload(
         };
 
         if (currentTask.status === "paused") {
-            await Aria2Rpc.unpause(currentTask.gid);
+            await Downloader.unpause(currentTask.gid);
             nextTaskMetaMap[currentTask.gid].taskStatus = "waiting";
             await saveTaskMetaMap(nextTaskMetaMap);
 
