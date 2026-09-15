@@ -415,6 +415,12 @@ const lang = {
                 "可以试着更换关键词，或者清空当前筛选条件后再试。",
             listTitleWithGame: "{game} 的 {provider} 列表",
             listTitle: "{provider} 列表",
+            refreshCache: "刷新缓存",
+            refreshingCache: "刷新中…",
+            cacheRefreshed: "缓存已刷新，共 {count} 个包。",
+            cacheRefreshFailed: "刷新缓存失败。",
+            cacheAgeSeconds: "数据 {count} 秒前更新",
+            cacheAgeMinutes: "数据 {count} 分钟前更新",
         },
         detail: {
             providerDetail: "{provider} 详情",

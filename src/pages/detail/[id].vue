@@ -7,10 +7,11 @@ import {
     hasGlossMultipleResources,
     queueGlossModDownloadWithSelection,
 } from "@/lib/download-file-selection";
+import { resolveGlossModKey } from "@/lib/gloss-mod-api";
+import { useSettings } from "@/stores/settings";
 
 const GLOSS_MOD_API_BASE_URL = "https://mod.3dmgame.com/api/v3";
 const GLOSS_MOD_WEB_BASE_URL = "https://mod.3dmgame.com";
-const GLOSS_MOD_KEY = (import.meta.env.GLOSS_MOD_KEY ?? "").trim();
 const EMPTY_POSTER =
     "data:image/svg+xml;charset=UTF-8," +
     encodeURIComponent(`
@@ -41,6 +42,7 @@ interface IGlossApiResponse<T> {
 const route = useRoute();
 const router = useRouter();
 const manager = useManager();
+const settings = useSettings();
 
 const modDetail = ref<IMod | null>(null);
 const loading = ref(false);
@@ -202,9 +204,10 @@ async function loadModDetail(modId: string) {
         return;
     }
 
-    if (!GLOSS_MOD_KEY) {
+    const effectiveKey = resolveGlossModKey(settings.glossModKey);
+    if (!effectiveKey) {
         modDetail.value = null;
-        errorMessage.value = "未读取到 GLOSS_MOD_KEY，请检查 .env 配置。";
+        errorMessage.value = "未填写 3DM Mods Key，请前往设置页填写。";
         return;
     }
 
@@ -219,7 +222,7 @@ async function loadModDetail(modId: string) {
                 method: "GET",
                 headers: {
                     Accept: "application/json",
-                    Authorization: GLOSS_MOD_KEY,
+                    Authorization: effectiveKey,
                 },
             },
         );
@@ -325,6 +328,7 @@ async function downloadResource(resource?: IResource | null) {
             mod: modDetail.value,
             resourceId: shouldPromptSelection ? undefined : resource.id,
             managerModList: manager.managerModList,
+            apiKey: settings.glossModKey,
         });
 
         if (!result) {

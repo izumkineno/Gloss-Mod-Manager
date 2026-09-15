@@ -26,7 +26,8 @@ interface IEditModForm {
 }
 
 const manager = useManager();
-const { managerGridEnabled } = storeToRefs(useSettings());
+const settings = useSettings();
+const { managerGridEnabled } = storeToRefs(settings);
 const showEditDialog = ref(false);
 const showDeleteDialog = ref(false);
 const showSortDialog = ref(false);
@@ -416,6 +417,7 @@ async function queueModUpdate(item: IModInfo) {
             modId: item.webId,
             managerModList: manager.managerModList,
             replaceLocalModId: item.id,
+            apiKey: settings.glossModKey,
         });
 
         if (!result) {

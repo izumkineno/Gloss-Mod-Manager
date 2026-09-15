@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus-message";
 import { Downloader } from "@/lib/native-downloader";
+import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
 import type { IDownloaderTask } from "@/lib/download-task-types";
 import {
     queueGlossModDownloadWithSelection,
@@ -16,6 +17,7 @@ import { fetchGlossGamePlugins } from "@/lib/gloss-mod-api";
 import { PersistentStore } from "@/lib/persistent-store";
 import {
     fetchThirdPartyModDetail,
+    NexusModsAuthorizationError,
     type IThirdPartyModDetail,
     type ThirdPartyProvider,
 } from "@/lib/third-party-mod-api";
@@ -38,6 +40,7 @@ interface IPreloadLookupCriteria {
 
 const manager = useManager();
 const settings = useSettings();
+const router = useRouter();
 const taskMetaMap = PersistentStore.useValue<
     Record<string, IGlossDownloadTaskMeta>
 >("aria2TaskMetaMap", {});
@@ -60,7 +63,7 @@ const currentGameName = computed(() => {
     return currentGame.value?.gameShowName ?? currentGame.value?.gameName ?? "";
 });
 let refreshTaskSnapshotPending = false;
-let taskSnapshotTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+let releaseTaskSnapshotEvents: (() => void) | null = null;
 
 const basePreloadItems = computed(() => {
     if (!showPreloadList.value || !currentGameId.value) {
@@ -146,32 +149,32 @@ watch(
     shouldPollTaskSnapshots,
     (shouldPoll) => {
         if (shouldPoll) {
+            // 事件驱动：dl-progress（0.5s 节流）推进度，dl-task-changed 推终态/入队。
             void refreshTaskSnapshots();
-
-            if (taskSnapshotTimer === null) {
-                taskSnapshotTimer = globalThis.setInterval(() => {
-                    void refreshTaskSnapshots();
-                }, 2000);
+            if (releaseTaskSnapshotEvents === null) {
+                void subscribeDownloadTaskEvents(handleTaskSnapshotEvent).then(
+                    (release) => {
+                        releaseTaskSnapshotEvents = release;
+                    },
+                );
             }
-
             return;
         }
-
-        if (taskSnapshotTimer !== null) {
-            globalThis.clearInterval(taskSnapshotTimer);
-            taskSnapshotTimer = null;
-        }
-
+        releaseTaskSnapshotEvents?.();
+        releaseTaskSnapshotEvents = null;
         taskSnapshots.value = {};
     },
     { immediate: true },
 );
 
+// 事件回调只做触发器：快照仍从 tell* 拉取。
+function handleTaskSnapshotEvent() {
+    void refreshTaskSnapshots();
+}
+
 onBeforeUnmount(() => {
-    if (taskSnapshotTimer !== null) {
-        globalThis.clearInterval(taskSnapshotTimer);
-        taskSnapshotTimer = null;
-    }
+    releaseTaskSnapshotEvents?.();
+    releaseTaskSnapshotEvents = null;
 });
 
 function dedupePreloadItems(list: IGamePlugins[]) {
@@ -499,7 +502,7 @@ async function loadPreloadCatalog(force = false) {
 
     try {
         // 前置接口返回的是全量列表，当前页只在首次进入时拉取一次。
-        preloadCatalog.value = await fetchGlossGamePlugins();
+        preloadCatalog.value = await fetchGlossGamePlugins(settings.glossModKey);
         resolvedPreloadCriteriaMap.value = {};
         hasLoadedCatalog.value = true;
     } catch (error: unknown) {
@@ -612,6 +615,7 @@ async function queuePreload(item: IGamePlugins) {
                 ? await queueGlossModDownloadWithSelection({
                       modId: item.web_id,
                       managerModList: manager.managerModList,
+                      apiKey: settings.glossModKey,
                   })
                 : await (async () => {
                       const { detail, provider } =
@@ -650,6 +654,11 @@ async function queuePreload(item: IGamePlugins) {
     } catch (error: unknown) {
         console.error("提交前置下载任务失败");
         console.error(error);
+        if (error instanceof NexusModsAuthorizationError) {
+            ElMessage.warning("请先在设置页完成 NexusMods 授权。");
+            void router.push("/settings");
+            return;
+        }
         ElMessage.error(
             error instanceof Error
                 ? error.message

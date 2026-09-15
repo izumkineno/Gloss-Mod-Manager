@@ -661,8 +661,12 @@ export const useAiChatStore = defineStore("AiChat", () => {
                 selectedModelId.value = models[0].id;
             }
         } catch (error) {
-            modelList.value = [];
+            // 余额不足/配额耗尽时 /models 直接 402：保留用户手填的模型 ID，
+            // 只提示不清空，会话照常用手动模型建，对话时上游自然会再报真实错误。
             modelLoadError.value = toErrorMessage(error, "获取模型列表失败。");
+            if (!selectedModelId.value.trim()) {
+                modelList.value = [];
+            }
         } finally {
             loadingModels.value = false;
         }

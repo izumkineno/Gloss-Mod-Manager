@@ -252,7 +252,6 @@ export class AiChat {
             }
         }
 
-        console.error("获取模型列表失败", lastError);
         throw this.toError(lastError, "获取模型列表失败。");
     }
 
@@ -392,14 +391,22 @@ export class AiChat {
     private async readModelErrorMessage(response: Response): Promise<string> {
         const fallbackMessage = `获取模型列表失败：${response.status} ${response.statusText}`;
 
+        let rawMessage = "";
         try {
             const payload =
                 (await response.json()) as IOpenAICompatibleModelListResponse;
-
-            return payload.error?.message ?? payload.message ?? fallbackMessage;
+            rawMessage = payload.error?.message ?? payload.message ?? "";
         } catch {
+            // 非 JSON 错误体直接用状态码兜底。
+        }
+        if (!rawMessage.trim()) {
             return fallbackMessage;
         }
+        // 网关余额不足时直接返回英文原文，用户看不懂，这里转成中文提示。
+        if (/insufficient.*balance|余额不足|欠费|quota.*exceeded|account.*balance/iu.test(rawMessage)) {
+            return `AI 账户余额不足，请先充值后再试（上游原文：${rawMessage.trim()}）。`;
+        }
+        return rawMessage;
     }
 
     //#endregion

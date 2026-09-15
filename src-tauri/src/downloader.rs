@@ -114,6 +114,45 @@ impl DownloaderState {
             );
         }
     }
+    /// 游览页判重索引：一次锁内建 url 精确索引 + 文件名索引。
+    /// 返回 (url -> (gid, status, progress), normalizedFileName -> (gid, status, progress))。
+    /// removed 状态不入索引；error/complete 保留（前端展示失败/重下）。
+    pub(crate) fn explore_index(
+        &self,
+    ) -> (
+        std::collections::HashMap<String, (String, String, u8)>,
+        std::collections::HashMap<String, (String, String, u8)>,
+    ) {
+        let mut url_index = std::collections::HashMap::new();
+        let mut name_index = std::collections::HashMap::new();
+        let Ok(inner) = self.inner.lock() else {
+            return (url_index, name_index);
+        };
+        for entry in inner.tasks.values() {
+            let status = entry.status.as_status_str().to_string();
+            let progress = if entry.total > 0 {
+                ((entry.downloaded.min(entry.total) as f64 / entry.total as f64) * 100.0) as u8
+            } else if status == "complete" {
+                100
+            } else {
+                0
+            };
+            let record = (entry.gid.clone(), status, progress);
+            if !entry.url.trim().is_empty() {
+                url_index.insert(entry.url.clone(), record.clone());
+            }
+            let normalized: String = entry
+                .file_name
+                .to_lowercase()
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect();
+            if !normalized.is_empty() {
+                name_index.entry(normalized).or_insert(record);
+            }
+        }
+        (url_index, name_index)
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -401,6 +440,8 @@ pub fn dl_enqueue(
         inner.pending.push_back(gid.clone());
     }
     pump((*state).clone());
+    // 入队即事件：前端纯事件驱动需要此触发器，否则新任务要等下一次刷新才出现。
+    state.emit_changed(&gid, TaskStatus::Waiting.as_status_str());
     Ok(gid)
 }
 

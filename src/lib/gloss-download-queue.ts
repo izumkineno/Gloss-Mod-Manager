@@ -49,6 +49,8 @@ export interface IQueueGlossDownloadOptions {
     resourceId?: number | string | "latest";
     managerModList?: IModInfo[];
     replaceLocalModId?: number;
+    // 用户在设置页填写的 3DM Mods Key（无则走构建期 bake 兜底）。
+    apiKey?: string | null;
 }
 
 export interface IQueueGlossDownloadResult {
@@ -431,7 +433,7 @@ async function removeCompletedDuplicateTask(
 export async function queueGlossModDownload(
     options: IQueueGlossDownloadOptions,
 ): Promise<IQueueGlossDownloadResult> {
-    const mod = options.mod ?? (await fetchGlossModDetail(options.modId ?? ""));
+    const mod = options.mod ?? (await fetchGlossModDetail(options.modId ?? "", options.apiKey));
     const resource =
         options.resourceId === undefined || options.resourceId === "latest"
             ? getLatestResource(mod)

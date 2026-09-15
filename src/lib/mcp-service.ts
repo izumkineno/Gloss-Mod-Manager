@@ -1442,7 +1442,7 @@ async function handleToolCall(
                               args.replaceLocalModId,
                               "replaceLocalModId",
                           );
-                const { manager } = getStores();
+                const { manager, settings } = getStores();
                 await ensureSupportedGamesLoaded();
 
                 const result = await queueGlossModDownload({
@@ -1450,6 +1450,7 @@ async function handleToolCall(
                     resourceId,
                     replaceLocalModId,
                     managerModList: manager.managerModList,
+                    apiKey: settings.glossModKey,
                 });
 
                 if (

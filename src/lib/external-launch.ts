@@ -3,8 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import { ElMessage } from "element-plus-message";
 import { fetchGlossModDetail } from "@/lib/gloss-mod-api";
-import { queueCustomDownload } from "@/lib/custom-download-queue";
-import { queueGlossModDownloadWithSelection } from "@/lib/download-file-selection";
+import { SecretStore } from "@/lib/secret-store";
 import { readGmmPackageDetails } from "@/lib/gmm-package";
 import { importGmmShareCode, parseGmmShareCode } from "@/lib/gmm-share-code";
 import { normalizeCompareText } from "@/lib/gloss-download";
@@ -306,7 +305,9 @@ async function handleGmmInstallmodIntent(
     intent: Extract<TParsedLaunchIntent, { type: "gmm-installmod" }>,
 ) {
     const manager = useManager();
-    const mod = await fetchGlossModDetail(intent.modId);
+    // 深链路无组件上下文，直接读加密存储中的用户 key。
+    const userKey = await SecretStore.getSafe("glossModKey");
+    const mod = await fetchGlossModDetail(intent.modId, userKey);
 
     if (mod.game_id) {
         await ensureManagerGame({ glossGameId: Number(mod.game_id) });
@@ -320,6 +321,7 @@ async function handleGmmInstallmodIntent(
         modId: mod.id,
         resourceId: intent.resourceId,
         managerModList: manager.managerModList,
+        apiKey: userKey,
     });
 
     if (result) {

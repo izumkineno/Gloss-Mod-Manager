@@ -11,6 +11,7 @@ declare global {
   const AppAnalytics: typeof import('./lib/Analytics').AppAnalytics
   const AutoStart: typeof import('./lib/auto-start').AutoStart
   const DEFAULT_AI_CHAT_SYSTEM_PROMPT: typeof import('./lib/AiChat').DEFAULT_AI_CHAT_SYSTEM_PROMPT
+  const DOWNLOAD_TASK_EVENTS: typeof import('./lib/download-task-events').DOWNLOAD_TASK_EVENTS
   const DYING_LIGHT_2_CLASSIFY_RULES: typeof import('./lib/mod-classify-rules').DYING_LIGHT_2_CLASSIFY_RULES
   const DotNetTool: typeof import('./lib/dotnet-tool').DotNetTool
   const Downloader: typeof import('./lib/native-downloader').Downloader
@@ -112,6 +113,7 @@ declare global {
   const fetchModIoGameTags: typeof import('./lib/third-party-mod-api').fetchModIoGameTags
   const fetchThirdPartyModDetail: typeof import('./lib/third-party-mod-api').fetchThirdPartyModDetail
   const fetchThirdPartyMods: typeof import('./lib/third-party-mod-api').fetchThirdPartyMods
+  const fetchThunderstoreCacheStatus: typeof import('./lib/third-party-mod-api').fetchThunderstoreCacheStatus
   const findGlossDuplicateLocalMods: typeof import('./lib/gloss-download').findGlossDuplicateLocalMods
   const findGlossDuplicateTasks: typeof import('./lib/gloss-download').findGlossDuplicateTasks
   const findLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').findLegacyCustomGameDefinition
@@ -234,6 +236,7 @@ declare global {
   const refManualReset: typeof import('@vueuse/core').refManualReset
   const refThrottled: typeof import('@vueuse/core').refThrottled
   const refWithControl: typeof import('@vueuse/core').refWithControl
+  const refreshThunderstoreCache: typeof import('./lib/third-party-mod-api').refreshThunderstoreCache
   const removeDownloadTaskSnapshot: typeof import('./lib/download-task-cache').removeDownloadTaskSnapshot
   const removeDownloadTaskSnapshots: typeof import('./lib/download-task-cache').removeDownloadTaskSnapshots
   const requestWithRetry: typeof import('./lib/http-client').requestWithRetry
@@ -241,6 +244,7 @@ declare global {
   const resolveComponent: typeof import('vue').resolveComponent
   const resolveGlossAssetUrl: typeof import('./lib/gloss-mod-api').resolveGlossAssetUrl
   const resolveGlossDownloadImportSourceType: typeof import('./lib/gloss-download-queue').resolveGlossDownloadImportSourceType
+  const resolveGlossModKey: typeof import('./lib/gloss-mod-api').resolveGlossModKey
   const resolveGmmPackFolderKey: typeof import('./lib/gmm-package').resolveGmmPackFolderKey
   const resolveLocalModImportSourceType: typeof import('./lib/local-mod-import').resolveLocalModImportSourceType
   const resolveRef: typeof import('@vueuse/core').resolveRef
@@ -261,6 +265,7 @@ declare global {
   const startManagerModDrag: typeof import('./lib/manager-internal-drag').startManagerModDrag
   const startManagerTagDrag: typeof import('./lib/manager-internal-drag').startManagerTagDrag
   const storeToRefs: typeof import('pinia').storeToRefs
+  const subscribeDownloadTaskEvents: typeof import('./lib/download-task-events').subscribeDownloadTaskEvents
   const supportedGamesGTA5: typeof import('./lib/GTA5Handler').supportedGamesGTA5
   const supportedGamesGTA5Enhanced: typeof import('./lib/GTA5Handler').supportedGamesGTA5Enhanced
   const syncManagerRuntimeContext: typeof import('./lib/manager-context').syncManagerRuntimeContext
@@ -529,6 +534,9 @@ declare global {
   export type { DotNetTool } from './lib/dotnet-tool'
   import('./lib/dotnet-tool')
   // @ts-ignore
+  export type { DownloadTaskEventName } from './lib/download-task-events'
+  import('./lib/download-task-events')
+  // @ts-ignore
   export type { IDownloaderTaskUri, IDownloaderTaskFile, IDownloaderTask, IDownloaderGlobalStat, IDownloaderEnsureOptions, IDownloaderSettings } from './lib/download-task-types'
   import('./lib/download-task-types')
   // @ts-ignore
@@ -598,7 +606,7 @@ declare global {
   export type { ThirdPartyQueueDownloadStatus, IQueueThirdPartyDownloadOptions, IQueueThirdPartyDownloadResult } from './lib/third-party-download-queue'
   import('./lib/third-party-download-queue')
   // @ts-ignore
-  export type { NexusModsAuthorizationError, ThirdPartyProvider, ThirdPartyDescriptionFormat, ThirdPartyListSortKey, IThirdPartyListQuery, IThirdPartyModFile, IThirdPartyModItem, IThirdPartyModDetail, IThirdPartyModListResult, IThirdPartyModFacetOption, IThirdPartyModFacets, INexusModsFacetSelection, IThirdPartyProviderOption, INexusModsDownloadAuthorization } from './lib/third-party-mod-api'
+  export type { NexusModsAuthorizationError, ThirdPartyProvider, ThirdPartyDescriptionFormat, ThirdPartyListSortKey, IThirdPartyListQuery, IThirdPartyModFile, IThirdPartyModItem, IThirdPartyModDetail, IThirdPartyModListResult, IThirdPartyModFacetOption, IThirdPartyModFacets, INexusModsFacetSelection, IThirdPartyProviderOption, INexusModsDownloadAuthorization, IThunderstoreCacheStatus } from './lib/third-party-mod-api'
   import('./lib/third-party-mod-api')
   // @ts-ignore
   export type { IAiChatMessageMetadata, IAiChatUIMessage, IAiChatConversation } from './stores/ai-chat'

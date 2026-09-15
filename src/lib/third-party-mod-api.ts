@@ -1,3 +1,5 @@
+// Thunderstore 列表/详情走 Rust 后端（内存缓存全量包列表，翻页搜索零请求）。
+import { invoke } from "@tauri-apps/api/core";
 // 统一走带超时与重试的封装，避免对端无响应时请求永久挂起。
 import { requestWithRetry as httpFetch } from "@/lib/http-client";
 
@@ -73,6 +75,8 @@ export interface IThirdPartyModListResult {
     totalCount: number;
     totalPages: number;
     facets?: IThirdPartyModFacets;
+    // Thunderstore 纯后端返回的缓存年龄（秒），其他 provider 无此字段。
+    cacheAgeSecs?: number | null;
 }
 
 export interface IThirdPartyModFacetOption {
@@ -187,8 +191,8 @@ interface IApiMessageResponse {
     message?: string;
 }
 
-interface IThunderstoreReadmeResponse {
-    markdown?: string;
+interface INexusDownloadLinkResponseItem {
+    URI: string;
 }
 
 interface INexusDownloadLinkResponseItem {
@@ -724,11 +728,17 @@ async function fetchNexusModsApiJson<T>(
     path: string,
     nexusUser?: INexusModsUser | null,
 ) {
+    // 详情/文件接口必须带 apikey；缺 key 时直接抛中文授权错，
+    // 避免裸调后把 Nexus 的英文原文透给用户。
     const response = await httpFetch(`https://api.nexusmods.com${path}`, {
         method: "GET",
-        headers: getNexusModsHeaders(nexusUser),
+        headers: getNexusModsHeaders(nexusUser, true),
     });
     const payload = (await response.json()) as T | IApiMessageResponse;
+
+    if (response.status === 401 || response.status === 403) {
+        throw new NexusModsAuthorizationError();
+    }
 
     if (!response.ok) {
         throw new Error(
@@ -1147,93 +1157,44 @@ async function fetchThunderstoreList(
         return emptyListResult(query);
     }
 
-    const response = await httpFetch(
-        `https://thunderstore.io/c/${community}/api/v1/package/`,
-        {
-            method: "GET",
-            headers: {
-                Accept: "application/json",
-            },
-        },
-    );
-    const payload = (await response.json()) as IThunderstoreMod[];
-
-    if (!response.ok || !Array.isArray(payload)) {
-        throw new Error("获取 Thunderstore 列表失败。");
-    }
-
-    const normalizedSearch = normalizeText(query.searchText).toLowerCase();
-    const filtered = payload
-        .filter((item) => !item.is_deprecated)
-        .filter((item) => {
-            if (!normalizedSearch) {
-                return true;
-            }
-
-            const searchSource = [
-                item.name,
-                item.full_name,
-                item.owner,
-                item.latest?.description ?? "",
-                ...(item.categories ?? []),
-            ]
-                .join(" ")
-                .toLowerCase();
-
-            return searchSource.includes(normalizedSearch);
+    // 纯后端：过滤/排序/分页/归一化全在 Rust 侧，前端只做渲染。
+    const invokeParams = {
+        community,
+        page: query.page,
+        pageSize: query.pageSize,
+        searchText: query.searchText,
+        sort: query.sort,
+    };
+    console.debug("[thunderstore] invoke thunderstore_list", invokeParams);
+    const startedAt = Date.now();
+    try {
+        const result = await invoke<IThirdPartyModListResult>("thunderstore_list", {
+            params: invokeParams,
         });
-
-    const normalizedItems = filtered.map((item) =>
-        normalizeThunderstoreMod(item),
-    );
-    const sortedItems = sortThirdPartyListItems(
-        normalizedItems,
-        query.sort === "default" ? "downloads" : query.sort,
-    );
-
-    return paginateThirdPartyItems(sortedItems, query);
-}
-
-function normalizeThunderstoreMod(item: IThunderstoreMod) {
-    const latest = item.latest ?? item.versions?.[0];
-    const primaryFile = latest
-        ? ({
-              id: latest.uuid4 || latest.version_number,
-              name: latest.full_name || latest.name,
-              version: latest.version_number,
-              size: latest.file_size ?? 0,
-              createdAt: latest.date_created ?? "",
-              downloadUrl: latest.download_url ?? "",
-              detailsUrl: item.package_url ?? "",
-          } satisfies IThirdPartyModFile)
-        : null;
-
-    return {
-        source: "Thunderstore" as const,
-        id: item.uuid4,
-        routeId: item.uuid4,
-        routeQuery: {
-            source: "Thunderstore",
-            namespace: item.owner,
-            name: item.name,
-        },
-        title: item.full_name || item.name,
-        summary: latest?.description ?? "",
-        author: item.owner,
-        version: latest?.version_number ?? "",
-        website: item.package_url ?? "",
-        cover: latest?.icon ?? "",
-        gallery: [latest?.icon ?? ""].filter(Boolean),
-        downloads: latest?.downloads ?? 0,
-        likes: item.rating_score ?? 0,
-        categories: item.categories ?? [],
-        tags: item.categories ?? [],
-        createdAt: item.date_created ?? "",
-        updatedAt: item.date_updated ?? "",
-        nsfw: Boolean(item.has_nsfw_content),
-        filesCount: latest ? 1 : 0,
-        primaryFile,
-    } satisfies IThirdPartyModItem;
+        console.debug("[thunderstore] thunderstore_list ok", {
+            elapsedMs: Date.now() - startedAt,
+            page: result.page,
+            totalPages: result.totalPages,
+            totalCount: result.totalCount,
+            itemCount: result.items?.length ?? 0,
+        });
+        return {
+            items: result.items ?? [],
+            page: result.page,
+            pageSize: result.pageSize,
+            totalCount: result.totalCount,
+            totalPages: result.totalPages,
+            cacheAgeSecs:
+                typeof result.cacheAgeSecs === "number" ? result.cacheAgeSecs : null,
+        } satisfies IThirdPartyModListResult;
+    } catch (error) {
+        console.error("[thunderstore] thunderstore_list failed", {
+            elapsedMs: Date.now() - startedAt,
+            params: invokeParams,
+            error,
+        });
+        throw error;
+    }
 }
 
 async function fetchThunderstoreDetail(namespace?: string, name?: string) {
@@ -1244,59 +1205,49 @@ async function fetchThunderstoreDetail(namespace?: string, name?: string) {
         throw new Error("缺少 Thunderstore 包标识。");
     }
 
-    const detailResponse = await httpFetch(
-        `https://thunderstore.io/api/experimental/package/${normalizedNamespace}/${normalizedName}/`,
-        {
-            method: "GET",
-            headers: {
-                Accept: "application/json",
-            },
-        },
-    );
-    const detail = (await detailResponse.json()) as IThunderstoreMod;
+    // 纯后端：归一化在 Rust 侧完成，前端直接渲染。
+    const detail = await invoke<IThirdPartyModDetail>("thunderstore_detail", {
+        namespace: normalizedNamespace,
+        name: normalizedName,
+    });
 
-    if (!detailResponse.ok || !detail?.name) {
+    if (!detail?.routeId) {
         throw new Error("读取 Thunderstore 详情失败。");
     }
 
-    let latest = detail.latest ?? detail.versions?.[0];
-    if (!latest && detail.versions?.[0]?.name) {
-        const versionResponse = await httpFetch(
-            `https://thunderstore.io/api/experimental/package/${normalizedNamespace}/${normalizedName}/${detail.versions[0].name}/`,
-            {
-                method: "GET",
-                headers: {
-                    Accept: "application/json",
-                },
-            },
-        );
-        latest = (await versionResponse.json()) as IThunderstoreModVersions;
+    return detail;
+}
+
+export interface IThunderstoreCacheStatus {
+    cached: boolean;
+    ageSecs: number | null;
+}
+
+// 查询后端 Thunderstore 列表缓存状态（未缓存返回 cached:false）。
+export async function fetchThunderstoreCacheStatus(
+    community: string,
+): Promise<IThunderstoreCacheStatus> {
+    interface IThunderstoreCacheStatusPayload {
+        cached?: unknown;
+        ageSecs?: unknown;
     }
-
-    const readmeResponse = await httpFetch(
-        `https://thunderstore.io/api/experimental/package/${normalizedNamespace}/${normalizedName}/${latest?.name ?? detail.versions?.[0]?.name ?? ""}/readme/`,
-        {
-            method: "GET",
-            headers: {
-                Accept: "application/json",
-            },
-        },
+    const status = await invoke<IThunderstoreCacheStatusPayload>(
+        "thunderstore_cache_status",
+        { community: community.trim() },
     );
-    const readme = (await readmeResponse.json()) as IThunderstoreReadmeResponse;
-
-    const normalized = normalizeThunderstoreMod({
-        ...detail,
-        latest: latest ?? detail.latest,
-    });
-    const files = normalized.primaryFile ? [normalized.primaryFile] : [];
-
     return {
-        ...normalized,
-        filesCount: files.length,
-        description: readme.markdown ?? normalized.summary,
-        descriptionFormat: "markdown",
-        files,
-    } satisfies IThirdPartyModDetail;
+        cached: status.cached === true,
+        ageSecs: typeof status.ageSecs === "number" ? status.ageSecs : null,
+    };
+}
+
+// 手动刷新：强制回源并覆盖后端缓存，返回刷新后的全量包数（供提示用）。
+export async function refreshThunderstoreCache(
+    community: string,
+): Promise<number> {
+    return invoke<number>("thunderstore_refresh", {
+        community: community.trim(),
+    });
 }
 
 async function fetchModIoList(

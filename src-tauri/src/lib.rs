@@ -1,6 +1,8 @@
 mod downloader;
+mod explore;
 mod fsops;
 mod mcp_server;
+mod thunderstore;
 
 use std::io;
 use std::path::PathBuf;
@@ -332,6 +334,7 @@ pub fn run() {
         .manage(AppLaunchState::default())
         .manage(Arc::new(mcp_server::McpRuntimeState::default()))
         .manage(downloader::DownloaderState::default())
+        .manage(thunderstore::ThunderstoreState::default())
         .invoke_handler(tauri::generate_handler![
             app_take_pending_launch_files,
             app_process_id,
@@ -359,6 +362,11 @@ pub fn run() {
             downloader::dl_tell_waiting,
             downloader::dl_tell_stopped,
             downloader::dl_global_stat,
+            explore::explore_list,
+            thunderstore::thunderstore_list,
+            thunderstore::thunderstore_cache_status,
+            thunderstore::thunderstore_refresh,
+            thunderstore::thunderstore_detail,
             mcp_server::mcp_get_server_state,
             mcp_server::mcp_start_server,
             mcp_server::mcp_stop_server,

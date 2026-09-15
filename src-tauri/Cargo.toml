@@ -48,6 +48,8 @@ fs_extra = "1"
 junction = "1"
 # P1 配置原子写：跨进程文件锁（防并发丢条目）+ tmp 写再 rename（防半截文件）
 fs2 = "0.4"
+# 游览页后端化：列表转发 + 判重（rustls 手动 roots，体积最小）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-manual-roots"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

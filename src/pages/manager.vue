@@ -374,7 +374,7 @@ async function checkForUpdates() {
         const webIds = glossMods
             .map((m) => m.webId)
             .filter((id): id is number => typeof id === "number" && id > 0);
-        const updates = await checkGlossModUpdates(webIds);
+        const updates = await checkGlossModUpdates(webIds, settings.glossModKey);
 
         if (updates.length === 0) {
             ElMessage.success("所有 Mod 已是最新版本。");
@@ -393,6 +393,7 @@ async function checkForUpdates() {
                     modId: update.id,
                     replaceLocalModId: localMod.id,
                     managerModList: manager.managerModList,
+                    apiKey: settings.glossModKey,
                 });
 
                 if (!result) {
@@ -740,16 +741,9 @@ function openGamesPage() {
                     <CardTitle
                         class="flex flex-wrap justify-between items-center gap-3"
                     >
-                        <h3 class="text-2xl">Mod 管理</h3>
-                        <div>
-                            当前游戏『
-                            {{
-                                $t(
-                                    manager.managerGame.gameShowName ||
-                                        manager.managerGame.gameName,
-                                )
-                            }}
-                            』
+                        <div class="flex items-center gap-3">
+                            <h3 class="text-2xl">Mod 管理</h3>
+                            <CurrentGameBadge />
                         </div>
                     </CardTitle>
                 </CardHeader>

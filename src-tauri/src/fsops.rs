@@ -1048,15 +1048,21 @@ fn vdf_str<'a>(map: &'a std::collections::HashMap<String, Vdf>, key: &str) -> Op
 
 #[cfg(windows)]
 fn windows_steam_path() -> Option<String> {
- let output = std::process::Command::new("reg")
- .args([
- "query",
- "HKLM\\SOFTWARE\\Wow6432Node\\Valve\\Steam",
- "/v",
- "InstallPath",
- ])
- .output()
- .ok()?;
+    // release 包必须藏控制台窗口，否则每次 reg 查询都闪一个 cmd。
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    #[cfg(windows)]
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut command = std::process::Command::new("reg");
+    command.args([
+        "query",
+        "HKLM\\SOFTWARE\\Wow6432Node\\Valve\\Steam",
+        "/v",
+        "InstallPath",
+    ]);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let output = command.output().ok()?;
  if !output.status.success() {
  return None;
  }

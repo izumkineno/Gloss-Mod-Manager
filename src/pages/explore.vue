@@ -195,7 +195,6 @@ function handleTranslationLoadingChange(loading: boolean) {
                 </div>
                 <SelectGame />
             </div>
-
             <div class="flex flex-wrap items-center gap-2">
                 <Button
                     v-if="!hasAiConfiguration"

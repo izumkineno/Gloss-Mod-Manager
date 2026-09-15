@@ -35,7 +35,14 @@ export interface IGlossModUpdateItem {
 
 export const GLOSS_MOD_API_BASE_URL = "https://mod.3dmgame.com/api/v3";
 export const GLOSS_MOD_WEB_BASE_URL = "https://mod.3dmgame.com";
-export const GLOSS_MOD_KEY = (import.meta.env.GLOSS_MOD_KEY ?? "").trim();
+// 构建期 bake 的 key（官方 release 经 Secrets 注入；本地 .env 为空则无值）。
+const BAKED_GLOSS_MOD_KEY = (import.meta.env.GLOSS_MOD_KEY ?? "").trim();
+// 兼容旧引用：实际请求以 resolveGlossModKey 为准（用户设置优先，bake 兜底）。
+export const GLOSS_MOD_KEY = BAKED_GLOSS_MOD_KEY;
+/** 用户在设置页填写的 key 优先，构建期 bake 的 key 兜底。 */
+export function resolveGlossModKey(userKey?: string | null) {
+    return (userKey ?? "").trim() || BAKED_GLOSS_MOD_KEY;
+}
 
 export function resolveGlossAssetUrl(path?: string) {
     if (!path) {
@@ -51,15 +58,16 @@ export function resolveGlossAssetUrl(path?: string) {
     return `${GLOSS_MOD_WEB_BASE_URL}${normalized}`;
 }
 
-export async function fetchGlossModDetail(modId: number | string) {
+export async function fetchGlossModDetail(modId: number | string, apiKey?: string | null) {
     const normalizedModId = String(modId ?? "").trim();
 
     if (!normalizedModId) {
         throw new Error("缺少有效的 Mod ID。");
     }
 
-    if (!GLOSS_MOD_KEY) {
-        throw new Error("未读取到 GLOSS_MOD_KEY，请检查 .env 配置。");
+    const resolvedKey = resolveGlossModKey(apiKey);
+    if (!resolvedKey) {
+        throw new Error("未填写 3DM Mods Key，请前往设置页填写。");
     }
 
     const response = await httpFetch(
@@ -68,7 +76,7 @@ export async function fetchGlossModDetail(modId: number | string) {
             method: "GET",
             headers: {
                 Accept: "application/json",
-                Authorization: GLOSS_MOD_KEY,
+                Authorization: resolvedKey,
             },
         },
     );
@@ -81,7 +89,7 @@ export async function fetchGlossModDetail(modId: number | string) {
     return payload.data;
 }
 
-export async function checkGlossModUpdates(modIds: number[]) {
+export async function checkGlossModUpdates(modIds: number[], apiKey?: string | null) {
     const normalizedModIds = [...new Set(modIds)]
         .map((modId) => Number(modId))
         .filter((modId) => Number.isFinite(modId) && modId > 0);
@@ -90,8 +98,9 @@ export async function checkGlossModUpdates(modIds: number[]) {
         return [] as IGlossModUpdateItem[];
     }
 
-    if (!GLOSS_MOD_KEY) {
-        throw new Error("未读取到 GLOSS_MOD_KEY，请检查 .env 配置。");
+    const resolvedKey = resolveGlossModKey(apiKey);
+    if (!resolvedKey) {
+        throw new Error("未填写 3DM Mods Key，请前往设置页填写。");
     }
 
     const response = await httpFetch(
@@ -100,7 +109,7 @@ export async function checkGlossModUpdates(modIds: number[]) {
             method: "POST",
             headers: {
                 Accept: "application/json",
-                Authorization: GLOSS_MOD_KEY,
+                Authorization: resolvedKey,
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -126,16 +135,17 @@ export async function checkGlossModUpdates(modIds: number[]) {
     return Array.isArray(payload.data.data) ? payload.data.data : [];
 }
 
-export async function fetchGlossGamePlugins() {
-    if (!GLOSS_MOD_KEY) {
-        throw new Error("未读取到 GLOSS_MOD_KEY，请检查 .env 配置。");
+export async function fetchGlossGamePlugins(apiKey?: string | null) {
+    const resolvedKey = resolveGlossModKey(apiKey);
+    if (!resolvedKey) {
+        throw new Error("未填写 3DM Mods Key，请前往设置页填写。");
     }
 
     const response = await httpFetch(`${GLOSS_MOD_API_BASE_URL}/gmm/plugins`, {
         method: "POST",
         headers: {
             Accept: "application/json",
-            Authorization: GLOSS_MOD_KEY,
+            Authorization: resolvedKey,
             "Content-Type": "application/json",
         },
         body: JSON.stringify({}),
@@ -154,9 +164,11 @@ export async function fetchGlossGamePlugins() {
 export async function fetchGlossGames(params?: {
     page?: number;
     pageSize?: number;
+    apiKey?: string | null;
 }) {
-    if (!GLOSS_MOD_KEY) {
-        throw new Error("未读取到 GLOSS_MOD_KEY，请检查 .env 配置。");
+    const resolvedKey = resolveGlossModKey(params?.apiKey);
+    if (!resolvedKey) {
+        throw new Error("未填写 3DM Mods Key，请前往设置页填写。");
     }
 
     const url = new URL(`${GLOSS_MOD_API_BASE_URL}/games`);
@@ -170,7 +182,7 @@ export async function fetchGlossGames(params?: {
         method: "GET",
         headers: {
             Accept: "application/json",
-            Authorization: GLOSS_MOD_KEY,
+            Authorization: resolvedKey,
         },
     });
     const payload = (await response.json()) as IGlossApiResponse<
@@ -184,10 +196,11 @@ export async function fetchGlossGames(params?: {
     return payload.data;
 }
 
-export async function fetchAllGlossGames(pageSize = 200) {
+export async function fetchAllGlossGames(pageSize = 200, apiKey?: string | null) {
     const firstPage = await fetchGlossGames({
         page: 1,
         pageSize,
+        apiKey,
     });
     const games = [...(firstPage.data ?? [])];
 
@@ -199,6 +212,7 @@ export async function fetchAllGlossGames(pageSize = 200) {
         const pageData = await fetchGlossGames({
             page: currentPage,
             pageSize,
+            apiKey,
         });
 
         games.push(...(pageData.data ?? []));

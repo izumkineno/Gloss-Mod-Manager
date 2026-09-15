@@ -50,6 +50,7 @@ declare module 'vue' {
     ContextMenuSubContent: typeof import('./components/ui/context-menu/ContextMenuSubContent.vue')['default']
     ContextMenuSubTrigger: typeof import('./components/ui/context-menu/ContextMenuSubTrigger.vue')['default']
     ContextMenuTrigger: typeof import('./components/ui/context-menu/ContextMenuTrigger.vue')['default']
+    CurrentGameBadge: typeof import('./components/CurrentGameBadge.vue')['default']
     CurseForge: typeof import('./components/Home/CurseForge.vue')['default']
     CustomCheckRuleFields: typeof import('./components/custom-data/CustomCheckRuleFields.vue')['default']
     CustomGameDialog: typeof import('./components/Games/CustomGameDialog.vue')['default']

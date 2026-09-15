@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { documentDir, join } from "@tauri-apps/api/path";
-import { listen } from "@tauri-apps/api/event";
+import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
 import { open } from "@tauri-apps/plugin-dialog";
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import { ElMessage } from "element-plus-message";
@@ -27,8 +27,8 @@ import {
     buildGlossOutputFileName,
     resolveGlossDownloadImportSourceType,
 } from "@/lib/gloss-download-queue";
+import { resolveGlossModKey } from "@/lib/gloss-mod-api";
 import {
-    isRestoredDownloadTask,
     mergeDownloadTaskSnapshots,
     removeDownloadTaskSnapshot,
     removeDownloadTaskSnapshots,
@@ -89,7 +89,6 @@ interface IResourceDuplicateTask {
 
 const GLOSS_MOD_API_BASE_URL = "https://mod.3dmgame.com/api/v3";
 const GLOSS_MOD_WEB_BASE_URL = "https://mod.3dmgame.com";
-const GLOSS_MOD_KEY = (import.meta.env.GLOSS_MOD_KEY ?? "").trim();
 const EMPTY_POSTER =
     "data:image/svg+xml;charset=UTF-8," +
     encodeURIComponent(`
@@ -389,36 +388,9 @@ function getTaskExternalId(metadata?: IGlossDownloadTaskMeta | null) {
     return metadata?.externalId ?? metadata?.modId;
 }
 
-const { pause: stopTaskPolling, resume: startTaskPolling } = useIntervalFn(
-    () => {
-        void refreshTaskLists(true);
-    },
-    15000,
-    { immediate: false },
-);
-
-// 事件只做触发器：收到后拉一次快照（数据源仍是快照，慢轮询兜底丢事件）。
-let taskEventUnlisten: Array<() => void> = [];
-
-async function subscribeTaskEvents() {
-    if (taskEventUnlisten.length > 0) {
-        return;
-    }
-    const staged: Array<() => void> = [];
-    try {
-        for (const event of ["dl-progress", "dl-task-changed"]) {
-            staged.push(await listen<string>(event, () => {
-                void refreshTaskLists(true);
-            }));
-        }
-        taskEventUnlisten.push(...staged);
-    } catch {
-        for (const unlisten of staged) {
-            unlisten();
-        }
-        taskEventUnlisten = [];
-    }
-}
+// 纯事件驱动：dl-progress（0.5s 节流）+ dl-task-changed（含入队 waiting）触发刷新；
+// 窗口重新聚焦时补一次，兜底后台期间丢的事件。
+let releaseTaskEvents: (() => void) | null = null;
 
 watch(
     allTasks,
@@ -501,17 +473,33 @@ watch(
 );
 
 onMounted(() => {
-    void subscribeTaskEvents();
+    void subscribeDownloadTaskEvents(() => {
+        void refreshTaskLists(true);
+    }).then((release) => {
+        releaseTaskEvents = release;
+    });
+    window.addEventListener("focus", handleWindowFocusRefresh);
+    document.addEventListener("visibilitychange", handleVisibilityRefresh);
     void initializeDownloadPage();
 });
 
 onUnmounted(() => {
-    stopTaskPolling();
-    for (const unlisten of taskEventUnlisten) {
-        unlisten();
-    }
-    taskEventUnlisten = [];
+    releaseTaskEvents?.();
+    releaseTaskEvents = null;
+    window.removeEventListener("focus", handleWindowFocusRefresh);
+    document.removeEventListener("visibilitychange", handleVisibilityRefresh);
 });
+
+// 窗口聚焦/可见性恢复时补一次刷新，兜底后台期间丢的事件。
+function handleWindowFocusRefresh() {
+    void refreshTaskLists(true);
+}
+
+function handleVisibilityRefresh() {
+    if (document.visibilityState === "visible") {
+        void refreshTaskLists(true);
+    }
+}
 
 function getErrorMessage(error: unknown) {
     if (error instanceof Error && error.message.trim()) {
@@ -606,7 +594,6 @@ async function initializeDownloadPage() {
         await ensureRpcReady();
         rpcState.value = "ready";
         await refreshTaskLists();
-        startTaskPolling();
     } catch (error: unknown) {
         rpcState.value = "error";
         rpcErrorMessage.value = getErrorMessage(error);
@@ -809,7 +796,6 @@ async function openDownloadDirectory() {
 
 async function restartDownloaderService(successMessage?: string) {
     try {
-        stopTaskPolling();
         rpcState.value = "starting";
         rpcErrorMessage.value = "";
 
@@ -818,7 +804,6 @@ async function restartDownloaderService(successMessage?: string) {
 
         rpcState.value = "ready";
         await refreshTaskLists();
-        startTaskPolling();
 
         if (successMessage) {
             ElMessage.success(successMessage);
@@ -847,8 +832,9 @@ async function loadModDetail(explicitModId?: string): Promise<IMod | null> {
         return null;
     }
 
-    if (!GLOSS_MOD_KEY) {
-        modLookupError.value = "未读取到 GLOSS_MOD_KEY，请检查 .env 配置。";
+    const effectiveKey = resolveGlossModKey(settings.glossModKey);
+    if (!effectiveKey) {
+        modLookupError.value = "未填写 3DM Mods Key，请前往设置页填写。";
         selectedMod.value = null;
         return null;
     }
@@ -864,7 +850,7 @@ async function loadModDetail(explicitModId?: string): Promise<IMod | null> {
                 method: "GET",
                 headers: {
                     Accept: "application/json",
-                    Authorization: GLOSS_MOD_KEY,
+                    Authorization: effectiveKey,
                 },
             },
         );
@@ -1960,6 +1946,8 @@ async function removeTask(task: IDownloaderTask) {
         }
         await removeDownloadTaskSnapshot(task.gid);
         removeTaskMeta(task.gid);
+        // 元数据必须落盘：merge 会从 meta 复活任务，只改内存会导致刷新后恢复。
+        await saveTaskMetaMap(taskMetaMap.value);
         await refreshTaskLists();
     } catch (error: unknown) {
         ElMessage.error(getErrorMessage(error));

@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { fetch as httpFetch } from "@tauri-apps/plugin-http";
+import { invoke } from "@tauri-apps/api/core";
 import { ElMessage } from "element-plus-message";
 import { useI18n } from "vue-i18n";
 import { Downloader } from "@/lib/native-downloader";
+import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
 import type { IDownloaderTask } from "@/lib/download-task-types";
 import {
     findGlossDuplicateTasks,
-    getGlossModPresence,
     type GlossDownloadPresence,
     type IGlossDownloadTaskMeta,
 } from "@/lib/gloss-download";
@@ -20,12 +20,12 @@ import {
 } from "@/lib/download-file-selection";
 import {
     fetchAllGlossGames,
-    GLOSS_MOD_API_BASE_URL,
-    GLOSS_MOD_KEY,
     GLOSS_MOD_WEB_BASE_URL,
+    resolveGlossModKey,
     type IGlossGameListItem,
     type IGlossGameModType,
 } from "@/lib/gloss-mod-api";
+import { useSettings } from "@/stores/settings";
 import type { AppLocale } from "@/lang/locales";
 import {
     getExploreTranslationErrorMessage,
@@ -133,6 +133,9 @@ const emit = defineEmits<{
 }>();
 
 const manager = useManager();
+const settings = useSettings();
+// 用户在设置页填写的 3DM Mods Key 优先，构建期 bake 的 key 兜底。
+const effectiveGlossKey = computed(() => resolveGlossModKey(settings.glossModKey));
 const router = useRouter();
 const route = useRoute();
 const { t, locale } = useI18n();
@@ -175,6 +178,10 @@ const sortOptions = computed<IGlossSortOption[]>(() => [
 ]);
 
 const mods = ref<IGlossExploreMod[]>([]);
+// 后端 explore_list 一次返回的判重状态：modId -> { state, progress, gid }。
+const serverStatusMap = ref<
+    Record<string, { state: string; progress: number; gid: string }>
+>({});
 const loading = ref(false);
 const errorMessage = ref("");
 const translationLoading = ref(false);
@@ -226,7 +233,7 @@ let requestSequence = 0;
 let gameTypeRequestSequence = 0;
 let translationRequestSequence = 0;
 let refreshTaskSnapshotPending = false;
-let taskSnapshotTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+let releaseTaskSnapshotEvents: (() => void) | null = null;
 let translationAbortController: AbortController | null = null;
 let routeSyncPending = false;
 
@@ -377,7 +384,7 @@ const downloadStatusMap = computed<Record<string, IExploreDownloadStatus>>(
         return Object.fromEntries(
             mods.value.map((item) => [
                 String(item.id),
-                resolveDownloadStatus(item),
+                serverStatusToDisplay(item),
             ]),
         );
     },
@@ -565,26 +572,28 @@ watch(
     shouldPollTaskSnapshots,
     (shouldPoll) => {
         if (shouldPoll) {
+            // 事件驱动：dl-progress（0.5s 节流）推进度，dl-task-changed 推终态/入队。
             void refreshTaskSnapshots();
-
-            if (taskSnapshotTimer === null) {
-                taskSnapshotTimer = globalThis.setInterval(() => {
-                    void refreshTaskSnapshots();
-                }, 2000);
+            if (releaseTaskSnapshotEvents === null) {
+                void subscribeDownloadTaskEvents(handleTaskSnapshotEvent).then(
+                    (release) => {
+                        releaseTaskSnapshotEvents = release;
+                    },
+                );
             }
-
             return;
         }
-
-        if (taskSnapshotTimer !== null) {
-            globalThis.clearInterval(taskSnapshotTimer);
-            taskSnapshotTimer = null;
-        }
-
+        releaseTaskSnapshotEvents?.();
+        releaseTaskSnapshotEvents = null;
         taskSnapshots.value = {};
     },
     { immediate: true },
 );
+
+// 事件回调只做触发器：快照仍从 tell* 拉取，丢事件时终态由 watch 关闭轮转自然收敛。
+function handleTaskSnapshotEvent() {
+    void refreshTaskSnapshots();
+}
 
 onMounted(() => {
     void fetchGlossGameModTypes();
@@ -592,11 +601,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
     cancelTranslations();
-
-    if (taskSnapshotTimer !== null) {
-        globalThis.clearInterval(taskSnapshotTimer);
-        taskSnapshotTimer = null;
-    }
+    releaseTaskSnapshotEvents?.();
+    releaseTaskSnapshotEvents = null;
 });
 
 function readQueryValue(key: string) {
@@ -708,47 +714,6 @@ function syncExploreRouteQuery() {
     });
 }
 
-function buildListUrl() {
-    const url = new URL(`${GLOSS_MOD_API_BASE_URL}/mods`);
-
-    url.searchParams.set("page", String(page.value));
-    url.searchParams.set("pageSize", pageSize.value);
-
-    if (searchKeyword.value.trim()) {
-        url.searchParams.set("search", searchKeyword.value.trim());
-    }
-
-    if (selectedOriginal.value !== "all") {
-        url.searchParams.set("original", selectedOriginal.value);
-    }
-
-    if (selectedTime.value !== "all") {
-        url.searchParams.set("time", selectedTime.value);
-    }
-
-    if (selectedType.value !== "all") {
-        url.searchParams.set("gameType", selectedType.value);
-    }
-
-    if (currentGameId.value) {
-        url.searchParams.set("gameId", String(currentGameId.value));
-    }
-
-    for (const tag of parsedTags.value) {
-        url.searchParams.append("key", tag);
-    }
-
-    if (onlySupportGmm.value) {
-        url.searchParams.set("support_gmm", "1");
-    }
-
-    if (onlyLocal.value) {
-        url.searchParams.set("local", "1");
-    }
-
-    return url.toString();
-}
-
 function buildGlossGameModTypeMap(gameModTypes: IGlossGameModType[]) {
     return Object.fromEntries(
         gameModTypes.map((item) => [String(item.id), item]),
@@ -756,7 +721,7 @@ function buildGlossGameModTypeMap(gameModTypes: IGlossGameModType[]) {
 }
 
 async function fetchGlossGameModTypes() {
-    if (!GLOSS_MOD_KEY) {
+    if (!effectiveGlossKey.value) {
         glossGameModTypeMap.value = {};
         glossGameTypeError.value = t("explore.gloss.envMissing");
         return;
@@ -768,7 +733,7 @@ async function fetchGlossGameModTypes() {
     glossGameTypeError.value = "";
 
     try {
-        const games: IGlossGameListItem[] = await fetchAllGlossGames();
+        const games: IGlossGameListItem[] = await fetchAllGlossGames(200, settings.glossModKey);
 
         if (currentRequestSequence !== gameTypeRequestSequence) {
             return;
@@ -803,35 +768,53 @@ async function fetchGlossGameModTypes() {
 }
 
 async function fetchMods() {
-    if (!GLOSS_MOD_KEY) {
-        mods.value = [];
-        totalCount.value = 0;
-        totalPages.value = 0;
-        errorMessage.value = t("explore.gloss.envMissing");
-        return;
-    }
-
     const currentRequestSequence = ++requestSequence;
 
     loading.value = true;
     errorMessage.value = "";
 
     try {
-        const response = await httpFetch(buildListUrl(), {
-            method: "GET",
-            headers: {
-                Accept: "application/json",
-                Authorization: GLOSS_MOD_KEY,
+        // 列表 + 下载状态一次返回：Rust 侧转发 /mods 并在内存注册表内判重，
+        // 前端只做纯渲染，不再做 N×(T+M) 全量扫描。
+        const result = await invoke<{
+            payload: IGlossModApiResponse<IGlossModListData>;
+            status: Record<
+                string,
+                { state: string; progress: number; gid: string }
+            >;
+        }>("explore_list", {
+            // 用户设置 key 经前端透传给 Rust（Rust 侧读不到 Vite .env），bake key 作兜底。
+            apiKey: effectiveGlossKey.value,
+            params: {
+                page: page.value,
+                pageSize: Number(pageSize.value),
+                search: searchKeyword.value.trim() || null,
+                original:
+                    selectedOriginal.value !== "all"
+                        ? selectedOriginal.value
+                        : null,
+                time: selectedTime.value !== "all" ? selectedTime.value : null,
+                gameType:
+                    selectedType.value !== "all" ? selectedType.value : null,
+                gameId: currentGameId.value || null,
+                key: parsedTags.value,
+                support_gmm: onlySupportGmm.value ? "1" : null,
+                local: onlyLocal.value ? "1" : null,
             },
+            localMods: manager.managerModList.map((item) => ({
+                fileName: item.fileName ?? "",
+                modName: item.modName ?? "",
+                webId: String(item.webId ?? ""),
+                from: item.from ?? "",
+            })),
         });
-        const payload =
-            (await response.json()) as IGlossModApiResponse<IGlossModListData>;
+        const payload = result.payload;
 
         if (currentRequestSequence !== requestSequence) {
             return;
         }
 
-        if (!response.ok || !payload.success || !payload.data) {
+        if (!payload.success || !payload.data) {
             const message = payload.msg || t("explore.gloss.fetchFailed");
 
             throw new Error(
@@ -844,6 +827,8 @@ async function fetchMods() {
         mods.value = payload.data.data ?? [];
         totalCount.value = payload.data.count ?? 0;
         totalPages.value = payload.data.totalPages ?? 0;
+        // 后端判重结果：modId -> 状态，前端纯展示。
+        serverStatusMap.value = result.status ?? {};
 
         if (
             payload.data.totalPages > 0 &&
@@ -859,6 +844,7 @@ async function fetchMods() {
         mods.value = [];
         totalCount.value = 0;
         totalPages.value = 0;
+        serverStatusMap.value = {};
         errorMessage.value =
             error instanceof Error
                 ? error.message
@@ -1047,61 +1033,32 @@ function getTaskProgress(task?: IDownloaderTask | null) {
     );
 }
 
-function resolveDownloadStatus(item: IGlossExploreMod): IExploreDownloadStatus {
-    const latestResource = getLatestResource(item);
-
-    if (!latestResource?.mods_resource_url) {
-        return {
-            state: "missing",
-            label: t("explore.status.noResource"),
-            progress: 0,
-        };
-    }
-
-    if (isGlossCloudDriveResource(latestResource)) {
-        return {
-            state: "cloud",
-            label: t("explore.actions.openCloudDrive"),
-            progress: 0,
-        };
-    }
-
-    const criteria = getGlossDuplicateCriteria(item);
-
-    if (!criteria) {
-        return {
-            state: "none",
-            label: t("explore.status.addDownload"),
-            progress: 0,
-        };
-    }
-
-    const presence = getGlossModPresence(
-        taskMetaMap.value,
-        manager.managerModList,
-        criteria,
-    );
-    const task = getMatchedTask(item);
-
-    switch (presence.state) {
-        case "active":
+// 后端 explore_list 已判重：state 直接展示；进行中状态的进度从任务快照实时取。
+function serverStatusToDisplay(item: IGlossExploreMod): IExploreDownloadStatus {
+    const server = serverStatusMap.value[String(item.id)];
+    const state = server?.state ?? "none";
+    switch (state) {
+        case "active": {
+            const task = getMatchedTask(item);
             return {
                 state: "active",
                 label: t("explore.status.downloading"),
-                progress: getTaskProgress(task),
+                progress: getTaskProgress(task) || server?.progress || 0,
             };
+        }
         case "waiting":
+        case "paused": {
+            const task = getMatchedTask(item);
             return {
-                state: "waiting",
-                label: t("explore.status.waiting"),
-                progress: getTaskProgress(task),
+                state,
+                label: t(
+                    state === "waiting"
+                        ? "explore.status.waiting"
+                        : "explore.status.paused",
+                ),
+                progress: getTaskProgress(task) || server?.progress || 0,
             };
-        case "paused":
-            return {
-                state: "paused",
-                label: t("explore.status.paused"),
-                progress: getTaskProgress(task),
-            };
+        }
         case "error":
             return {
                 state: "error",
@@ -1119,6 +1076,18 @@ function resolveDownloadStatus(item: IGlossExploreMod): IExploreDownloadStatus {
                 state: "imported",
                 label: t("explore.status.imported"),
                 progress: 100,
+            };
+        case "cloud":
+            return {
+                state: "cloud",
+                label: t("explore.actions.openCloudDrive"),
+                progress: 0,
+            };
+        case "missing":
+            return {
+                state: "missing",
+                label: t("explore.status.noResource"),
+                progress: 0,
             };
         default:
             return {
@@ -1459,6 +1428,7 @@ async function openLatestResource(item: IGlossExploreMod) {
         const result = await queueGlossModDownloadWithSelection({
             mod: item,
             managerModList: manager.managerModList,
+            apiKey: settings.glossModKey,
         });
 
         if (!result) {

@@ -194,7 +194,7 @@ async function promptSelection(options: {
 async function resolveGlossSelection(
     options: IQueueGlossDownloadOptions,
 ): Promise<{ mod: IGlossSelectionMod; resource: IResource } | null> {
-    const mod = options.mod ?? (await fetchGlossModDetail(options.modId ?? ""));
+    const mod = options.mod ?? (await fetchGlossModDetail(options.modId ?? "", options.apiKey));
 
     if (!Array.isArray(mod.mods_resource) || mod.mods_resource.length === 0) {
         throw new Error("未找到可下载的资源。");

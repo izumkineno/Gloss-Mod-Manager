@@ -5,6 +5,7 @@ import markdownItAnchor from "markdown-it-anchor";
 import { ElMessage } from "element-plus-message";
 import { useI18n } from "vue-i18n";
 import { Downloader } from "@/lib/native-downloader";
+import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
 import type { IDownloaderTask } from "@/lib/download-task-types";
 import {
     hasThirdPartyMultipleFiles,
@@ -23,6 +24,7 @@ import {
     getThirdPartyProviderLabel,
     isThirdPartyProviderSupported,
     NexusModsAuthorizationError,
+    refreshThunderstoreCache,
     type INexusModsFacetSelection,
     type IThirdPartyModDetail,
     type IThirdPartyModFacetOption,
@@ -149,6 +151,9 @@ const mods = ref<IThirdPartyModItem[]>([]);
 const nexusFacets = ref<IThirdPartyModFacets>(createEmptyThirdPartyModFacets());
 const loading = ref(false);
 const errorMessage = ref("");
+// Thunderstore 缓存状态：手动刷新按钮用。
+const thunderstoreRefreshing = ref(false);
+const thunderstoreCacheAgeSecs = ref<number | null>(null);
 const translationLoading = ref(false);
 const translationErrorMessage = ref("");
 const detailTranslationLoading = ref(false);
@@ -195,7 +200,7 @@ let detailRequestSequence = 0;
 let translationRequestSequence = 0;
 let detailTranslationRequestSequence = 0;
 let refreshTaskSnapshotPending = false;
-let taskSnapshotTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+let releaseTaskSnapshotEvents: (() => void) | null = null;
 let listTranslationAbortController: AbortController | null = null;
 let detailTranslationAbortController: AbortController | null = null;
 let routeSyncPending = false;
@@ -211,6 +216,24 @@ const providerLabel = computed(() => {
 const isNexusModsProvider = computed(() => props.provider === "NexusMods");
 const providerSupported = computed(() => {
     return isThirdPartyProviderSupported(currentGame.value, props.provider);
+});
+// 仅 Thunderstore 走后端缓存，提供手动刷新按钮。
+const isThunderstoreProvider = computed(() => props.provider === "Thunderstore");
+const thunderstoreCommunity = computed(() => {
+    return currentGame.value?.Thunderstore?.community_identifier?.trim() ?? "";
+});
+// 缓存年龄文案：x 秒/分钟前更新，未缓存不显示。
+const thunderstoreCacheAgeText = computed(() => {
+    if (thunderstoreCacheAgeSecs.value === null) {
+        return "";
+    }
+    const age = thunderstoreCacheAgeSecs.value;
+    if (age < 60) {
+        return t("explore.thirdParty.cacheAgeSeconds", { count: age });
+    }
+    return t("explore.thirdParty.cacheAgeMinutes", {
+        count: Math.floor(age / 60),
+    });
 });
 const renderedDescription = computed(() => {
     return renderDescription(
@@ -534,50 +557,33 @@ watch(
     shouldPollTaskSnapshots,
     (shouldPoll) => {
         if (shouldPoll) {
+            // 事件驱动：dl-progress（0.5s 节流）推进度，dl-task-changed 推终态/入队。
             void refreshTaskSnapshots();
-
-            if (taskSnapshotTimer === null) {
-                taskSnapshotTimer = globalThis.setInterval(() => {
-                    void refreshTaskSnapshots();
-                }, 2000);
+            if (releaseTaskSnapshotEvents === null) {
+                void subscribeDownloadTaskEvents(handleTaskSnapshotEvent).then(
+                    (release) => {
+                        releaseTaskSnapshotEvents = release;
+                    },
+                );
             }
-
             return;
         }
-
-        if (taskSnapshotTimer !== null) {
-            globalThis.clearInterval(taskSnapshotTimer);
-            taskSnapshotTimer = null;
-        }
-
+        releaseTaskSnapshotEvents?.();
+        releaseTaskSnapshotEvents = null;
         taskSnapshots.value = {};
     },
     { immediate: true },
 );
 
-watchDebounced(
-    () => searchKeyword.value.trim(),
-    () => {
-        if (page.value !== 1) {
-            page.value = 1;
-            return;
-        }
-
-        void fetchMods();
-    },
-    {
-        debounce: 350,
-        maxWait: 1000,
-    },
-);
+// 事件回调只做触发器：快照仍从 tell* 拉取。
+function handleTaskSnapshotEvent() {
+    void refreshTaskSnapshots();
+}
 
 onBeforeUnmount(() => {
     cancelTranslations();
-
-    if (taskSnapshotTimer !== null) {
-        globalThis.clearInterval(taskSnapshotTimer);
-        taskSnapshotTimer = null;
-    }
+    releaseTaskSnapshotEvents?.();
+    releaseTaskSnapshotEvents = null;
 });
 
 function readQueryValue(key: string) {
@@ -744,6 +750,12 @@ async function fetchMods() {
         totalCount.value = result.totalCount;
         totalPages.value = result.totalPages;
 
+        // Thunderstore 纯后端：列表返回里直接带缓存年龄，无需二次查询。
+        if (isThunderstoreProvider.value) {
+            thunderstoreCacheAgeSecs.value =
+                typeof result.cacheAgeSecs === "number" ? result.cacheAgeSecs : null;
+        }
+
         if (result.totalPages > 0 && page.value > result.totalPages) {
             page.value = result.totalPages;
         }
@@ -766,6 +778,28 @@ async function fetchMods() {
         if (currentRequestSequence === requestSequence) {
             loading.value = false;
         }
+    }
+}
+
+// 手动刷新 Thunderstore 缓存：强制回源，刷新后重拉列表。
+async function refreshThunderstoreCacheNow() {
+    if (!thunderstoreCommunity.value || thunderstoreRefreshing.value) {
+        return;
+    }
+    thunderstoreRefreshing.value = true;
+    try {
+        const count = await refreshThunderstoreCache(thunderstoreCommunity.value);
+        thunderstoreCacheAgeSecs.value = 0;
+        ElMessage.success(
+            t("explore.thirdParty.cacheRefreshed", { count }),
+        );
+        await fetchMods();
+    } catch (error: unknown) {
+        ElMessage.error(
+            toErrorMessage(error, t("explore.thirdParty.cacheRefreshFailed")),
+        );
+    } finally {
+        thunderstoreRefreshing.value = false;
     }
 }
 
@@ -1925,23 +1959,29 @@ function renderDescription(
             <div
                 class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
             >
-                <span class="font-medium text-foreground">
+                <Button
+                    v-if="isThunderstoreProvider"
+                    size="sm"
+                    variant="outline"
+                    :disabled="thunderstoreRefreshing || loading"
+                    @click="refreshThunderstoreCacheNow"
+                >
+                    <IconRefreshCcw
+                        :class="[
+                            'size-4',
+                            thunderstoreRefreshing ? 'animate-spin' : '',
+                        ]"
+                    />
                     {{
-                        t("explore.common.totalResults", {
-                            count: formatNumber(totalCount),
-                        })
+                        thunderstoreRefreshing
+                            ? t("explore.thirdParty.refreshingCache")
+                            : t("explore.thirdParty.refreshCache")
                     }}
-                </span>
-                <span aria-hidden="true">·</span>
-                <span>
-                    {{
-                        totalPages > 0
-                            ? t("explore.common.pageProgress", {
-                                  page,
-                                  total: totalPages,
-                              })
-                            : t("explore.common.noPaginationResult")
-                    }}
+                </Button>
+                <span
+                    v-if="isThunderstoreProvider && thunderstoreCacheAgeText"
+                >
+                    {{ thunderstoreCacheAgeText }}
                 </span>
                 <span aria-hidden="true">·</span>
                 <span>

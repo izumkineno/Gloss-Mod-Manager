@@ -287,6 +287,12 @@ const lang = {
                 "Try another keyword or clear the current filters.",
             listTitleWithGame: "{game} {provider} list",
             listTitle: "{provider} list",
+            refreshCache: "Refresh cache",
+            refreshingCache: "Refreshing…",
+            cacheRefreshed: "Cache refreshed, {count} packages.",
+            cacheRefreshFailed: "Failed to refresh cache.",
+            cacheAgeSeconds: "Updated {count}s ago",
+            cacheAgeMinutes: "Updated {count}m ago",
         },
         detail: {
             providerDetail: "{provider} details",
