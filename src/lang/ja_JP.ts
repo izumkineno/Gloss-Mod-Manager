@@ -20,6 +20,9 @@ const lang = {
         about: "概要",
         settings: "設定",
         aiChat: "AI チャット",
+        pin: "上部に固定",
+        unpin: "固定解除",
+        pinTabs: "タブを上部に固定",
     },
     home: {
         welcome:

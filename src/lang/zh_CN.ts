@@ -162,6 +162,9 @@ const lang = {
         about: "关于",
         settings: "设置",
         aiChat: "AI对话",
+        pin: "置顶到顶部",
+        unpin: "取消置顶",
+        pinTabs: "置顶 Tab 到顶部",
     },
     home: {
         welcome: "欢迎使用 Gloss Mod Manager，在这里你可以快速管理 Mod。",

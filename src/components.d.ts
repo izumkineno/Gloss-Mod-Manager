@@ -158,6 +158,7 @@ declare module 'vue' {
     ManagerTags: typeof import('./components/Manager/ManagerTags.vue')['default']
     ModIo: typeof import('./components/Home/ModIo.vue')['default']
     NexusMods: typeof import('./components/Home/NexusMods.vue')['default']
+    PinnedTabs: typeof import('./components/PinnedTabs.vue')['default']
     Popover: typeof import('./components/ui/popover/Popover.vue')['default']
     PopoverAnchor: typeof import('./components/ui/popover/PopoverAnchor.vue')['default']
     PopoverContent: typeof import('./components/ui/popover/PopoverContent.vue')['default']

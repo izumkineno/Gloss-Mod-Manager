@@ -20,6 +20,9 @@ const lang = {
         about: "Über",
         settings: "Einstellungen",
         aiChat: "KI-Chat",
+        pin: "An oben anheften",
+        unpin: "Lösen",
+        pinTabs: "Tabs oben anheften",
     },
     home: {
         welcome:

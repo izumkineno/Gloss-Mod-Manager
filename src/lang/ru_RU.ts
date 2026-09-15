@@ -20,6 +20,9 @@ const lang = {
         about: "О программе",
         settings: "Настройки",
         aiChat: "AI-чат",
+        pin: "Закрепить сверху",
+        unpin: "Открепить",
+        pinTabs: "Закрепить вкладки сверху",
     },
     home: {
         welcome:

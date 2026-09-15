@@ -20,6 +20,9 @@ const lang = {
         about: "정보",
         settings: "설정",
         aiChat: "AI 채팅",
+        pin: "상단에 고정",
+        unpin: "고정 해제",
+        pinTabs: "탭을 상단에 고정",
     },
     home: {
         welcome:

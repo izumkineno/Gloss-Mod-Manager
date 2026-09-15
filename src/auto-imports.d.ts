@@ -28,8 +28,11 @@ declare global {
   const Log: typeof import('./lib/log').Log
   const Manager: typeof import('./lib/Manager').Manager
   const McpService: typeof import('./lib/mcp-service').McpService
+  const NAV_BOTTOM_ITEMS: typeof import('./lib/nav-items').NAV_BOTTOM_ITEMS
+  const NAV_ITEMS: typeof import('./lib/nav-items').NAV_ITEMS
   const NativeToolsManifest: typeof import('./lib/native-tools-manifest').NativeToolsManifest
   const NexusModsAuthorizationError: typeof import('./lib/third-party-mod-api').NexusModsAuthorizationError
+  const PINNABLE_TABS: typeof import('./lib/nav-items').PINNABLE_TABS
   const PersistentStore: typeof import('./lib/persistent-store').PersistentStore
   const REEngine: typeof import('./lib/REEngine').REEngine
   const RE_CLASSIFY_RULES: typeof import('./lib/mod-classify-rules').RE_CLASSIFY_RULES
@@ -584,6 +587,9 @@ declare global {
   // @ts-ignore
   export type { NativeToolsManifest, EmbeddedToolName, EmbeddedSidecarCommand } from './lib/native-tools-manifest'
   import('./lib/native-tools-manifest')
+  // @ts-ignore
+  export type { INavItem } from './lib/nav-items'
+  import('./lib/nav-items')
   // @ts-ignore
   export type { PersistentStore } from './lib/persistent-store'
   import('./lib/persistent-store')

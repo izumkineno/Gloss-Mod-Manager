@@ -20,6 +20,9 @@ const lang = {
         about: "關於",
         settings: "設定",
         aiChat: "AI 對話",
+        pin: "置頂到頂部",
+        unpin: "取消置頂",
+        pinTabs: "置頂 Tab 到頂部",
     },
     home: {
         welcome: "歡迎使用 Gloss Mod Manager，在這裡你可以快速管理 Mod。",

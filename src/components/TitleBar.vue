@@ -100,6 +100,10 @@ async function closeWindow() {
                 draggable="false"
             />
             <span class="text-xs font-semibold tracking-tight">Gloss Mod Manager</span>
+            <!-- 顶部快捷入口：置顶 tab + 浮窗选择器（需排除拖拽，避免按钮点不动） -->
+            <div class="ml-2 flex items-center" data-tauri-drag-region-exclude @mousedown.stop>
+                <PinnedTabs />
+            </div>
         </div>
 
         <!-- 右侧：窗口控制按钮（非拖拽区） -->

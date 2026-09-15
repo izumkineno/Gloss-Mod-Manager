@@ -26,6 +26,9 @@ const lang = {
         about: "About",
         settings: "Settings",
         aiChat: "AI Chat",
+        pin: "Pin to top",
+        unpin: "Unpin",
+        pinTabs: "Pin tabs to top",
     },
     home: {
         welcome:

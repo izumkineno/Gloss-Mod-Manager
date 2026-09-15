@@ -106,6 +106,8 @@ export const useSettings = defineStore("Settings", () => {
         "managerGridEnabled",
         false,
     );
+    // 顶部快捷入口置顶的 tab 路径（按置顶顺序存 path 数组）。
+    const pinnedTabs = PersistentStore.useValue<string[]>("pinnedTabs", []);
     const mcpToolsEnabled = PersistentStore.useValue<boolean>(
         "mcpToolsEnabled",
         true,
@@ -360,6 +362,7 @@ export const useSettings = defineStore("Settings", () => {
         showPreloadList,
         closeSoftLinks,
         managerGridEnabled,
+        pinnedTabs,
         mcpToolsEnabled,
         mcpToolItemEnabledMap,
         mcpResourcesEnabled,

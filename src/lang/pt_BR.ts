@@ -20,6 +20,9 @@ const lang = {
         about: "Sobre",
         settings: "Configurações",
         aiChat: "Chat IA",
+        pin: "Fixar no topo",
+        unpin: "Desafixar",
+        pinTabs: "Fixar abas no topo",
     },
     home: {
         welcome:
