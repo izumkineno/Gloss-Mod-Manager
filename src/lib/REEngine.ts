@@ -2,6 +2,7 @@ import { basename, join } from "@tauri-apps/api/path";
 import { ElMessage } from "element-plus-message";
 import { FileHandler } from "@/lib/FileHandler";
 import { Manager } from "@/lib/Manager";
+import { RE_CLASSIFY_RULES, classifyModType } from "@/lib/mod-classify-rules";
 
 type PakRecord = [string, string, string];
 
@@ -51,7 +52,7 @@ export class REEngine {
         }
 
         const data = list.map((item) => item.join("|")).join("\n");
-        await FileHandler.writeFile(pakListPath, data);
+        await FileHandler.writeFileAtomic(pakListPath, data);
     }
 
     private static async getGamePakName() {
@@ -344,51 +345,8 @@ export class REEngine {
     }
 
     public static async checkModType(mod: IModInfo) {
-        let natives = false;
-        let plugins = false;
-        let autorun = false;
-        let reFramework = false;
-        let pak = false;
-        let refPlugins = false;
-
-        for (const item of mod.modFiles) {
-            const fileName = (await basename(item)).toLowerCase();
-            const pathParts = FileHandler.pathToArray(item).map((part) =>
-                part.toLowerCase(),
-            );
-
-            if (fileName === "dinput8.dll") {
-                reFramework = true;
-            }
-
-            if (pathParts.includes("natives")) {
-                natives = true;
-            }
-
-            if (pathParts.includes("autorun")) {
-                autorun = true;
-            }
-
-            if (pathParts.includes("plugins")) {
-                plugins = true;
-            }
-
-            if (pathParts.includes("reframework")) {
-                refPlugins = true;
-            }
-
-            if ((await FileHandler.getFileExtension(item)).toLowerCase() === "pak") {
-                pak = true;
-            }
-        }
-
-        if (reFramework) return 2;
-        if (refPlugins) return 7;
-        if (autorun) return 1;
-        if (plugins) return 4;
-        if (natives) return 3;
-        if (pak) return 6;
-
-        return 99;
+        // 规则表见 mod-classify-rules：dinput8 → 2；reframework → 7；autorun → 1；
+        // plugins → 4；natives → 3；pak → 6，后端同步匹配
+        return classifyModType(mod.modFiles, RE_CLASSIFY_RULES, 99);
     }
 }

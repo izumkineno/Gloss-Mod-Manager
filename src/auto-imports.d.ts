@@ -11,6 +11,7 @@ declare global {
   const AppAnalytics: typeof import('./lib/Analytics').AppAnalytics
   const AutoStart: typeof import('./lib/auto-start').AutoStart
   const DEFAULT_AI_CHAT_SYSTEM_PROMPT: typeof import('./lib/AiChat').DEFAULT_AI_CHAT_SYSTEM_PROMPT
+  const DYING_LIGHT_2_CLASSIFY_RULES: typeof import('./lib/mod-classify-rules').DYING_LIGHT_2_CLASSIFY_RULES
   const DotNetTool: typeof import('./lib/dotnet-tool').DotNetTool
   const Downloader: typeof import('./lib/native-downloader').Downloader
   const EMBEDDED_TOOL_VERSIONS: typeof import('./lib/native-tools-manifest').EMBEDDED_TOOL_VERSIONS
@@ -30,6 +31,7 @@ declare global {
   const NexusModsAuthorizationError: typeof import('./lib/third-party-mod-api').NexusModsAuthorizationError
   const PersistentStore: typeof import('./lib/persistent-store').PersistentStore
   const REEngine: typeof import('./lib/REEngine').REEngine
+  const RE_CLASSIFY_RULES: typeof import('./lib/mod-classify-rules').RE_CLASSIFY_RULES
   const SIDECAR_BASE_NAMES: typeof import('./lib/native-tools-manifest').SIDECAR_BASE_NAMES
   const SIDECAR_COMMANDS: typeof import('./lib/native-tools-manifest').SIDECAR_COMMANDS
   const ScanGame: typeof import('./lib/scan-game').ScanGame
@@ -39,6 +41,9 @@ declare global {
   const SidecarExecutionError: typeof import('./lib/sidecar').SidecarExecutionError
   const THIRD_PARTY_PROVIDER_OPTIONS: typeof import('./lib/third-party-mod-api').THIRD_PARTY_PROVIDER_OPTIONS
   const Theme: typeof import('./lib/theme').Theme
+  const UNITY_CLASSIFY_RULES: typeof import('./lib/mod-classify-rules').UNITY_CLASSIFY_RULES
+  const UNITY_ILCPP2_CLASSIFY_RULES: typeof import('./lib/mod-classify-rules').UNITY_ILCPP2_CLASSIFY_RULES
+  const UNREAL_CLASSIFY_RULES: typeof import('./lib/mod-classify-rules').UNREAL_CLASSIFY_RULES
   const UnityGame: typeof import('./lib/UnityGame').UnityGame
   const UnityGameILCPP2: typeof import('./lib/UnityGame').UnityGameILCPP2
   const UnrealEngine: typeof import('./lib/UnrealEngine').UnrealEngine
@@ -56,6 +61,7 @@ declare global {
   const checkForAppUpdates: typeof import('./lib/app-updater').checkForAppUpdates
   const checkGlossModUpdates: typeof import('./lib/gloss-mod-api').checkGlossModUpdates
   const checkMcpToolDrift: typeof import('./lib/mcp-tool-drift').checkMcpToolDrift
+  const classifyModType: typeof import('./lib/mod-classify-rules').classifyModType
   const clearManagerInternalDrag: typeof import('./lib/manager-internal-drag').clearManagerInternalDrag
   const cloneDefinition: typeof import('./lib/custom-definition-utils').cloneDefinition
   const cn: typeof import('./lib/utils').cn
@@ -561,6 +567,9 @@ declare global {
   // @ts-ignore
   export type { McpToolFingerprintMap, IMcpToolDriftResult } from './lib/mcp-tool-drift'
   import('./lib/mcp-tool-drift')
+  // @ts-ignore
+  export type { IClassifyMatcher, IClassifyRule } from './lib/mod-classify-rules'
+  import('./lib/mod-classify-rules')
   // @ts-ignore
   export type { Downloader } from './lib/native-downloader'
   import('./lib/native-downloader')

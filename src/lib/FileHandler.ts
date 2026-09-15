@@ -2,6 +2,7 @@
  * 文件相关操作
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import {
     basename,
     dirname,
@@ -11,8 +12,6 @@ import {
     resourceDir,
     sep,
 } from "@tauri-apps/api/path";
-import { platform } from "@tauri-apps/plugin-os";
-import { Command } from "@tauri-apps/plugin-shell";
 import {
     copyFile as copyFileByFs,
     exists,
@@ -30,7 +29,14 @@ import {
 } from "@tauri-apps/plugin-fs";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus-message";
-import { md5 } from "js-md5";
+
+// 后端 fs_walk 条目（src-tauri/src/fsops.rs WalkEntry，camelCase）
+interface IWalkEntry {
+    rel: string;
+    size: number;
+    isDir: boolean;
+    isSymlink: boolean;
+}
 
 type BinaryLike = Uint8Array | ArrayBuffer;
 type FsPath = string | URL;
@@ -52,158 +58,6 @@ interface IFileSystemMetadata {
 
 export class FileHandler {
     private static readonly pathSeparator = sep();
-
-    private static toPowerShellLiteral(value: string) {
-        return `'${value.replace(/'/g, "''")}'`;
-    }
-
-    private static toShellOutputBytes(output: unknown) {
-        if (output instanceof Uint8Array) {
-            return output;
-        }
-
-        if (output instanceof ArrayBuffer) {
-            return new Uint8Array(output);
-        }
-
-        if (ArrayBuffer.isView(output)) {
-            return new Uint8Array(
-                output.buffer,
-                output.byteOffset,
-                output.byteLength,
-            );
-        }
-
-        if (Array.isArray(output)) {
-            return Uint8Array.from(output);
-        }
-
-        if (
-            output &&
-            typeof output === "object" &&
-            "data" in output &&
-            Array.isArray(output.data)
-        ) {
-            return Uint8Array.from(output.data);
-        }
-
-        if (output && typeof output === "object" && Symbol.iterator in output) {
-            return Uint8Array.from(output as Iterable<number>);
-        }
-
-        return new Uint8Array();
-    }
-
-    private static decodeShellOutput(output: unknown) {
-        if (typeof output === "string") {
-            return output.trim();
-        }
-
-        const bytes = FileHandler.toShellOutputBytes(output);
-
-        if (bytes.length === 0) {
-            return "";
-        }
-
-        const encodingCandidates =
-            platform() === "windows" ? ["utf-8", "gb18030"] : ["utf-8"];
-
-        for (const encoding of encodingCandidates) {
-            try {
-                return new TextDecoder(encoding, {
-                    fatal: encoding === "utf-8",
-                })
-                    .decode(bytes)
-                    .trim();
-            } catch {
-                continue;
-            }
-        }
-
-        return new TextDecoder().decode(bytes).trim();
-    }
-
-    private static async executeShellCommand(
-        commandName: string,
-        args: string[],
-    ) {
-        const result =
-            platform() === "windows"
-                ? await Command.create(commandName, args, {
-                      encoding: "raw",
-                  }).execute()
-                : await Command.create(commandName, args).execute();
-
-        if (result.code === 0) {
-            return result;
-        }
-
-        const stderr = FileHandler.decodeShellOutput(result.stderr);
-        const stdout = FileHandler.decodeShellOutput(result.stdout);
-
-        throw new Error(
-            stderr ||
-                stdout ||
-                `${commandName} exited with code ${result.code ?? "null"}`,
-        );
-    }
-
-    private static async createWindowsLink(
-        sourcePath: string,
-        targetPath: string,
-        isDirectory: boolean,
-    ) {
-        if (!sourcePath || !targetPath) {
-            throw new Error("软链接源路径或目标路径不能为空。");
-        }
-
-        // 早期实现经由 cmd.exe /c mklink 创建链接，但 cmd 的引号与 % 解析规则无法
-        // 可靠转义，含特殊字符的路径可能逗出参数。改用 PowerShell 原生 cmdlet，
-        // 路径始终以字符串字面量传入，不再经过二次命令行解析。
-        const runNewItem = async (itemType: "SymbolicLink" | "Junction") => {
-            const script = [
-                "$ErrorActionPreference = 'Stop'",
-                `$linkPath = ${FileHandler.toPowerShellLiteral(targetPath)}`,
-                `$targetPath = ${FileHandler.toPowerShellLiteral(sourcePath)}`,
-                `New-Item -ItemType ${itemType} -Path $linkPath -Target $targetPath -Force | Out-Null`,
-            ].join("; ");
-
-            const args = [
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
-            ];
-
-            await FileHandler.executeShellCommand("powershell", args);
-        };
-
-        if (!isDirectory) {
-            await runNewItem("SymbolicLink");
-            return;
-        }
-
-        try {
-            await runNewItem("SymbolicLink");
-        } catch {
-            // Windows 下目录符号链接可能受权限限制，失败时退回 Junction。
-            await runNewItem("Junction");
-        }
-    }
-
-    private static async createUnixLink(
-        sourcePath: string,
-        targetPath: string,
-    ) {
-        await FileHandler.executeShellCommand("ln", [
-            "-s",
-            sourcePath,
-            targetPath,
-        ]);
-    }
 
     /**
      * plugin-fs 在 Tauri 2 中支持 file URL，这里把绝对路径统一转为 file URL。
@@ -601,6 +455,53 @@ export class FileHandler {
     }
 
     /**
+     * 原子写文本配置：跨进程锁 + tmp 写后 rename，防并发丢条目与半截文件。
+     * 调用方组装好全文（ini/xml/行文本），后端只做原子落盘。
+     */
+    public static async writeFileAtomic(filePath: string, data: string) {
+        try {
+            await invoke("cfg_upsert", {
+                path: filePath,
+                kind: "raw",
+                entries: [],
+                content: data,
+            });
+            return true;
+        } catch (error) {
+            ElMessage.error(`写入文件失败：${error}`);
+            FileHandler.writeLog(String(error), true);
+            return false;
+        }
+    }
+
+    /**
+     * ini 行保留合并：只碰命中的 section/key 行，其余注释与格式原样保留。
+     */
+    public static async upsertIniConfig(
+        filePath: string,
+        entries: Array<{ section: string; key: string; value: string; remove?: boolean }>,
+    ) {
+        try {
+            await invoke("cfg_upsert", {
+                path: filePath,
+                kind: "ini",
+                entries: entries.map((item) => ({
+                    section: item.section,
+                    key: item.key,
+                    value: item.value,
+                    remove: item.remove ?? false,
+                })),
+                content: null,
+            });
+            return true;
+        } catch (error) {
+            ElMessage.error(`写入文件失败：${error}`);
+            FileHandler.writeLog(String(error), true);
+            return false;
+        }
+    }
+
+    /**
      * 写入日志
      * @param msg 日志内容
      * @param isErr 是否为错误日志
@@ -623,8 +524,8 @@ export class FileHandler {
      */
     public static async getFileMd5(filePath: string): Promise<string> {
         try {
-            const data = await FileHandler.readBinary(filePath);
-            return md5(data);
+            // 后端流式哈希：64KB 分块，内存 O(1)，输出与 js-md5 一致
+            return await invoke<string>("fs_file_hash", { path: filePath });
         } catch (error) {
             ElMessage.error(`获取文件MD5失败:${error}`);
             throw error;
@@ -637,16 +538,27 @@ export class FileHandler {
      * @returns
      */
     public static async getFolderHMd5(folderPath: string) {
-        const files = await FileHandler.getFolderFiles(folderPath, true, true);
+        // 一次 walk 取表；拼绝对路径后用默认排序（与旧实现逐字一致，含分隔符序），再逐文件哈希
+        const entries = await invoke<IWalkEntry[]>("fs_walk", {
+            dir: folderPath,
+            recursive: true,
+            includeDirs: false,
+        });
+        const files: string[] = [];
+        for (const entry of entries) {
+            if (entry.isSymlink) {
+                continue;
+            }
+            files.push(await join(folderPath, ...entry.rel.split("/")));
+        }
         let combinedHash = "";
 
         for (const filePath of files.sort()) {
-            if (await FileHandler.isFileInternal(filePath)) {
-                combinedHash += await FileHandler.getFileMd5(filePath);
-            }
+            combinedHash += await FileHandler.getFileMd5(filePath);
         }
 
-        return md5(combinedHash);
+        // 拼 hex 串再 md5 这一步也在后端做，避免大串往返
+        return invoke<string>("fs_hash_string", { data: combinedHash });
     }
 
     /**
@@ -737,66 +649,17 @@ export class FileHandler {
     ) {
         const sourcePath = FileHandler.normalizePath(folderPath);
         const targetPath = FileHandler.normalizePath(destPath);
-        let backupPath = "";
 
         try {
-            await FileHandler.ensureParentDirectory(targetPath);
-
-            if (backup && (await FileHandler.fileExists(targetPath))) {
-                backupPath = `${targetPath}_back`;
-
-                if (await FileHandler.fileExists(backupPath)) {
-                    if (await FileHandler.isDir(backupPath)) {
-                        await FileHandler.deleteFolder(backupPath);
-                    } else {
-                        await FileHandler.deleteFile(backupPath);
-                    }
-                }
-
-                const renamed = await FileHandler.renameFile(
-                    targetPath,
-                    backupPath,
-                );
-
-                if (!renamed) {
-                    return false;
-                }
-            }
-
-            const isDirectory = await FileHandler.isDir(sourcePath);
-
-            switch (platform()) {
-                case "windows":
-                    await FileHandler.createWindowsLink(
-                        sourcePath,
-                        targetPath,
-                        isDirectory,
-                    );
-                    return true;
-                case "linux":
-                case "macos":
-                    await FileHandler.createUnixLink(sourcePath, targetPath);
-                    return true;
-                default:
-                    ElMessage.warning(
-                        "当前平台暂不支持使用 shell 创建软连接，将退化为复制。",
-                    );
-
-                    if (isDirectory) {
-                        return FileHandler.copyFolder(sourcePath, targetPath);
-                    }
-
-                    return FileHandler.copyFile(sourcePath, targetPath);
-            }
+            // 单次 invoke：父目录创建、`_back` 备份、原生 symlink（目录失败回退
+            // Junction）、失败回滚全在后端；替代逐步 IPC + powershell spawning。
+            await invoke("fs_link", {
+                src: sourcePath,
+                dst: targetPath,
+                backup,
+            });
+            return true;
         } catch (error) {
-            if (
-                backupPath &&
-                (await FileHandler.fileExists(backupPath)) &&
-                !(await FileHandler.fileExists(targetPath))
-            ) {
-                await FileHandler.renameFile(backupPath, targetPath);
-            }
-
             ElMessage.error(`创建软连接失败：${error}`);
             FileHandler.writeLog(String(error), true);
             return false;
@@ -954,36 +817,32 @@ export class FileHandler {
         subdirectory: boolean = false,
         getFolder = false,
     ) {
-        if (!(await FileHandler.fileExists(folderPath))) {
-            return [] as string[];
-        }
+        // 后端一次 walk 代替逐层串行 readDir；此处只做纯内存投影，语义与旧实现逐字对齐：
+        // 文件恒收（includepath 决定全路径还是纯名）；目录仅 getFolder 时收（恒全路径）；
+        // symlink 一律丢弃；目录不存在后端直接回空表。
+        const entries = await invoke<IWalkEntry[]>("fs_walk", {
+            dir: folderPath,
+            recursive: subdirectory,
+            includeDirs: getFolder,
+        });
 
-        let result: string[] = [];
-        const entries = await FileHandler.getDirectoryEntries(folderPath);
-
+        const result: string[] = [];
         for (const entry of entries) {
-            const entryPath = await join(folderPath, entry.name);
-
-            if (entry.isFile) {
-                result.push(includepath ? entryPath : entry.name);
+            if (entry.isSymlink) {
                 continue;
             }
 
-            if (entry.isDirectory) {
-                if (getFolder) {
-                    result.push(entryPath);
+            if (!entry.isDir) {
+                if (includepath) {
+                    result.push(await join(folderPath, ...entry.rel.split("/")));
+                } else {
+                    result.push(entry.rel.split("/").pop() ?? entry.rel);
                 }
+                continue;
+            }
 
-                if (subdirectory) {
-                    result = result.concat(
-                        await FileHandler.getAllFilesInFolder(
-                            entryPath,
-                            includepath,
-                            subdirectory,
-                            getFolder,
-                        ),
-                    );
-                }
+            if (getFolder) {
+                result.push(await join(folderPath, ...entry.rel.split("/")));
             }
         }
 

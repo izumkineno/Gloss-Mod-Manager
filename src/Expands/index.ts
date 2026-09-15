@@ -16,7 +16,7 @@ type ExpandModule = {
  * 显著拖慢启动并让入口体积接近 900KB。改为懒加载，仅在首次真正需要时载入，
  * 并缓存解析结果，避免每次调用都重复 import 与重复执行 supportedGames()。
  */
-const modules = import.meta.glob<ExpandModule>("./*.ts");
+const modules = import.meta.glob<ExpandModule>(["./*.ts", "!./*.test.ts"]);
 
 let internalGamesCache: ISupportedGames[] | null = null;
 let internalGamesPromise: Promise<ISupportedGames[]> | null = null;

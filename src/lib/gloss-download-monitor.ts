@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { ElMessage } from "element-plus-message";
 import { Downloader } from "@/lib/native-downloader";
 import type { IDownloaderTask } from "@/lib/download-task-types";
@@ -28,7 +29,8 @@ interface ITaskMetaSyncResult {
 }
 
 const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
-const POLL_INTERVAL_MS = 2000;
+// 事件驱动为主（dl-progress/dl-task-changed 触发 refresh），此轮询仅兜底丢事件。
+const POLL_INTERVAL_MS = 15000;
 const importingTaskGids = new Set<string>();
 
 function getTaskSourceType(metadata?: IGlossDownloadTaskMeta): sourceType {
@@ -287,6 +289,31 @@ export class GlossDownloadMonitor {
     > | null = null;
     private static refreshing = false;
     private static settings: IGlossDownloadMonitorSettings | null = null;
+    private static eventUnlisten: Array<() => void> = [];
+    private static eventsSubscribed = false;
+
+    private static async subscribeEvents() {
+        if (GlossDownloadMonitor.eventsSubscribed) {
+            return;
+        }
+        // 先占位防并发重入，失败时回滚并释放已订阅的 listener。
+        GlossDownloadMonitor.eventsSubscribed = true;
+        // 事件只做触发器：收到后拉一次快照（数据源仍是快照，丢事件由慢轮询兜底）。
+        const staged: Array<() => void> = [];
+        try {
+            for (const event of ["dl-progress", "dl-task-changed"]) {
+                staged.push(await listen(event, () => {
+                    void GlossDownloadMonitor.refresh();
+                }));
+            }
+            GlossDownloadMonitor.eventUnlisten.push(...staged);
+        } catch {
+            for (const unlisten of staged) {
+                unlisten();
+            }
+            GlossDownloadMonitor.eventsSubscribed = false;
+        }
+    }
 
     public static start(settings: IGlossDownloadMonitorSettings) {
         GlossDownloadMonitor.settings = settings;
@@ -295,6 +322,7 @@ export class GlossDownloadMonitor {
             return;
         }
 
+        void GlossDownloadMonitor.subscribeEvents();
         void GlossDownloadMonitor.refresh();
         GlossDownloadMonitor.intervalId = globalThis.setInterval(() => {
             void GlossDownloadMonitor.refresh();

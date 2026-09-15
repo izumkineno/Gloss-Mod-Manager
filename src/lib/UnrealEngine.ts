@@ -2,6 +2,10 @@ import { ElMessage } from "element-plus-message";
 import { FileHandler } from "@/lib/FileHandler";
 import { Manager } from "@/lib/Manager";
 import { dirname, join } from "@tauri-apps/api/path";
+import {
+    UNREAL_CLASSIFY_RULES,
+    classifyModType,
+} from "@/lib/mod-classify-rules";
 
 export class UnrealEngine {
     public static async modType(
@@ -257,32 +261,8 @@ export class UnrealEngine {
     }
 
     public static async checkModType(mod: IModInfo) {
-        let pak = false;
-        let ue4ss = false;
-        let mods = false;
-        let scripts = false;
-
-        for (const item of mod.modFiles) {
-            if ((await FileHandler.getFileExtension(item)) === "pak") pak = true;
-            if (await FileHandler.compareFileName(item, "Enabled.txt"))
-                mods = true;
-            if (await FileHandler.compareFileName(item, "ue4ss.dll"))
-                ue4ss = true;
-            if (await FileHandler.compareFileName(item, "dwmapi.dll"))
-                ue4ss = true;
-            if (await FileHandler.compareFileName(item, "xinput1_3.dll"))
-                ue4ss = true;
-            if (FileHandler.pathToArray(item).includes("Scripts")) {
-                scripts = true;
-            }
-        }
-
-        if (ue4ss) return 2;
-        if (pak) return 1;
-        if (mods) return 3;
-        if (scripts) return 5;
-
-        return 99;
+        // 规则表见 mod-classify-rules：ue4ss > pak > mods > scripts，后端同步匹配
+        return classifyModType(mod.modFiles, UNREAL_CLASSIFY_RULES, 99);
     }
 
     public static async setBPModLoaderMod(bassPath: string) {

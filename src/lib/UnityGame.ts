@@ -4,8 +4,12 @@
 
 import { ElMessage } from "element-plus-message";
 import { Manager } from "@/lib/Manager";
-import { basename, join } from "@tauri-apps/api/path";
-import { FileHandler } from "@/lib/FileHandler";
+import { join } from "@tauri-apps/api/path";
+import {
+    UNITY_CLASSIFY_RULES,
+    UNITY_ILCPP2_CLASSIFY_RULES,
+    classifyModType,
+} from "@/lib/mod-classify-rules";
 
 export class UnityGame {
     static modType = async () =>
@@ -90,27 +94,7 @@ export class UnityGame {
         ] as ISupportedGames["modType"];
 
     static async checkModType(mod: IModInfo) {
-        let bepinEx = false;
-        let plugins = false;
-
-        for (const item of mod.modFiles) {
-            if ((await basename(item)).toLowerCase() === "winhttp.dll") {
-                bepinEx = true;
-            }
-
-            if ((await FileHandler.getFileExtension(item)) === "dll") {
-                plugins = true;
-            }
-
-            if ((await basename(item)).toLowerCase().includes("plugins")) {
-                plugins = true;
-            }
-        }
-
-        if (bepinEx) return 1;
-        if (plugins) return 2;
-
-        return 99;
+        return classifyModType(mod.modFiles, UNITY_CLASSIFY_RULES, 99);
     }
 }
 
@@ -194,22 +178,6 @@ export class UnityGameILCPP2 {
     ];
 
     static async checkModType(mod: IModInfo) {
-        let melonLoader = false;
-        let mods = false;
-
-        for (const item of mod.modFiles) {
-            if ((await basename(item)).toLowerCase() === "version.dll") {
-                melonLoader = true;
-            }
-
-            if ((await FileHandler.getFileExtension(item)) === "dll") {
-                mods = true;
-            }
-        }
-
-        if (melonLoader) return 1;
-        if (mods) return 2;
-
-        return 99;
+        return classifyModType(mod.modFiles, UNITY_ILCPP2_CLASSIFY_RULES, 99);
     }
 }

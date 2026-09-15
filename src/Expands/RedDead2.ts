@@ -67,7 +67,7 @@ async function writeModsXmlDocument(document: XMLDocument) {
 
     const filePath = await join(gameStorage, "lml", "mods.xml");
     const data = serializeXmlDocument(document);
-    await FileHandler.writeFile(filePath, data);
+    await FileHandler.writeFileAtomic(filePath, data);
 }
 
 async function installXml(filePath: string, isInstall: boolean) {

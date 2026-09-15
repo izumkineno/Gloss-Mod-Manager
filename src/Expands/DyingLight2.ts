@@ -2,6 +2,10 @@ import { join } from "@tauri-apps/api/path";
 import { ElMessage } from "element-plus-message";
 import { FileHandler } from "@/lib/FileHandler";
 import { Manager } from "@/lib/Manager";
+import {
+    DYING_LIGHT_2_CLASSIFY_RULES,
+    classifyModType,
+} from "@/lib/mod-classify-rules";
 
 type PakRecord = [string, string, string];
 
@@ -43,9 +47,13 @@ async function getNextPakName() {
     }
 
     const dataFolder = await join(gameStorage, "ph", "source");
-    const pakFiles = (await FileHandler.getFolderFiles(dataFolder)).filter(
-        async (item) => (await FileHandler.getFileExtension(item)).toLowerCase() === "pak",
-    );
+    const names = await FileHandler.getFolderFiles(dataFolder);
+    const pakFiles: string[] = [];
+    for (const item of names) {
+        if ((await FileHandler.getFileExtension(item)).toLowerCase() === "pak") {
+            pakFiles.push(item);
+        }
+    }
     const numbers = pakFiles.map((item) => {
         const matched = item.match(/data(\d+)/iu);
         return matched ? Number(matched[1]) : 0;
@@ -87,11 +95,10 @@ async function handlePak(mod: IModInfo, isInstall: boolean) {
             continue;
         }
 
-        const matched = await pakList.find(
-            async (record) =>
-                record[0] === String(mod.id) &&
-                (await FileHandler.getFileExtension(record[1])).toLowerCase() ===
-                    (await FileHandler.getFileExtension(source)).toLowerCase(),
+        // 按 modId + 源文件名精确匹配（REEngine.handlePak 同款语义），避免异步谓词误删首条记录
+        const itemName = item.split("/").pop() ?? item;
+        const matched = pakList.find(
+            (record) => record[0] === String(mod.id) && record[1] === itemName,
         );
         if (!matched) {
             continue;
@@ -205,12 +212,10 @@ export const supportedGames = async () =>
             },
         ],
         async checkModType(mod) {
-            for (const item of mod.modFiles) {
-                if ((await FileHandler.getFileExtension(item)).toLowerCase() === "pak") {
-                    return 1;
-                }
-            }
-
-            return 99;
+            return classifyModType(
+                mod.modFiles,
+                DYING_LIGHT_2_CLASSIFY_RULES,
+                99,
+            );
         },
     }) as ISupportedGames;

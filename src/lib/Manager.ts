@@ -2,9 +2,33 @@
  * 管理相关
  */
 
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { ElMessage } from "element-plus-message";
 import { FileHandler } from "@/lib/FileHandler";
 import { basename, dirname, join } from "@tauri-apps/api/path";
+
+// 后端批量安装条目（src-tauri/src/fsops.rs InstallItem，camelCase）
+interface IInstallItem {
+    file: string;
+    src: string;
+    dst: string;
+    op: "copy" | "link" | "mkdir" | "write_text" | "remove";
+    backup: "gmmback" | "linkback" | "none";
+    content?: string;
+}
+
+interface IInstallFileState {
+    file: string;
+    ok: boolean;
+    error?: string;
+}
+
+interface IInstallProgress {
+    batchId: string;
+    done: number;
+    total: number;
+}
 
 interface IManagerContext {
     modStorage: string;
@@ -20,6 +44,72 @@ export class Manager {
         "CHANGELOG.md",
         "LICENSE",
     ];
+    // 进度监听：懒启动单例，后端 mod-install-progress 事件扇出到订阅者，调用方无感知
+    private static progressUnlisten: Promise<() => void> | null = null;
+    private static progressHandlers = new Set<(progress: IInstallProgress) => void>();
+
+    public static onInstallProgress(handler: (progress: IInstallProgress) => void) {
+        Manager.progressHandlers.add(handler);
+        Manager.ensureProgressListener();
+        return () => {
+            Manager.progressHandlers.delete(handler);
+        };
+    }
+
+    private static ensureProgressListener() {
+        if (!Manager.progressUnlisten) {
+            Manager.progressUnlisten = listen<IInstallProgress>(
+                "mod-install-progress",
+                (event) => {
+                    for (const handler of Manager.progressHandlers) {
+                        handler(event.payload);
+                    }
+                },
+            );
+        }
+    }
+
+    private static createBatchId() {
+        if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+            return crypto.randomUUID();
+        }
+        return `${Date.now()}-${Math.floor(Math.random() * 1_000_000_000)}`;
+    }
+
+    /**
+     * 一次 invoke 执行一批文件操作，按 file 建索引回填。
+     * 后端不可达等整批异常时（旧语义逐项记 false），调用方传入的每项都记 false。
+     */
+    private static async runInstallBatch(
+        items: IInstallItem[],
+        allowedRoots: string[],
+        linkFallbackCopy: boolean,
+    ): Promise<Map<string, boolean>> {
+        const states = new Map<string, boolean>();
+        if (items.length === 0) {
+            return states;
+        }
+        try {
+            const result = await invoke<IInstallFileState[]>(
+                "mod_install_batch",
+                {
+                    batchId: Manager.createBatchId(),
+                    allowedRoots,
+                    items,
+                    linkFallbackCopy,
+                },
+            );
+            for (const item of result) {
+                states.set(item.file, item.ok);
+            }
+        } catch {
+            for (const item of items) {
+                states.set(item.file, false);
+            }
+        }
+        return states;
+    }
+
 
     private static context: Partial<IManagerContext> = {};
 
@@ -199,29 +289,31 @@ export class Manager {
             return Manager.createFailureState(mod);
         }
 
-        const result: IState[] = [];
-
+        // 编排在 TS（目标计算），执行一次 invoke：缺失源由后端报 false，不触碰目标，与旧语义一致
+        const slots: Array<{ file: string; item: IInstallItem | null }> = [];
         for (const item of mod.modFiles) {
             try {
                 const source = await join(modStorage, item);
-
-                if (!(await FileHandler.fileExists(source))) {
-                    result.push({ file: item, state: false });
-                    continue;
-                }
-
                 const target = keepPath
                     ? await join(targetRoot, item)
                     : await join(targetRoot, await basename(item));
-                const state = await FileHandler.copyFile(source, target);
-
-                result.push({ file: item, state });
+                slots.push({
+                    file: item,
+                    item: { file: item, src: source, dst: target, op: "copy", backup: "gmmback" },
+                });
             } catch {
-                result.push({ file: item, state: false });
+                slots.push({ file: item, item: null });
             }
         }
-
-        return result;
+        const states = await Manager.runInstallBatch(
+            slots.filter((slot) => slot.item !== null).map((slot) => slot.item!),
+            [modStorage, targetRoot],
+            false,
+        );
+        return slots.map((slot) => ({
+            file: slot.file,
+            state: slot.item === null ? false : (states.get(slot.file) ?? false),
+        }));
     }
 
     // 一般卸载
@@ -246,29 +338,40 @@ export class Manager {
             return Manager.createFailureState(mod);
         }
 
-        const result: IState[] = [];
-
+        // 卸载保留源存在性检查：源缺失即 false 且不碰目标（照搬旧语义）；其余一次 invoke
+        const slots: Array<{ file: string; item: IInstallItem | null }> = [];
         for (const item of mod.modFiles) {
             try {
                 const source = await join(modStorage, item);
-
                 if (!(await FileHandler.fileExists(source))) {
-                    result.push({ file: item, state: false });
+                    slots.push({ file: item, item: null });
                     continue;
                 }
-
                 const target = keepPath
                     ? await join(targetRoot, item)
                     : await join(targetRoot, await basename(item));
-                const state = await FileHandler.deleteFile(target);
-
-                result.push({ file: item, state });
-                await Manager.deleteEmptyFolders(await dirname(target));
+                slots.push({
+                    file: item,
+                    item: { file: item, src: source, dst: target, op: "remove", backup: "gmmback" },
+                });
             } catch {
-                result.push({ file: item, state: false });
+                slots.push({ file: item, item: null });
             }
         }
-
+        const states = await Manager.runInstallBatch(
+            slots.filter((slot) => slot.item !== null).map((slot) => slot.item!),
+            [modStorage, targetRoot],
+            false,
+        );
+        const result: IState[] = [];
+        for (const slot of slots) {
+            if (slot.item === null) {
+                result.push({ file: slot.file, state: false });
+                continue;
+            }
+            result.push({ file: slot.file, state: states.get(slot.file) ?? false });
+            await Manager.deleteEmptyFolders(await dirname(slot.item.dst));
+        }
         return result;
     }
 
@@ -311,6 +414,9 @@ export class Manager {
             return result;
         }
 
+        // 注意：resolveInstallRoot(installPath, true) 写死 inGameStorage=true 是既有特例，照搬
+        // 编排在 TS（锚匹配/passFiles 跳过/spare 兜底），执行一次 invoke；缺失与未命中项直接跳过（不入 result，照搬）
+        const slots: Array<{ file: string; item: IInstallItem | null; target: string }> = [];
         for (const item of mod.modFiles) {
             try {
                 if (Manager.passFiles.includes(await basename(item))) {
@@ -356,19 +462,33 @@ export class Manager {
                     continue;
                 }
 
-                if (isInstall) {
-                    const state = await FileHandler.copyFile(source, target);
-                    result.push({ file: item, state });
-                } else {
-                    const state = await FileHandler.deleteFile(target);
-                    result.push({ file: item, state });
-                    await Manager.deleteEmptyFolders(await dirname(target));
-                }
+                slots.push({
+                    file: item,
+                    item: {
+                        file: item,
+                        src: source,
+                        dst: target,
+                        op: isInstall ? "copy" : "remove",
+                        backup: "gmmback",
+                    },
+                    target,
+                });
             } catch (error) {
                 ElMessage.error(`错误: ${error}`);
             }
         }
-
+        const states = await Manager.runInstallBatch(
+            slots.map((slot) => slot.item!),
+            [modStorage, targetRoot],
+            false,
+        );
+        for (const slot of slots) {
+            const state = states.get(slot.file) ?? false;
+            result.push({ file: slot.file, state });
+            if (!isInstall) {
+                await Manager.deleteEmptyFolders(await dirname(slot.target));
+            }
+        }
         return result;
     }
 
@@ -428,18 +548,32 @@ export class Manager {
             folders = await Manager.getCommonParentFolder(modStorage, folders);
         }
 
+        // 锚定位/去重/commonParent 归并在 TS；搬运一次 invoke。
+        // 文件夹拷贝由前端按 fs_walk 展开成单文件项（与 copyFolder per-file .gmmback 语义一致且可逐项记态）；
+        // 返回值照搬旧语义：逐项失败忽略，整体恒 true（异常才抛）。
+        const items: IInstallItem[] = [];
+        const linkMode = isLink && !closeSoftLinks;
         for (const folder of folders) {
             const target = await join(targetRoot, await basename(folder));
-
             if (isInstall) {
-                if (isLink && !closeSoftLinks) {
-                    await FileHandler.createLink(folder, target, true);
+                if (linkMode) {
+                    items.push({ file: folder, src: folder, dst: target, op: "link", backup: "linkback" });
                 } else {
-                    await FileHandler.copyFolder(folder, target);
+                    const entries = await FileHandler.getAllFilesInFolder(folder, true, true);
+                    for (const entry of entries) {
+                        const relative = await FileHandler.relativePath(folder, entry);
+                        items.push({
+                            file: `${folder}/${relative}`,
+                            src: entry,
+                            dst: await join(target, relative),
+                            op: "copy",
+                            backup: "gmmback",
+                        });
+                    }
                 }
             } else {
-                if (isLink && !closeSoftLinks) {
-                    await FileHandler.removeLink(target, true);
+                if (linkMode) {
+                    items.push({ file: target, src: folder, dst: target, op: "remove", backup: "linkback" });
                 } else {
                     await FileHandler.deleteFolder(target);
                 }
@@ -448,7 +582,7 @@ export class Manager {
                 }
             }
         }
-
+        await Manager.runInstallBatch(items, [modStorage, targetRoot], closeSoftLinks);
         return true;
     }
 
@@ -530,6 +664,9 @@ export class Manager {
             return false;
         }
 
+        // 锚定位/去重/未找到报错在 TS；搬运一次 invoke（卸载附带逐项清空调，照搬）
+        const items: IInstallItem[] = [];
+        const targets: string[] = [];
         for (const folder of folders) {
             for (const file of folder.files) {
                 if (Manager.passFiles.includes(await basename(file))) {
@@ -542,15 +679,24 @@ export class Manager {
                 );
                 const target = await join(targetRoot, relativeFile);
 
-                if (isInstall) {
-                    await FileHandler.copyFile(file, target);
-                } else {
-                    await FileHandler.deleteFile(target);
-                    await Manager.deleteEmptyFolders(await dirname(target));
+                items.push({
+                    file: `${folder.folder}/${relativeFile}`,
+                    src: file,
+                    dst: target,
+                    op: isInstall ? "copy" : "remove",
+                    backup: "gmmback",
+                });
+                if (!isInstall) {
+                    targets.push(target);
                 }
             }
         }
-
+        await Manager.runInstallBatch(items, [modStorage, targetRoot], false);
+        if (!isInstall) {
+            for (const target of targets) {
+                await Manager.deleteEmptyFolders(await dirname(target));
+            }
+        }
         return true;
     }
 
@@ -601,17 +747,29 @@ export class Manager {
 
         folders = [...new Set(folders)];
 
+        // 锚切分在 TS；恒建链/删链（不受 closeSoftLinks 控制，照搬），一次 invoke
+        const items: IInstallItem[] = [];
+        const targets: string[] = [];
         for (const folder of folders) {
             const target = await join(targetRoot, await basename(folder));
-
-            if (isInstall) {
-                await FileHandler.createLink(folder, target, true);
-            } else {
-                await FileHandler.removeLink(target, true);
+            items.push({
+                file: folder,
+                src: folder,
+                dst: target,
+                op: isInstall ? "link" : "remove",
+                backup: "linkback",
+            });
+            if (!isInstall) {
+                targets.push(target);
+            }
+        }
+        // installByFolderParent 恒链：linkFallbackCopy=false，不退化拷贝
+        await Manager.runInstallBatch(items, [modStorage, targetRoot], false);
+        if (!isInstall) {
+            for (const target of targets) {
                 await Manager.deleteEmptyFolders(await dirname(target));
             }
         }
-
         return true;
     }
 

@@ -1,4 +1,5 @@
 mod downloader;
+mod fsops;
 mod mcp_server;
 
 use std::io;
@@ -336,6 +337,16 @@ pub fn run() {
             app_process_id,
             app_is_local_port_open,
             frontend_log,
+            fsops::fs_walk,
+            fsops::fs_file_hash,
+            fsops::fs_hash_string,
+            fsops::mod_install_batch,
+            fsops::mod_classify,
+            fsops::cfg_upsert,
+            fsops::fs_link,
+            fsops::scan_steam_install_path,
+            fsops::scan_steam_game,
+            fsops::scan_steam_last_user,
             downloader::dl_probe_filename,
             downloader::dl_enqueue,
             downloader::dl_pause,
@@ -405,10 +416,13 @@ pub fn run() {
             }
 
             let launch_files = collect_launch_files(std::env::args());
-
             if !launch_files.is_empty() {
                 app.state::<AppLaunchState>().push_files(launch_files);
             }
+
+            // 下载事件推送需要 AppHandle（emit dl-progress/dl-task-changed）。
+            app.state::<downloader::DownloaderState>()
+                .set_app(app.handle().clone());
 
             tracing::info!(target: "gmm::startup", "日志系统初始化完成。");
             Ok(())

@@ -4,10 +4,10 @@
 //! 并发上限 5；暂停 = 中止任务，
 //! 恢复 = 携带 resume sidecar 重建（断点续传由 simple_downloader `resume` feature 保证）。
 
+use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
-
-use serde::Serialize;
+use tauri::Emitter;
 
 const MAX_ACTIVE: usize = 5;
 
@@ -47,6 +47,8 @@ struct TaskEntry {
     speed: f64,
     error: Option<String>,
     handle: Option<tauri::async_runtime::JoinHandle<()>>,
+    /// 上次 dl-progress 发送时刻（MonitorUpdate 节流，0.5s 一跳）。
+    last_emit: Option<std::time::Instant>,
 }
 
 impl TaskEntry {
@@ -68,9 +70,52 @@ struct Inner {
 #[derive(Default, Clone)]
 pub struct DownloaderState {
     inner: std::sync::Arc<Mutex<Inner>>,
+    app: std::sync::Arc<Mutex<Option<tauri::AppHandle>>>,
 }
 
-/// 任务状态快照（数字全为字符串，前端 `Number()` 解析）。
+/// 进度增量（前端收到后拉一次快照；事件只做触发器，不做数据源）。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DlProgress {
+    gid: String,
+    downloaded: u64,
+    total: u64,
+    speed: f64,
+}
+
+/// 任务终局/状态变迁（complete/error/paused/waiting/removed）。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DlTaskChanged {
+    gid: String,
+    status: String,
+}
+
+impl DownloaderState {
+    /// setup 时注入 AppHandle（manage 在 setup 之前，构造时拿不到）。
+    pub fn set_app(&self, app: tauri::AppHandle) {
+        *self.app.lock().expect("downloader app lock") = Some(app);
+    }
+
+    fn emit_progress(&self, payload: DlProgress) {
+        if let Some(app) = self.app.lock().expect("downloader app lock").as_ref() {
+            let _ = app.emit("dl-progress", payload);
+        }
+    }
+
+    fn emit_changed(&self, gid: &str, status: &str) {
+        if let Some(app) = self.app.lock().expect("downloader app lock").as_ref() {
+            let _ = app.emit(
+                "dl-task-changed",
+                DlTaskChanged {
+                    gid: gid.to_string(),
+                    status: status.to_string(),
+                },
+            );
+        }
+    }
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TaskFileSnapshot {
@@ -193,6 +238,24 @@ fn spawn_task(state: DownloaderState, gid: String) {
                             entry.total = entry.total.max(total_size);
                             entry.downloaded = total_downloaded;
                             entry.speed = total_speed;
+                            // 0.5s 节流：事件只做触发器，前端收到后拉快照。
+                            let now = std::time::Instant::now();
+                            let due = entry
+                                .last_emit
+                                .map(|at| now.duration_since(at).as_millis() >= 500)
+                                .unwrap_or(true);
+                            if due {
+                                entry.last_emit = Some(now);
+                                let payload = DlProgress {
+                                    gid: gid_for_progress.clone(),
+                                    downloaded: entry.downloaded,
+                                    total: entry.total,
+                                    speed: entry.speed,
+                                };
+                                drop(inner);
+                                state_for_progress.emit_progress(payload);
+                                continue;
+                            }
                         }
                         simple_downloader::DownloadInfo::ChunkProgress {
                             id,
@@ -210,30 +273,40 @@ fn spawn_task(state: DownloaderState, gid: String) {
             })
             .await;
 
-        let mut inner = state.inner.lock().expect("downloader lock");
-        if let Some(entry) = inner.tasks.get_mut(&gid) {
-            entry.handle = None;
-            entry.speed = 0.0;
-            // 中止（pause/cancel）时状态已被调用方改写，不覆盖。
-            if entry.status == TaskStatus::Active {
-                match result {
-                    Ok(()) => {
-                        entry.status = TaskStatus::Complete;
-                        // 终局对齐：成功即全量（零 Tick/流式场景 downloaded 可能滞后）。
-                        if entry.total > 0 {
-                            entry.downloaded = entry.total;
-                        } else {
-                            entry.total = entry.downloaded;
+        let terminal = {
+            let mut inner = state.inner.lock().expect("downloader lock");
+            let terminal = if let Some(entry) = inner.tasks.get_mut(&gid) {
+                entry.handle = None;
+                entry.speed = 0.0;
+                // 中止（pause/cancel）时状态已被调用方改写，不覆盖。
+                if entry.status == TaskStatus::Active {
+                    match result {
+                        Ok(()) => {
+                            entry.status = TaskStatus::Complete;
+                            // 终局对齐：成功即全量（零 Tick/流式场景 downloaded 可能滞后）。
+                            if entry.total > 0 {
+                                entry.downloaded = entry.total;
+                            } else {
+                                entry.total = entry.downloaded;
+                            }
+                        }
+                        Err(error) => {
+                            entry.status = TaskStatus::Error;
+                            entry.error = Some(error.to_string());
                         }
                     }
-                    Err(error) => {
-                        entry.status = TaskStatus::Error;
-                        entry.error = Some(error.to_string());
-                    }
                 }
-            }
+                (entry.status == TaskStatus::Complete || entry.status == TaskStatus::Error)
+                    .then(|| (gid.clone(), entry.status.as_status_str().to_string()))
+            } else {
+                None
+            };
+            drop(inner);
+            terminal
+        };
+        if let Some((done_gid, status)) = terminal {
+            state.emit_changed(&done_gid, &status);
         }
-        drop(inner);
         pump(state.clone());
     });
 
@@ -322,6 +395,7 @@ pub fn dl_enqueue(
                 speed: 0.0,
                 error: None,
                 handle: None,
+                last_emit: None,
             },
         );
         inner.pending.push_back(gid.clone());
@@ -350,6 +424,7 @@ pub fn dl_pause(state: tauri::State<DownloaderState>, gid: String) -> Result<(),
     inner.pending.retain(|pending| pending != &gid);
     drop(inner);
     // 腾出槽位后泵出等待队列。
+    state.emit_changed(&gid, TaskStatus::Paused.as_status_str());
     pump((*state).clone());
     Ok(())
 }
@@ -366,9 +441,10 @@ pub fn dl_resume(state: tauri::State<DownloaderState>, gid: String) -> Result<()
     entry.status = TaskStatus::Waiting;
     entry.error = None;
     if !inner.pending.contains(&gid) {
-        inner.pending.push_back(gid);
+        inner.pending.push_back(gid.clone());
     }
     drop(inner);
+    state.emit_changed(&gid, TaskStatus::Waiting.as_status_str());
     pump((*state).clone());
     Ok(())
 }
@@ -392,6 +468,7 @@ pub fn dl_cancel(
         let _ = std::fs::remove_file(&output);
         let _ = std::fs::remove_file(format!("{output}.download.bitcode"));
     }
+    state.emit_changed(&gid, "removed");
     pump((*state).clone());
     Ok(())
 }

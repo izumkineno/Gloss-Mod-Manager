@@ -11,10 +11,6 @@ async function readIniConfig(filePath: string) {
     return ini.parse(raw) as IniConfig;
 }
 
-async function writeIniConfig(filePath: string, config: IniConfig) {
-    await FileHandler.writeFile(filePath, ini.stringify(config));
-}
-
 async function setArchive() {
     try {
         const { gameStorage } = await Manager.getContext();
@@ -22,13 +18,11 @@ async function setArchive() {
             return;
         }
 
-        const iniPath = await join(gameStorage, "Starfield.ini");
-        const config = await readIniConfig(iniPath);
-        const archive = config.Archive ?? {};
-        archive.bInvalidateOlderFiles = 1;
-        archive.sResourceDataDirsFinal = "";
-        config.Archive = archive;
-        await writeIniConfig(iniPath, config);
+        // 行保留合并：只碰 Archive 两行，用户注释与 hand-made 配置不动。
+        await FileHandler.upsertIniConfig(await join(gameStorage, "Starfield.ini"), [
+            { section: "Archive", key: "bInvalidateOlderFiles", value: "1" },
+            { section: "Archive", key: "sResourceDataDirsFinal", value: "" },
+        ]);
     } catch (error) {
         ElMessage.error(`配置 Starfield.ini 失败: ${error}`);
     }
@@ -67,8 +61,8 @@ async function setPlugins(mod: IModInfo, install: boolean) {
             entries = entries.filter((value) => value !== entry);
         }
     }
-
-    await FileHandler.writeFile(pluginsPath, [...new Set(entries)].join("\n"));
+    // 全文组装仍在 TS，原子落盘走后端（锁 + tmp 写后 rename）。
+    await FileHandler.writeFileAtomic(pluginsPath, [...new Set(entries)].join("\n"));
 }
 
 async function setGeneral(name: string, isInstall: boolean) {
@@ -92,18 +86,19 @@ async function setGeneral(name: string, isInstall: boolean) {
                     (key) => Number(key.replace("sTestFile", "")) || 0,
                 ),
             );
-            general[`sTestFile${lastIndex + 1}`] = name;
+            // 键名计算在 TS，落盘走后端行保留合并（set 语义幂等）。
+            await FileHandler.upsertIniConfig(iniPath, [
+                { section: "General", key: `sTestFile${lastIndex + 1}`, value: name },
+            ]);
         }
     } else {
-        for (const key of keys) {
-            if (String(general[key]) === name) {
-                delete general[key];
-            }
+        const removals = keys
+            .filter((key) => String(general[key]) === name)
+            .map((key) => ({ section: "General", key, value: "", remove: true }));
+        if (removals.length > 0) {
+            await FileHandler.upsertIniConfig(iniPath, removals);
         }
     }
-
-    config.General = general;
-    await writeIniConfig(iniPath, config);
 }
 
 async function handlePlugins(

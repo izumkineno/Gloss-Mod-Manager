@@ -299,7 +299,7 @@ async function handlePak(
     }
 
     if (hasChanges) {
-        await FileHandler.writeFile(
+        await FileHandler.writeFileAtomic(
             modsettingsPath,
             serializeXmlDocument(document),
         );

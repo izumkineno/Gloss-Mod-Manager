@@ -2,6 +2,8 @@ import { basename, join } from "@tauri-apps/api/path";
 import { ElMessage } from "element-plus-message";
 import { FileHandler } from "@/lib/FileHandler";
 import { Manager } from "@/lib/Manager";
+import type { IClassifyMatcher } from "@/lib/mod-classify-rules";
+import { classifyModType } from "@/lib/mod-classify-rules";
 
 let dictionaryList: string[] = [];
 
@@ -175,26 +177,24 @@ export const supportedGames = async () =>
         ],
         async checkModType(mod) {
             const dictionary = await loadDictionary();
-            let engine = false;
-            let mods = false;
-
-            for (const item of mod.modFiles) {
-                if ((await basename(item)) === "modengine2_launcher.exe")
-                    engine = true;
-                if (
-                    dictionary.some(
-                        async (dictionaryItem) =>
-                            (await basename(dictionaryItem)).toLowerCase() ===
-                            (await basename(item)).toLowerCase(),
-                    )
-                ) {
-                    mods = true;
-                }
+            // 字典条目为路径，归一化为 basename 匹配器；后端双侧小写，大小写无关
+            const dictionaryMatchers: IClassifyMatcher[] = [];
+            for (const dictionaryItem of dictionary) {
+                dictionaryMatchers.push({
+                    kind: "basename",
+                    value: await basename(dictionaryItem),
+                });
             }
-
-            if (engine) return 2;
-            if (mods) return 1;
-
-            return 99;
+            return classifyModType(
+                mod.modFiles,
+                [
+                    {
+                        id: 2,
+                        anyOf: [{ kind: "basename", value: "modengine2_launcher.exe" }],
+                    },
+                    { id: 1, anyOf: dictionaryMatchers },
+                ],
+                99,
+            );
         },
     }) as ISupportedGames;

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { documentDir, join } from "@tauri-apps/api/path";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import { ElMessage } from "element-plus-message";
@@ -392,9 +393,32 @@ const { pause: stopTaskPolling, resume: startTaskPolling } = useIntervalFn(
     () => {
         void refreshTaskLists(true);
     },
-    2000,
+    15000,
     { immediate: false },
 );
+
+// 事件只做触发器：收到后拉一次快照（数据源仍是快照，慢轮询兜底丢事件）。
+let taskEventUnlisten: Array<() => void> = [];
+
+async function subscribeTaskEvents() {
+    if (taskEventUnlisten.length > 0) {
+        return;
+    }
+    const staged: Array<() => void> = [];
+    try {
+        for (const event of ["dl-progress", "dl-task-changed"]) {
+            staged.push(await listen<string>(event, () => {
+                void refreshTaskLists(true);
+            }));
+        }
+        taskEventUnlisten.push(...staged);
+    } catch {
+        for (const unlisten of staged) {
+            unlisten();
+        }
+        taskEventUnlisten = [];
+    }
+}
 
 watch(
     allTasks,
@@ -477,11 +501,16 @@ watch(
 );
 
 onMounted(() => {
+    void subscribeTaskEvents();
     void initializeDownloadPage();
 });
 
 onUnmounted(() => {
     stopTaskPolling();
+    for (const unlisten of taskEventUnlisten) {
+        unlisten();
+    }
+    taskEventUnlisten = [];
 });
 
 function getErrorMessage(error: unknown) {
