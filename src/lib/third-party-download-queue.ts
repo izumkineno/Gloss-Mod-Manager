@@ -14,6 +14,7 @@ import {
 import { PersistentStore } from "@/lib/persistent-store";
 import {
     resolveThirdPartyDownloadUrl,
+    type INexusModsDirectOptions,
     type IThirdPartyModDetail,
     type IThirdPartyModFile,
     type INexusModsDownloadAuthorization,
@@ -31,7 +32,6 @@ export type ThirdPartyQueueDownloadStatus =
     | "exists"
     | "external"
     | "imported";
-
 export interface IQueueThirdPartyDownloadOptions {
     provider: ThirdPartyProvider;
     mod: IThirdPartyModDetail;
@@ -40,6 +40,7 @@ export interface IQueueThirdPartyDownloadOptions {
     managerModList?: IModInfo[];
     nexusUser?: INexusModsUser | null;
     nexusDownloadAuthorization?: INexusModsDownloadAuthorization | null;
+    nexusDirect?: INexusModsDirectOptions | null;
     replaceLocalModId?: number;
 }
 
@@ -298,6 +299,7 @@ export async function queueThirdPartyModDownload(
             file.id,
             options.nexusUser,
             options.nexusDownloadAuthorization,
+            options.nexusDirect,
         )
     ).trim();
 

@@ -198,10 +198,18 @@ interface INexusDownloadLinkResponseItem {
 interface INexusDownloadLinkResponseItem {
     URI: string;
 }
-
 export interface INexusModsDownloadAuthorization {
     key?: string;
     expires?: string;
+}
+
+// NexusMods 下载模式：api 走官方 API 解析；cookie 走登录 Cookie 直连（免排队/倒计时）。
+export type NexusModsDownloadMode = "api" | "cookie";
+export interface INexusModsDirectOptions {
+    // 登录后 Cookie 原文（后端透传给站内接口，不经前端请求）。
+    cookie?: string;
+    // 下载模式，默认 api。
+    mode?: NexusModsDownloadMode;
 }
 
 export const THIRD_PARTY_PROVIDER_OPTIONS: IThirdPartyProviderOption[] = [
@@ -331,6 +339,7 @@ export async function resolveThirdPartyDownloadUrl(
     fileId?: string,
     nexusUser?: INexusModsUser | null,
     nexusDownloadAuthorization?: INexusModsDownloadAuthorization | null,
+    nexusDirect?: INexusModsDirectOptions | null,
 ) {
     if (detail.source !== "NexusMods") {
         const targetFile =
@@ -351,6 +360,22 @@ export async function resolveThirdPartyDownloadUrl(
     const gameDomain = detail.routeQuery.gameDomain;
     if (!gameDomain) {
         return "";
+    }
+
+    // Cookie 直连优先：后端调站内接口直接拿 CDN 链接，失败抛错由调用方回退 API。
+    if (nexusDirect?.mode === "cookie") {
+        const cookie = nexusDirect.cookie?.trim() ?? "";
+        if (!cookie) {
+            throw new Error("未配置 NexusMods Cookie，请在设置页填写后重试。");
+        }
+        return invoke<string>("nexus_resolve_direct", {
+            gameDomain,
+            modId: detail.id,
+            fileId: targetFile.id,
+            cookie,
+            isNmm: false,
+            proxy: null,
+        });
     }
 
     return resolveNexusModsDownloadUrl(

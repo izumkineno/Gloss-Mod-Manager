@@ -350,7 +350,7 @@ pub fn run() {
             fsops::scan_steam_install_path,
             fsops::scan_steam_game,
             fsops::scan_steam_last_user,
-            downloader::dl_probe_filename,
+            downloader::nexus_resolve_direct,
             downloader::dl_enqueue,
             downloader::dl_pause,
             downloader::dl_resume,

@@ -21,6 +21,8 @@ const {
     closeSoftLinks,
     modifiableDuringGame,
     nexusModsAuthorized,
+    nexusModsCookie,
+    nexusModsDownloadMode,
     nexusModsLoginLoading,
     nexusModsUser,
     selectGameByFolder,
@@ -454,6 +456,46 @@ watch(
                                             )
                                         }}
                                     </Button>
+                                </div>
+                            </div>
+                            <div class="mt-4 space-y-3 border-t border-border/60 pt-4">
+                                <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                                    <div class="space-y-1">
+                                        <div class="text-sm font-medium">
+                                            {{ t("settings.nexus.downloadMode") }}
+                                        </div>
+                                        <p class="text-xs text-muted-foreground">
+                                            {{ t("settings.nexus.downloadModeHint") }}
+                                        </p>
+                                    </div>
+                                    <Select v-model="nexusModsDownloadMode">
+                                        <SelectTrigger class="w-full lg:w-40">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="api">
+                                                {{ t("settings.nexus.downloadModeApi") }}
+                                            </SelectItem>
+                                            <SelectItem value="cookie">
+                                                {{ t("settings.nexus.downloadModeCookie") }}
+                                            </SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                                <div class="space-y-2">
+                                    <Label class="text-sm font-medium">
+                                        {{ t("settings.nexus.cookieLabel") }}
+                                    </Label>
+                                    <InputGroup class="w-full">
+                                        <InputGroupInput
+                                            type="password"
+                                            :placeholder="t('settings.nexus.cookiePlaceholder')"
+                                            v-model="nexusModsCookie"
+                                        />
+                                    </InputGroup>
+                                    <p class="text-xs text-muted-foreground">
+                                        {{ t("settings.nexus.cookieHint") }}
+                                    </p>
                                 </div>
                             </div>
                         </div>

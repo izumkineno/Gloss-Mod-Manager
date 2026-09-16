@@ -612,7 +612,7 @@ declare global {
   export type { ThirdPartyQueueDownloadStatus, IQueueThirdPartyDownloadOptions, IQueueThirdPartyDownloadResult } from './lib/third-party-download-queue'
   import('./lib/third-party-download-queue')
   // @ts-ignore
-  export type { NexusModsAuthorizationError, ThirdPartyProvider, ThirdPartyDescriptionFormat, ThirdPartyListSortKey, IThirdPartyListQuery, IThirdPartyModFile, IThirdPartyModItem, IThirdPartyModDetail, IThirdPartyModListResult, IThirdPartyModFacetOption, IThirdPartyModFacets, INexusModsFacetSelection, IThirdPartyProviderOption, INexusModsDownloadAuthorization, IThunderstoreCacheStatus } from './lib/third-party-mod-api'
+  export type { NexusModsAuthorizationError, ThirdPartyProvider, ThirdPartyDescriptionFormat, ThirdPartyListSortKey, IThirdPartyListQuery, IThirdPartyModFile, IThirdPartyModItem, IThirdPartyModDetail, IThirdPartyModListResult, IThirdPartyModFacetOption, IThirdPartyModFacets, INexusModsFacetSelection, IThirdPartyProviderOption, INexusModsDownloadAuthorization, NexusModsDownloadMode, INexusModsDirectOptions, IThunderstoreCacheStatus } from './lib/third-party-mod-api'
   import('./lib/third-party-mod-api')
   // @ts-ignore
   export type { IAiChatMessageMetadata, IAiChatUIMessage, IAiChatConversation } from './stores/ai-chat'

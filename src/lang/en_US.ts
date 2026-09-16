@@ -87,6 +87,13 @@ const lang = {
             login: "Log in to NexusMods",
             openProfile: "Open profile",
             clearAuthorization: "Clear authorization",
+            downloadMode: "Download method",
+            downloadModeApi: "Official API",
+            downloadModeCookie: "Cookie direct",
+            downloadModeHint: "Cookie direct resolves CDN links via the site API without waiting; fill in the login Cookie below first.",
+            cookieLabel: "Login Cookie",
+            cookiePlaceholder: "Paste the Cookie copied from nexusmods.com",
+            cookieHint: "Log in to NexusMods in your browser, copy the Cookie from request headers (F12), stored encrypted.",
         },
     },
     games: {

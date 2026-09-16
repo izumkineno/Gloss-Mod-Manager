@@ -627,6 +627,10 @@ async function queuePreload(item: IGamePlugins) {
                           gameName: currentGameName.value,
                           managerModList: manager.managerModList,
                           nexusUser: settings.nexusModsUser,
+                          nexusDirect: {
+                              mode: settings.nexusModsDownloadMode === "cookie" ? "cookie" : "api",
+                              cookie: settings.nexusModsCookie,
+                          },
                       });
                   })();
 

@@ -149,6 +149,13 @@ export const useSettings = defineStore("Settings", () => {
             key: nexusModsToken.value,
         };
     });
+    // NexusMods Cookie 直连：用户从浏览器复制登录后 Cookie，后端调站内接口拿 CDN 直链。
+    const nexusModsCookie = SecretStore.useValue("nexusModsCookie");
+    // NexusMods 下载模式：api（默认，走官方 API）/ cookie（Cookie 直连，免排队）。
+    const nexusModsDownloadMode = PersistentStore.useValue<string>(
+        "nexusModsDownloadMode",
+        "api",
+    );
 
     const baseUrl = PersistentStore.useValue<string>("agentbaseUrl", "");
     // AI API Key 与 GlossMod Key 属于凭据，从明文配置迁移到加密存储。
@@ -172,6 +179,7 @@ export const useSettings = defineStore("Settings", () => {
             "agentApiKey",
             "glossModKey",
             "nexusModsToken",
+            "nexusModsCookie",
         );
     }
 
@@ -373,6 +381,8 @@ export const useSettings = defineStore("Settings", () => {
         mcpPromptsEnabled,
         mcpPromptItemEnabledMap,
         nexusModsUser,
+        nexusModsCookie,
+        nexusModsDownloadMode,
         nexusModsAuthorized,
         nexusModsLoginLoading,
         debugInfo,

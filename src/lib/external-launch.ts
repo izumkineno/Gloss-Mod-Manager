@@ -424,6 +424,10 @@ async function handleNxmIntent(
             gameName: targetGame.gameName,
             managerModList: manager.managerModList,
             nexusUser: settings.nexusModsUser,
+            nexusDirect: {
+                mode: settings.nexusModsDownloadMode === "cookie" ? "cookie" : "api",
+                cookie: settings.nexusModsCookie,
+            },
             nexusDownloadAuthorization: {
                 key: intent.key,
                 expires: intent.expires,

@@ -1536,6 +1536,10 @@ async function queueDownload(mod: IThirdPartyModDetail, fileId?: string) {
             gameName: currentGameName.value,
             managerModList: manager.managerModList,
             nexusUser: settings.nexusModsUser,
+            nexusDirect: {
+                mode: settings.nexusModsDownloadMode === "cookie" ? "cookie" : "api",
+                cookie: settings.nexusModsCookie,
+            },
         });
 
         if (!results) {

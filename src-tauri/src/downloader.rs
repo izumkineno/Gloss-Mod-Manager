@@ -1010,3 +1010,147 @@ pub async fn dl_probe_filename(
     // 探测客户端自带 8s 超时（probe_client 内置），无需额外 tokio 依赖。
     probe_filename_inner(&url, &header_vec, proxy_str.as_deref()).await
 }
+/// NexusMods Cookie 直连解析（GreasyFork Nexus No Wait 原理的后端版）。
+/// 登录 Cookie 调站内 GenerateDownloadUrl 接口直接拿 CDN 直链，免 API 排队/倒计时。
+/// 返回直链 URL；Cookie 失效/缺文件时返回中文错误，前端回退 API 模式或提示重填。
+#[tauri::command]
+pub async fn nexus_resolve_direct(
+    game_domain: String,
+    mod_id: String,
+    file_id: String,
+    cookie: String,
+    is_nmm: Option<bool>,
+    proxy: Option<String>,
+) -> Result<String, String> {
+    use simple_downloader::reqwest::header::{HeaderValue, COOKIE, ORIGIN, REFERER, USER_AGENT};
+    let game_domain = game_domain.trim().to_string();
+    let mod_id = mod_id.trim().to_string();
+    let file_id = file_id.trim().to_string();
+    let cookie = cookie.trim().to_string();
+    if game_domain.is_empty() || mod_id.is_empty() || file_id.is_empty() {
+        return Err("缺少游戏/Mod/文件参数。".to_string());
+    }
+    if cookie.is_empty() {
+        return Err("未配置 NexusMods Cookie，请在设置页填写。".to_string());
+    }
+    let game_id = nexus_game_id(&game_domain, &cookie, proxy.as_deref()).await?;
+    let mut builder = simple_downloader::reqwest::ClientBuilder::new()
+        .user_agent(PROBE_UA)
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(20));
+    if let Some(px) = proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Ok(p) = simple_downloader::reqwest::Proxy::all(px) {
+            builder = builder.proxy(p);
+        }
+    }
+    let client = builder.build().map_err(|_| "无法创建下载请求。".to_string())?;
+    // 站内直链接口：fid=文件 id，game_id=数字 id，nmm=1 走 Mod Manager 通道。
+    let nmm_flag = if is_nmm.unwrap_or(false) { "1" } else { "0" };
+    let body = format!("fid={}&game_id={}&nmm={}", file_id, game_id, nmm_flag);
+    let page_url = format!(
+        "https://www.nexusmods.com/{}/mods/{}?tab=files&file_id={}{}",
+        game_domain,
+        mod_id,
+        file_id,
+        if is_nmm.unwrap_or(false) { "&nmm=1" } else { "" }
+    );
+    let resp = client
+        .post("https://www.nexusmods.com/Core/Libs/Common/Managers/Downloads?GenerateDownloadUrl")
+        .header(COOKIE, HeaderValue::from_str(&cookie).map_err(|_| "Cookie 格式非法。".to_string())?)
+        .header(USER_AGENT, PROBE_UA)
+        .header(REFERER, HeaderValue::from_str(&page_url).unwrap_or(HeaderValue::from_static("https://www.nexusmods.com/")))
+        .header(ORIGIN, "https://www.nexusmods.com")
+        .header("X-Requested-With", "XMLHttpRequest")
+        .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("请求 NexusMods 直链失败：{e}"))?;
+    if resp.status().as_u16() == 403 || resp.status().as_u16() == 401 {
+        return Err("Cookie 已失效，请重新登录 NexusMods 后更新 Cookie。".to_string());
+    }
+    if !resp.status().is_success() {
+        return Err(format!("NexusMods 返回异常（{}），请稍后重试。", resp.status().as_u16()));
+    }
+    let text = resp.text().await.map_err(|e| format!("读取直链响应失败：{e}"))?;
+    // 响应为 JSON 或 HTML 片段，统一正则提取可用直链（nxm/CDN/api/files 均可）。
+    for pat in [
+        "https://filedelivery.nexus-cdn.com",
+        "https://files.nexus-cdn.com",
+        "https://filedelivery-eu.nexus-cdn.com",
+        "nxm://",
+        "https://www.nexusmods.com/",
+    ] {
+        if let Some(url) = extract_url_with_prefix(&text, pat) {
+            // file_id 兜底页不是直链，跳过继续找 CDN。
+            if url.contains("file_id=") && !url.contains("nexus-cdn.com") {
+                continue;
+            }
+            return Ok(url);
+        }
+    }
+    // JSON 形态 {"url": "..."} 兜底。
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+        if let Some(u) = v.get("url").and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+            return Ok(u.to_string());
+        }
+    }
+    Err("未能解析出下载直链（可能需要登录或文件已归档）。".to_string())
+}
+/// 从响应文本中提取以指定前缀开头的 URL（到引号/空白/反斜杠处截断）。
+fn extract_url_with_prefix(text: &str, prefix: &str) -> Option<String> {
+    let start = text.find(prefix)?;
+    let rest = &text[start..];
+    let end = rest
+        .find(|c| c == '"' || c == '\'' || c == '\\' || c == ' ' || c == '<' || c == '>')
+        .unwrap_or(rest.len());
+    let mut url = rest[..end].replace("\\/", "/").replace("&amp;", "&");
+    // JSON 转义的 \u0026 等只处理最常见的 &。
+    url = url.replace("\\u0026", "&");
+    if url.len() > 12 {
+        Some(url)
+    } else {
+        None
+    }
+}
+/// game_domain -> 数字 game_id：抓 Mod 页解析 data-game-id，无 Cookie 时也可用匿名访问。
+async fn nexus_game_id(
+    game_domain: &str,
+    cookie: &str,
+    proxy: Option<&str>,
+) -> Result<String, String> {
+    use simple_downloader::reqwest::header::{HeaderValue, COOKIE};
+    let mut builder = simple_downloader::reqwest::ClientBuilder::new()
+        .user_agent(PROBE_UA)
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(20));
+    if let Some(px) = proxy.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Ok(p) = simple_downloader::reqwest::Proxy::all(px) {
+            builder = builder.proxy(p);
+        }
+    }
+    let client = builder.build().map_err(|_| "无法创建下载请求。".to_string())?;
+    let url = format!("https://www.nexusmods.com/{}/mods/1", game_domain);
+    let mut req = client.get(&url);
+    if let Ok(v) = HeaderValue::from_str(cookie) {
+        req = req.header(COOKIE, v);
+    }
+    let text = req
+        .send()
+        .await
+        .map_err(|e| format!("获取游戏信息失败：{e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("读取游戏页面失败：{e}"))?;
+    // data-game-id="3333" / game_id: 3333 / "game_id":3333 多形态兜底。
+    for marker in ["data-game-id=\"", "data-game-id='", "\"game_id\":", "game_id:"] {
+        if let Some(pos) = text.find(marker) {
+            let rest = text[pos + marker.len()..].trim_start_matches(['"', '\'', ' ', ':']);
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !digits.is_empty() {
+                return Ok(digits);
+            }
+        }
+    }
+    Err("未能解析游戏 ID，请检查网络或 Cookie。".to_string())
+}

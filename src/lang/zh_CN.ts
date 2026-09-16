@@ -222,6 +222,13 @@ const lang = {
             login: "登录 NexusMods",
             openProfile: "打开主页",
             clearAuthorization: "清除授权",
+            downloadMode: "下载方式",
+            downloadModeApi: "官方 API",
+            downloadModeCookie: "Cookie 直连",
+            downloadModeHint: "Cookie 直连调用站内接口直接拿 CDN 链接，免排队等待；需先在下方填写登录 Cookie。",
+            cookieLabel: "登录 Cookie",
+            cookiePlaceholder: "从浏览器复制 nexusmods.com 的 Cookie 后粘贴",
+            cookieHint: "在浏览器登录 NexusMods 后按 F12 从请求头复制 Cookie，存入加密存储。",
         },
     },
     games: {
