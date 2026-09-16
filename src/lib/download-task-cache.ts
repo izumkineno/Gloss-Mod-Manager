@@ -31,7 +31,6 @@ function normalizeRestoredTask(task: IDownloaderTask, liveGids: Set<string>) {
             ...task,
             status: "complete",
             downloadSpeed: "0",
-            uploadSpeed: "0",
             connections: "0",
             errorCode: RESTORED_TASK_ERROR_CODE,
         };
@@ -42,7 +41,6 @@ function normalizeRestoredTask(task: IDownloaderTask, liveGids: Set<string>) {
             ...task,
             status: "error",
             downloadSpeed: "0",
-            uploadSpeed: "0",
             connections: "0",
             errorCode: RESTORED_TASK_ERROR_CODE,
             errorMessage: task.errorMessage || RESTORED_TASK_ERROR_MESSAGE,
@@ -52,7 +50,6 @@ function normalizeRestoredTask(task: IDownloaderTask, liveGids: Set<string>) {
     return {
         ...task,
         downloadSpeed: "0",
-        uploadSpeed: "0",
         connections: "0",
         errorCode: RESTORED_TASK_ERROR_CODE,
     };
@@ -89,9 +86,7 @@ async function createTaskFromMetadata(
         status,
         totalLength: "0",
         completedLength: "0",
-        uploadLength: "0",
         downloadSpeed: "0",
-        uploadSpeed: "0",
         connections: "0",
         dir: fallbackDirectory,
         files: [

@@ -109,7 +109,6 @@ const EMPTY_POSTER =
 	`);
 const defaultGlobalStat = (): IDownloaderGlobalStat => ({
     downloadSpeed: "0",
-    uploadSpeed: "0",
     numActive: "0",
     numWaiting: "0",
     numStopped: "0",
@@ -152,7 +151,6 @@ const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
 const manager = useManager();
 const settings = useSettings();
 const route = useRoute();
-const router = useRouter();
 const { storagePath } = storeToRefs(settings);
 
 const disableSymlinkInstall = PersistentStore.useValue<boolean>(
@@ -165,15 +163,16 @@ const downloadDirectory = PersistentStore.useValue<string>(
 );
 const downloadProxy = PersistentStore.useValue<string>("downloadProxy", "");
 const downloaderSettings = PersistentStore.useValue<IDownloaderSettings>(
-    "aria2Settings",
+    "nativeDownloaderSettings",
     Downloader.getDefaultSettings(),
 );
 const taskMetaMap = PersistentStore.useValue<
     Record<string, IGlossDownloadTaskMeta>
 >(DOWNLOAD_TASK_META_KEY, {});
 
-const rpcState = ref<"idle" | "starting" | "ready" | "error">("idle");
-const rpcErrorMessage = ref("");
+// 内置引擎常驻进程内，无 RPC 连接态；loading/error 只反映列表刷新本身。
+const tasksLoading = ref(false);
+const tasksErrorMessage = ref("");
 const refreshingTasks = ref(false);
 const globalStat = ref<IDownloaderGlobalStat>(defaultGlobalStat());
 const activeTasks = ref<IDownloaderTask[]>([]);
@@ -194,8 +193,12 @@ const taskPageSize = ref(DEFAULT_TASK_PAGE_SIZE);
 const selectedTaskGid = ref("");
 const defaultDownloadDirectory = ref("");
 const showAddModDialog = ref(false);
+const showManualDownloadDialog = ref(false);
 const showTaskDetailDialog = ref(false);
 const showDownloaderSettingsDialog = ref(false);
+const manualDownloadUrl = ref("");
+const manualDownloadFileName = ref("");
+const manualDownloadCreating = ref(false);
 const duplicateDialog = reactive<IDuplicateDialogState>({
     open: false,
     title: "",
@@ -449,13 +452,15 @@ watch(
     { immediate: true },
 );
 
+// 自动跳转建任务已关闭：外部不再带 modId/resourceId/autoDownload 跳下载页。
+// 保留 modId 预填查找框（用户手动确认），resourceId/autoDownload 直接忽略。
 watch(
-    () =>
-        [route.query.modId, route.query.resourceId, route.query.autoDownload]
-            .map((item) => (typeof item === "string" ? item : ""))
-            .join("|"),
-    () => {
-        void handleRouteModIntent();
+    () => (typeof route.query.modId === "string" ? route.query.modId : ""),
+    (modId) => {
+        if (extractModId(modId)) {
+            modLookupInput.value = extractModId(modId);
+            void loadModDetail(extractModId(modId));
+        }
     },
     { immediate: true },
 );
@@ -509,24 +514,89 @@ function getErrorMessage(error: unknown) {
     return "操作失败，请稍后重试。";
 }
 
-function buildRpcEnsureOptions(
+function buildEngineEnsureOptions(
     outputDirectory?: string,
 ): IDownloaderEnsureOptions {
-    const settings = normalizedDownloaderSettings.value;
+    const engineSettings = normalizedDownloaderSettings.value;
 
     return {
         outputDirectory: outputDirectory || resolvedDownloadDirectory.value,
-        listenPort: settings.rpcPort,
-        secret: settings.rpcSecret,
-        maxConcurrentDownloads: settings.maxConcurrentDownloads,
-        split: settings.split,
-        maxConnectionPerServer: settings.maxConnectionPerServer,
-        minSplitSize: settings.minSplitSize,
+        split: engineSettings.split,
+        maxConnectionPerServer: engineSettings.maxConnectionPerServer,
+        minSplitSize: engineSettings.minSplitSize,
     };
 }
 
 function openAddModDialog() {
     showAddModDialog.value = true;
+}
+
+function openManualDownloadDialog() {
+    manualDownloadUrl.value = "";
+    manualDownloadFileName.value = "";
+    showManualDownloadDialog.value = true;
+}
+
+// 手动链接直建任务：文件名空则内置探测补全（Content-Disposition > URL 尾段）。
+async function createManualDownloadTask() {
+    const url = manualDownloadUrl.value.trim();
+
+    if (!url) {
+        ElMessage.warning("请先填写下载链接。");
+        return;
+    }
+
+    manualDownloadCreating.value = true;
+
+    try {
+        const outputDirectory = await ensureEngineReady();
+        const engineSettings = normalizedDownloaderSettings.value;
+        const trimmedProxy = (downloadProxy.value ?? "").trim();
+        let fileName = manualDownloadFileName.value.trim();
+        fileName = await Downloader.ensureFileName(url, fileName, {}, trimmedProxy || null);
+
+        if (!fileName) {
+            throw new Error("无法确定文件名，请手动填写。");
+        }
+
+        const options: Record<string, string> = {
+            dir: outputDirectory,
+            out: fileName,
+            split: String(engineSettings.split),
+            "max-connection-per-server": String(
+                engineSettings.maxConnectionPerServer,
+            ),
+            "min-split-size": engineSettings.minSplitSize,
+        };
+
+        if (trimmedProxy) {
+            options["all-proxy"] = trimmedProxy;
+        }
+
+        const gid = await Downloader.addUri([url], options);
+        const now = new Date().toISOString();
+
+        setTaskMeta(gid, {
+            sourceType: "Customize",
+            modTitle: fileName,
+            fileName,
+            downloadUrl: url,
+            createdAt: now,
+            taskStatus: "waiting",
+            updatedAt: now,
+        });
+
+        ElMessage.success(`已添加 ${fileName} 到下载队列。`);
+        showManualDownloadDialog.value = false;
+        manualDownloadUrl.value = "";
+        manualDownloadFileName.value = "";
+        await refreshTaskLists();
+        selectedTaskGid.value = gid;
+    } catch (error: unknown) {
+        ElMessage.error(getErrorMessage(error));
+    } finally {
+        manualDownloadCreating.value = false;
+    }
 }
 
 function openTaskDetail(task: IDownloaderTask) {
@@ -578,25 +648,26 @@ async function ensureDownloadDirectoryReady() {
     return resolvedDownloadDirectory.value;
 }
 
-async function ensureRpcReady() {
+// 内置引擎无需建连：只保证目录存在即 ready（ensureServer 为空实现，保留调用作兼容）。
+async function ensureEngineReady() {
     const outputDirectory = await ensureDownloadDirectoryReady();
 
-    await Downloader.ensureServer(buildRpcEnsureOptions(outputDirectory));
+    await Downloader.ensureServer(buildEngineEnsureOptions(outputDirectory));
 
     return outputDirectory;
 }
 
 async function initializeDownloadPage() {
     try {
-        rpcState.value = "starting";
-        rpcErrorMessage.value = "";
+        tasksLoading.value = true;
+        tasksErrorMessage.value = "";
         await hydrateCachedTaskLists();
-        await ensureRpcReady();
-        rpcState.value = "ready";
+        await ensureEngineReady();
         await refreshTaskLists();
     } catch (error: unknown) {
-        rpcState.value = "error";
-        rpcErrorMessage.value = getErrorMessage(error);
+        tasksErrorMessage.value = getErrorMessage(error);
+    } finally {
+        tasksLoading.value = false;
     }
 }
 
@@ -616,87 +687,6 @@ async function hydrateCachedTaskLists() {
     );
 }
 
-function shouldAutoDownloadFromRoute() {
-    const flag =
-        typeof route.query.autoDownload === "string"
-            ? route.query.autoDownload.trim().toLowerCase()
-            : "";
-
-    return ["1", "true", "yes"].includes(flag);
-}
-
-function getLatestResource(mod?: IMod | null) {
-    return (
-        mod?.mods_resource.find(
-            (resource) => resource.mods_resource_latest_version,
-        ) ??
-        mod?.mods_resource[0] ??
-        null
-    );
-}
-
-async function clearRouteDownloadIntent(modId: string) {
-    if (
-        typeof route.query.resourceId !== "string" &&
-        typeof route.query.autoDownload !== "string"
-    ) {
-        return;
-    }
-
-    await router.replace({
-        path: route.path,
-        query: modId ? { modId } : {},
-    });
-}
-
-async function handleRouteModIntent() {
-    const modId =
-        typeof route.query.modId === "string"
-            ? extractModId(route.query.modId)
-            : "";
-
-    if (!modId) {
-        return;
-    }
-
-    // showAddModDialog.value = true;
-    modLookupInput.value = modId;
-
-    const mod = await loadModDetail(modId);
-
-    if (!mod || !shouldAutoDownloadFromRoute()) {
-        return;
-    }
-
-    const routeResourceId =
-        typeof route.query.resourceId === "string"
-            ? route.query.resourceId.trim()
-            : "";
-
-    if (!routeResourceId) {
-        return;
-    }
-
-    const resource =
-        routeResourceId === "latest"
-            ? getLatestResource(mod)
-            : (mod.mods_resource.find(
-                  (item) => String(item.id) === routeResourceId,
-              ) ?? null);
-
-    if (!resource) {
-        ElMessage.warning("未找到要下载的资源。");
-        await clearRouteDownloadIntent(modId);
-        return;
-    }
-
-    const result = await addResourceTask(resource);
-
-    if (result.handled) {
-        await clearRouteDownloadIntent(modId);
-    }
-}
-
 async function refreshTaskLists(silent: boolean = false) {
     const currentSequence = ++refreshSequence;
 
@@ -705,7 +695,7 @@ async function refreshTaskLists(silent: boolean = false) {
     }
 
     try {
-        const outputDirectory = await ensureRpcReady();
+        const outputDirectory = await ensureEngineReady();
 
         const [stat, active, waiting, stopped] = await Promise.all([
             Downloader.getGlobalStat(),
@@ -746,8 +736,7 @@ async function refreshTaskLists(silent: boolean = false) {
         activeTasks.value = active;
         waitingTasks.value = waiting;
         stoppedTasks.value = displayedStoppedTasks;
-        rpcState.value = "ready";
-        rpcErrorMessage.value = "";
+        tasksErrorMessage.value = "";
 
         if (!hasCompletedInitialTaskSync) {
             hasCompletedInitialTaskSync = true;
@@ -765,8 +754,7 @@ async function refreshTaskLists(silent: boolean = false) {
             return;
         }
 
-        rpcState.value = "error";
-        rpcErrorMessage.value = getErrorMessage(error);
+        tasksErrorMessage.value = getErrorMessage(error);
     } finally {
         if (!silent && currentSequence === refreshSequence) {
             refreshingTasks.value = false;
@@ -786,7 +774,8 @@ async function selectDownloadDirectory() {
     }
 
     downloadDirectory.value = selected;
-    await restartDownloaderService("下载目录已更新。");
+    await refreshTaskLists();
+    ElMessage.success("下载目录已更新。");
 }
 
 async function openDownloadDirectory() {
@@ -794,38 +783,16 @@ async function openDownloadDirectory() {
     await FileHandler.openFolder(directory);
 }
 
-async function restartDownloaderService(successMessage?: string) {
-    try {
-        rpcState.value = "starting";
-        rpcErrorMessage.value = "";
-
-        const outputDirectory = await ensureDownloadDirectoryReady();
-        await Downloader.restartServer(buildRpcEnsureOptions(outputDirectory));
-
-        rpcState.value = "ready";
-        await refreshTaskLists();
-
-        if (successMessage) {
-            ElMessage.success(successMessage);
-        }
-    } catch (error: unknown) {
-        rpcState.value = "error";
-        rpcErrorMessage.value = getErrorMessage(error);
-        ElMessage.error(rpcErrorMessage.value);
-    }
-}
-
 async function saveDownloaderSettings() {
+    // 内置引擎无服务端：保存即对后续新建任务生效，无需重启。
     downloaderSettings.value = Downloader.normalizeSettings(downloaderSettingsDraft.value);
     downloadProxy.value = (downloadProxyDraft.value ?? "").trim();
     showDownloaderSettingsDialog.value = false;
-
-    await restartDownloaderService("下载配置已保存。");
+    ElMessage.success("下载配置已保存，对后续新建任务生效。");
 }
 
 async function loadModDetail(explicitModId?: string): Promise<IMod | null> {
     const modId = explicitModId ?? extractModId(modLookupInput.value);
-
     if (!modId) {
         modLookupError.value = "请输入有效的 3DM Mod ID 或详情链接。";
         selectedMod.value = null;
@@ -1400,8 +1367,8 @@ async function createResourceTask(resource: IResource, outputFileName: string) {
     addingResourceKey.value = resourceKey;
 
     try {
-        const outputDirectory = await ensureRpcReady();
-        const settings = normalizedDownloaderSettings.value;
+        const outputDirectory = await ensureEngineReady();
+        const engineSettings = normalizedDownloaderSettings.value;
         const trimmedProxy = (downloadProxy.value ?? "").trim();
         // 本地名缺后缀时从服务器探测补全，失败回退原名。
         outputFileName = await Downloader.ensureFileName(
@@ -1417,13 +1384,11 @@ async function createResourceTask(resource: IResource, outputFileName: string) {
         const options: Record<string, string> = {
             dir: outputDirectory,
             out: outputFileName,
-            continue: "true",
-            "allow-overwrite": "true",
-            split: String(settings.split),
+            split: String(engineSettings.split),
             "max-connection-per-server": String(
-                settings.maxConnectionPerServer,
+                engineSettings.maxConnectionPerServer,
             ),
-            "min-split-size": settings.minSplitSize,
+            "min-split-size": engineSettings.minSplitSize,
             referer: `${GLOSS_MOD_WEB_BASE_URL}/mod/${selectedMod.value.id}`,
             "user-agent":
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -1622,20 +1587,18 @@ async function retryTask(task: IDownloaderTask) {
             throw new Error("当前任务没有可重试的下载地址。");
         }
 
-        const outputDirectory = task.dir || (await ensureRpcReady());
-        const settings = normalizedDownloaderSettings.value;
+        const outputDirectory = task.dir || (await ensureEngineReady());
+        const engineSettings = normalizedDownloaderSettings.value;
         const trimmedProxy = (downloadProxy.value ?? "").trim();
         const metadata = taskMetaMap.value[task.gid] ?? null;
         const options: Record<string, string> = {
             dir: outputDirectory,
             out: getTaskOutputFileName(task),
-            continue: "true",
-            "allow-overwrite": "true",
-            split: String(settings.split),
+            split: String(engineSettings.split),
             "max-connection-per-server": String(
-                settings.maxConnectionPerServer,
+                engineSettings.maxConnectionPerServer,
             ),
-            "min-split-size": settings.minSplitSize,
+            "min-split-size": engineSettings.minSplitSize,
             referer:
                 metadata?.sourceUrl ||
                 (metadata?.modId
@@ -2075,31 +2038,21 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                     <div class="space-y-2">
                         <CardTitle class="flex flex-wrap items-center gap-3">
                             <h1 class="text-2xl">下载中心</h1>
+                            <Badge variant="outline" class="rounded-full">
+                                内置引擎
+                            </Badge>
                         </CardTitle>
+                        <CardDescription>
+                            总速 {{ formatSpeed(globalStat.downloadSpeed) }} ·
+                            进行 {{ globalStat.numActive }} · 等待
+                            {{ globalStat.numWaiting }} · 已结束
+                            {{ globalStat.numStopped }}
+                        </CardDescription>
                     </div>
-                    <Badge
-                        class="rounded-full"
-                        :class="
-                            getTaskStatusClass(
-                                rpcState === 'ready'
-                                    ? 'active'
-                                    : rpcState === 'error'
-                                      ? 'error'
-                                      : 'waiting',
-                            )
-                        "
-                        variant="outline"
-                    >
-                        {{
-                            rpcState === "ready"
-                                ? "服务已连接"
-                                : rpcState === "starting"
-                                  ? "服务启动中"
-                                  : rpcState === "error"
-                                    ? "服务异常"
-                                    : "等待启动"
-                        }}
-                    </Badge>
+                    <Button size="sm" @click="openManualDownloadDialog">
+                        <IconPlus />
+                        新建下载
+                    </Button>
                 </div>
             </CardHeader>
             <CardContent class="flex flex-col gap-4">
@@ -2116,14 +2069,6 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                     >
                         <IconSettings2 />
                         下载设置
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        @click="restartDownloaderService()"
-                    >
-                        <IconRefreshCw />
-                        重启下载服务
                     </Button>
                     <Button
                         variant="outline"
@@ -2155,10 +2100,10 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                 </div>
 
                 <div
-                    v-if="rpcErrorMessage"
+                    v-if="tasksErrorMessage"
                     class="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
                 >
-                    {{ rpcErrorMessage }}
+                    {{ tasksErrorMessage }}
                 </div>
             </CardContent>
         </Card>
@@ -2169,7 +2114,7 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                     class="flex flex-wrap items-center justify-between gap-3"
                 >
                     <span
-                        >下载任务列表
+                        >下载任务
                         <Badge variant="outline" class="rounded-full ml-4">
                             {{ formatSpeed(globalStat.downloadSpeed) }}
                         </Badge>
@@ -2180,11 +2125,11 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                         @click="purgeStoppedTasks"
                     >
                         <IconTrash2 />
-                        清理记录和文件
+                        清理已结束
                     </Button>
                 </CardTitle>
                 <CardDescription>
-                    列表用于管理下载队列，详情改为弹窗查看。
+                    内置引擎任务：暂停即中止、可断点续传；失败任务保留错误信息，可重试。
                 </CardDescription>
             </CardHeader>
             <CardContent class="flex flex-col gap-4">
@@ -2238,8 +2183,8 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                 >
                     <div class="text-base font-medium">当前没有任务</div>
                     <p class="mt-2 text-sm leading-6 text-muted-foreground">
-                        通过顶部“添加
-                        Mod”弹窗读取资源后，下载任务会直接出现在这里。
+                        点顶部“新建下载”粘贴直链，或通过“添加
+                        Mod”从 3DM 资源建任务，这里会实时显示进度。
                     </p>
                 </div>
 
@@ -2312,8 +2257,8 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                                         }}</span
                                     >
                                     <span
-                                        >连接：{{
-                                            formatNumber(task.connections)
+                                        >分片：{{
+                                            normalizedDownloaderSettings.split
                                         }}</span
                                     >
                                     <span v-if="task.errorMessage"
@@ -2787,65 +2732,62 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
             </DialogScrollContent>
         </Dialog>
 
+        <Dialog v-model:open="showManualDownloadDialog" modal>
+            <DialogContent class="sm:max-w-lg">
+                <DialogHeader>
+                    <DialogTitle>新建下载</DialogTitle>
+                    <DialogDescription>
+                        粘贴直链即建任务；文件名留空时从服务器探测补全。
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div class="grid gap-4">
+                    <div class="grid gap-2">
+                        <Label for="manual-download-url">下载链接</Label>
+                        <Input
+                            id="manual-download-url"
+                            v-model="manualDownloadUrl"
+                            placeholder="https://…"
+                        />
+                    </div>
+                    <div class="grid gap-2">
+                        <Label for="manual-download-name">文件名（可选）</Label>
+                        <Input
+                            id="manual-download-name"
+                            v-model="manualDownloadFileName"
+                            placeholder="留空则从服务器探测"
+                        />
+                    </div>
+                </div>
+
+                <DialogFooter>
+                    <Button
+                        variant="outline"
+                        @click="showManualDownloadDialog = false"
+                    >
+                        取消
+                    </Button>
+                    <Button
+                        :disabled="manualDownloadCreating"
+                        @click="createManualDownloadTask"
+                    >
+                        {{ manualDownloadCreating ? "添加中" : "开始下载" }}
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
+        </Dialog>
+
         <Dialog v-model:open="showDownloaderSettingsDialog" modal>
             <DialogContent class="sm:max-w-2xl">
                 <DialogHeader>
                     <DialogTitle>下载设置</DialogTitle>
                     <DialogDescription>
-                        修改后会立即重启下载服务，并对后续任务生效。
+                        内置引擎常驻进程内，无需连接服务；保存后对后续新建任务生效。并发上限固定为
+                        5。
                     </DialogDescription>
                 </DialogHeader>
 
                 <div class="grid gap-4 sm:grid-cols-2">
-                    <div
-                        class="flex items-center justify-between rounded-xl border px-4 py-3 sm:col-span-2"
-                    >
-                        <div>
-                            <div class="text-sm font-medium">
-                                启动时自动启动下载服务
-                            </div>
-                            <div class="mt-1 text-xs text-muted-foreground">
-                                开启后，程序启动时会自动拉起下载服务。
-                            </div>
-                        </div>
-                        <Switch v-model="downloaderSettingsDraft.autoStart" />
-                    </div>
-
-                    <div class="grid gap-2">
-                        <Label for="download-rpc-port">RPC 端口</Label>
-                        <Input
-                            id="download-rpc-port"
-                            v-model.number="downloaderSettingsDraft.rpcPort"
-                            type="number"
-                            min="1"
-                        />
-                    </div>
-
-                    <div class="grid gap-2">
-                        <Label for="download-rpc-secret">RPC 密钥</Label>
-                        <Input
-                            id="download-rpc-secret"
-                            v-model="downloaderSettingsDraft.rpcSecret"
-                        />
-                    </div>
-
-                    <div class="grid gap-2">
-                        <Label for="download-max-concurrent">最大并发任务</Label>
-                        <Input
-                            id="download-max-concurrent"
-                            v-model.number="
-                                downloaderSettingsDraft.maxConcurrentDownloads
-                            "
-                            type="number"
-                            min="5"
-                            max="5"
-                            disabled
-                        />
-                        <div class="text-xs text-muted-foreground">
-                            为降低源站返回 503 的概率，同时下载任务已固定为 5。
-                        </div>
-                    </div>
-
                     <div class="grid gap-2">
                         <Label for="download-split">单任务分片数</Label>
                         <Input
@@ -2894,7 +2836,7 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                     >
                         取消
                     </Button>
-                    <Button @click="saveDownloaderSettings"> 保存并重启 </Button>
+                    <Button @click="saveDownloaderSettings"> 保存 </Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>

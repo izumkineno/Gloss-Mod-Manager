@@ -20,9 +20,7 @@ export interface IDownloaderTask {
     status: string;
     totalLength?: string;
     completedLength?: string;
-    uploadLength?: string;
     downloadSpeed?: string;
-    uploadSpeed?: string;
     connections?: string;
     numSeeders?: string;
     dir?: string;
@@ -40,7 +38,6 @@ export interface IDownloaderTask {
 
 export interface IDownloaderGlobalStat {
     downloadSpeed: string;
-    uploadSpeed: string;
     numActive: string;
     numWaiting: string;
     numStopped: string;
@@ -48,19 +45,13 @@ export interface IDownloaderGlobalStat {
 
 export interface IDownloaderEnsureOptions {
     outputDirectory?: string;
-    listenPort?: number;
-    secret?: string;
-    maxConcurrentDownloads?: number;
     split?: number;
     maxConnectionPerServer?: number;
     minSplitSize?: string;
 }
 
+// 内置进程内下载器：无 RPC、无上传、无服务端；仅保留真实生效的分片参数。
 export interface IDownloaderSettings {
-    autoStart: boolean;
-    rpcPort: number;
-    rpcSecret: string;
-    maxConcurrentDownloads: number;
     split: number;
     maxConnectionPerServer: number;
     minSplitSize: string;

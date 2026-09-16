@@ -165,6 +165,8 @@ const lang = {
         pin: "置顶到顶部",
         unpin: "取消置顶",
         pinTabs: "置顶 Tab 到顶部",
+        collapse: "折叠侧边栏",
+        expand: "展开侧边栏",
     },
     home: {
         welcome: "欢迎使用 Gloss Mod Manager，在这里你可以快速管理 Mod。",

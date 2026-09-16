@@ -23,6 +23,8 @@ const lang = {
         pin: "Fixar no topo",
         unpin: "Desafixar",
         pinTabs: "Fixar abas no topo",
+        collapse: "Recolher barra lateral",
+        expand: "Expandir barra lateral",
     },
     home: {
         welcome:

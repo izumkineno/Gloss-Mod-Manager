@@ -1453,15 +1453,6 @@ async function handleToolCall(
                     apiKey: settings.glossModKey,
                 });
 
-                if (
-                    result.status === "created" ||
-                    result.status === "resumed" ||
-                    result.status === "retried" ||
-                    result.status === "exists"
-                ) {
-                    await router.push("/download");
-                }
-
                 return createToolResult({
                     state: true,
                     status: result.status,

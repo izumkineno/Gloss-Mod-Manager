@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useRoute } from "vue-router";
-import { Pin, PinOff } from "lucide-vue-next";
+import { ChevronsLeft, ChevronsRight, Pin, PinOff } from "lucide-vue-next";
 import { NAV_BOTTOM_ITEMS, NAV_ITEMS } from "@/lib/nav-items";
 import { useSettings } from "@/stores/settings";
 import { cn } from "@/lib/utils";
@@ -32,8 +32,20 @@ function linkClass(active: boolean) {
 
 <template>
     <aside
-        class="flex w-16 md:w-40 flex-col border-r border-border bg-sidebar/50 backdrop-blur-xl transition-all duration-300"
+        class="flex flex-col border-r border-border bg-sidebar/50 backdrop-blur-xl transition-all duration-300"
+        :class="settings.sidebarCollapsed ? 'w-16' : 'w-40'"
     >
+        <!-- 折叠开关：置顶，始终可见 -->
+        <div class="flex px-3 pt-3" :class="settings.sidebarCollapsed ? 'justify-center' : 'justify-end'">
+            <button
+                class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                :title="$t(settings.sidebarCollapsed ? 'nav.expand' : 'nav.collapse')"
+                @click="settings.sidebarCollapsed = !settings.sidebarCollapsed"
+            >
+                <ChevronsRight v-if="settings.sidebarCollapsed" class="h-4 w-4" />
+                <ChevronsLeft v-else class="h-4 w-4" />
+            </button>
+        </div>
         <div class="flex-1 overflow-auto py-4 flex flex-col gap-1 px-3">
             <div
                 v-for="item in NAV_ITEMS"
@@ -43,10 +55,11 @@ function linkClass(active: boolean) {
                 <router-link
                     :to="item.path"
                     :class="linkClass(route.path === item.path)"
+                    :title="settings.sidebarCollapsed ? $t(item.labelKey) : undefined"
                     @contextmenu.prevent="togglePin(item.path)"
                 >
                     <component :is="item.icon" class="h-5 w-5 shrink-0" />
-                    <span class="hidden md:inline-block">{{
+                    <span v-if="!settings.sidebarCollapsed">{{
                         $t(item.labelKey)
                     }}</span>
 
@@ -76,10 +89,11 @@ function linkClass(active: boolean) {
                 <router-link
                     :to="item.path"
                     :class="linkClass(route.path === item.path)"
+                    :title="settings.sidebarCollapsed ? $t(item.labelKey) : undefined"
                     @contextmenu.prevent="togglePin(item.path)"
                 >
                     <component :is="item.icon" class="h-5 w-5 shrink-0" />
-                    <span class="hidden md:inline-block">{{
+                    <span v-if="!settings.sidebarCollapsed">{{
                         $t(item.labelKey)
                     }}</span>
                 </router-link>

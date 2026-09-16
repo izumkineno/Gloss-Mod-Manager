@@ -23,6 +23,8 @@ const lang = {
         pin: "An oben anheften",
         unpin: "Lösen",
         pinTabs: "Tabs oben anheften",
+        collapse: "Seitenleiste einklappen",
+        expand: "Seitenleiste ausklappen",
     },
     home: {
         welcome:

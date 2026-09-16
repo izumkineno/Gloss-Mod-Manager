@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref } from "vue";
+import { computed, defineAsyncComponent, inject, ref, watch, type Ref } from "vue";
 import { useRoute } from "vue-router";
 import { LayoutGrid, Pin, PinOff } from "lucide-vue-next";
 import { PINNABLE_TABS, type INavItem } from "@/lib/nav-items";
@@ -39,6 +39,11 @@ const settings = useSettings();
 // 选择器浮窗开关；内容 popup 每图标独立 open 状态。
 const pickerOpen = ref(false);
 const activePopupPath = ref<string | null>(null);
+// 主页面遮罩由 Layout 提供：popup 打开时只压暗内容区。
+const pinnedPopupOpen = inject<Ref<boolean>>("pinnedPopupOpen", ref(false));
+watch(activePopupPath, (path) => {
+    pinnedPopupOpen.value = path !== null;
+});
 
 const pinnedItems = computed<INavItem[]>(() => {
     const order = new Map(
@@ -95,12 +100,12 @@ function togglePin(path: string) {
                     </Button>
                 </PopoverTrigger>
             </div>
-            <!-- 浮层：中等尺寸，强阴影拉开层次 -->
+            <!-- popup 自带毛玻璃 + 柔影，遮罩只压主页面（见 Layout） -->
             <PopoverContent
                 align="start"
                 side="bottom"
-                :side-offset="8"
-                class="h-[62vh] w-[52vw] min-w-105 overflow-auto rounded-xl border-border/60 p-5 shadow-2xl shadow-black/40 ring-1 ring-black/20"
+                :side-offset="12"
+                class="z-50 h-[62vh] w-[52vw] min-w-105 overflow-auto rounded-2xl border-white/20 bg-white/75 p-5 shadow-[0_32px_80px_-16px_rgba(0,0,0,0.35)] backdrop-blur-2xl dark:border-white/10 dark:bg-neutral-900/70 dark:shadow-[0_32px_80px_-16px_rgba(0,0,0,0.7)]"
             >
                 <component
                     :is="PAGE_COMPONENTS[item.path]"

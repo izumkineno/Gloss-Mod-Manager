@@ -315,7 +315,6 @@ async function handleGmmInstallmodIntent(
         await ensureManagerGame({ gameName: mod.game_name });
     }
 
-    await navigateTo("/download");
     const result = await queueGlossModDownloadWithSelection({
         mod,
         modId: mod.id,
@@ -332,7 +331,6 @@ async function handleGmmInstallmodIntent(
 async function handleGmmCustomizeIntent(
     intent: Extract<TParsedLaunchIntent, { type: "gmm-customize" }>,
 ) {
-    await navigateTo("/download");
     const result = await queueCustomDownload({
         downloadUrl: intent.downloadUrl,
         fileName: intent.fileName,
@@ -408,8 +406,6 @@ async function handleNxmIntent(
         ElMessage.warning("当前未找到与该 NXM 链接对应的游戏配置。");
         return;
     }
-
-    await navigateTo("/download");
 
     try {
         const mod = await fetchThirdPartyModDetail(

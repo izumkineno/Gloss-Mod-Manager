@@ -29,6 +29,8 @@ const lang = {
         pin: "Pin to top",
         unpin: "Unpin",
         pinTabs: "Pin tabs to top",
+        collapse: "Collapse sidebar",
+        expand: "Expand sidebar",
     },
     home: {
         welcome:

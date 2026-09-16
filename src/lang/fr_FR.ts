@@ -23,6 +23,8 @@ const lang = {
         pin: "Épingler en haut",
         unpin: "Désépingler",
         pinTabs: "Épingler des onglets en haut",
+        collapse: "Réduire la barre latérale",
+        expand: "Déployer la barre latérale",
     },
     home: {
         welcome:

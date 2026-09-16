@@ -251,26 +251,11 @@ async function loadModDetail(modId: string) {
     }
 }
 
-async function openDownloadPage(
-    resource?: IResource | null,
-    autoDownload = false,
-) {
-    if (!routeModId.value) {
-        ElMessage.warning("当前没有可用的 Mod 详情。");
-        return;
-    }
-
+async function openDownloadPage() {
+    // 不再自动跳转建任务：下载页不再消费 modId/resourceId/autoDownload 参数，
+    // 这里只做路由跳转，用户到下载页自行操作。
     try {
-        await router.push({
-            path: "/download",
-            query: {
-                modId: routeModId.value,
-                ...(resource
-                    ? { resourceId: String(resource.id ?? "latest") }
-                    : {}),
-                ...(autoDownload ? { autoDownload: "1" } : {}),
-            },
-        });
+        await router.push({ path: "/download" });
     } catch (error: unknown) {
         console.error(error);
         ElMessage.error("打开下载页失败。");
@@ -675,7 +660,7 @@ async function goBackToExplore() {
                                     <Button
                                         size="sm"
                                         variant="outline"
-                                        @click="openDownloadPage(resource)"
+                                        @click="openDownloadPage()"
                                     >
                                         <IconPanelRightOpen class="size-4" />
                                         下载页

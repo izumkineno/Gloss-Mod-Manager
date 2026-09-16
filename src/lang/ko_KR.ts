@@ -23,6 +23,8 @@ const lang = {
         pin: "상단에 고정",
         unpin: "고정 해제",
         pinTabs: "탭을 상단에 고정",
+        collapse: "사이드바 접기",
+        expand: "사이드바 펼치기",
     },
     home: {
         welcome:

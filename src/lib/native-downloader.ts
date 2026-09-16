@@ -13,10 +13,6 @@ import type {
 export class Downloader {
     public static getDefaultSettings(): IDownloaderSettings {
         return {
-            autoStart: true,
-            rpcPort: 6800,
-            rpcSecret: "gloss-mod-manager",
-            maxConcurrentDownloads: 5,
             split: 8,
             maxConnectionPerServer: 8,
             minSplitSize: "1M",
@@ -29,15 +25,6 @@ export class Downloader {
         const defaults = Downloader.getDefaultSettings();
 
         return {
-            autoStart: settings.autoStart ?? defaults.autoStart,
-            rpcPort: Math.max(
-                1,
-                Math.round(settings.rpcPort ?? defaults.rpcPort),
-            ),
-            rpcSecret:
-                (settings.rpcSecret ?? defaults.rpcSecret).trim() ||
-                defaults.rpcSecret,
-            maxConcurrentDownloads: 5,
             split: Math.max(1, Math.round(settings.split ?? defaults.split)),
             maxConnectionPerServer: Math.max(
                 1,
@@ -55,7 +42,7 @@ export class Downloader {
     public static async getStoredSettings() {
         const settings = await PersistentStore.get<
             Partial<IDownloaderSettings>
-        >("aria2Settings", Downloader.getDefaultSettings());
+        >("nativeDownloaderSettings", Downloader.getDefaultSettings());
 
         return Downloader.normalizeSettings(settings ?? undefined);
     }

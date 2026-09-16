@@ -108,6 +108,8 @@ export const useSettings = defineStore("Settings", () => {
     );
     // 顶部快捷入口置顶的 tab 路径（按置顶顺序存 path 数组）。
     const pinnedTabs = PersistentStore.useValue<string[]>("pinnedTabs", []);
+    // 侧边栏折叠（手动开关，替代响应式断点）。
+    const sidebarCollapsed = PersistentStore.useValue<boolean>("sidebarCollapsed", false);
     const mcpToolsEnabled = PersistentStore.useValue<boolean>(
         "mcpToolsEnabled",
         true,
@@ -363,6 +365,7 @@ export const useSettings = defineStore("Settings", () => {
         closeSoftLinks,
         managerGridEnabled,
         pinnedTabs,
+        sidebarCollapsed,
         mcpToolsEnabled,
         mcpToolItemEnabledMap,
         mcpResourcesEnabled,

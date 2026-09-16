@@ -23,6 +23,8 @@ const lang = {
         pin: "上部に固定",
         unpin: "固定解除",
         pinTabs: "タブを上部に固定",
+        collapse: "サイドバーを折りたたむ",
+        expand: "サイドバーを展開する",
     },
     home: {
         welcome:

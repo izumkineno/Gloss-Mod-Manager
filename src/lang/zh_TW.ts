@@ -23,6 +23,8 @@ const lang = {
         pin: "置頂到頂部",
         unpin: "取消置頂",
         pinTabs: "置頂 Tab 到頂部",
+        collapse: "收合側邊欄",
+        expand: "展開側邊欄",
     },
     home: {
         welcome: "歡迎使用 Gloss Mod Manager，在這裡你可以快速管理 Mod。",
