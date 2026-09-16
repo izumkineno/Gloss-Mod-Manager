@@ -119,7 +119,12 @@
   }
 }
 
-
+ @utility no-scrollbar {
+     scrollbar-width: none;
+     &::-webkit-scrollbar {
+         display: none;
+     }
+ }
 body{
   user-select: none;
 }

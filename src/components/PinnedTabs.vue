@@ -64,8 +64,19 @@ function togglePin(path: string) {
     if (!isPinned(path)) {
         next.push(path);
     }
-
     settings.pinnedTabs = next;
+}
+// 内层 Dialog/Dropdown/Select 全 portal 到 body，点击它们会触发外层
+// Popover 的 outside-close。有 overlay 存活时拦下关闭事件，popup 保持打开。
+function guardPopupOutside(event: Event) {
+    const target = event.target as HTMLElement | null;
+    if (
+        target?.closest(
+            '[data-slot="dialog-overlay"], [data-slot="dialog-content"], [data-slot="dropdown-menu-content"], [data-slot="select-content"], [data-slot="popover-content"]',
+        )
+    ) {
+        event.preventDefault();
+    }
 }
 </script>
 
@@ -102,10 +113,12 @@ function togglePin(path: string) {
             </div>
             <!-- popup 自带毛玻璃 + 柔影，遮罩只压主页面（见 Layout） -->
             <PopoverContent
-                align="start"
+                align="center"
                 side="bottom"
                 :side-offset="12"
-                class="z-50 h-[62vh] w-[52vw] min-w-105 overflow-auto rounded-2xl border-white/20 bg-white/75 p-5 shadow-[0_32px_80px_-16px_rgba(0,0,0,0.35)] backdrop-blur-2xl dark:border-white/10 dark:bg-neutral-900/70 dark:shadow-[0_32px_80px_-16px_rgba(0,0,0,0.7)]"
+                class="page-popup z-50 h-[62vh] max-h-[calc(100vh-6rem)] w-[min(52vw,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] overflow-auto rounded-2xl border-white/20 bg-white/75 p-3 shadow-[0_32px_80px_-16px_rgba(0,0,0,0.35)] backdrop-blur-2xl sm:p-5 dark:border-white/10 dark:bg-neutral-900/70 dark:shadow-[0_32px_80px_-16px_rgba(0,0,0,0.7)]"
+                @pointer-down-outside="guardPopupOutside"
+                @interact-outside="guardPopupOutside"
             >
                 <component
                     :is="PAGE_COMPONENTS[item.path]"
@@ -158,3 +171,52 @@ function togglePin(path: string) {
         </Dialog>
     </div>
 </template>
+ <style>
+ /* popup 内容 portal 到 body，scoped :deep 够不着，放全局 */
+ .page-popup {
+     container-type: inline-size;
+ }
+ .page-popup .mx-auto {
+     max-width: none;
+ }
+ /* ai-chat：视口定高在小框内会撑爆，改为框内自适应 */
+ .page-popup .h-\[calc\(100vh-3rem\)\] {
+     height: auto;
+     min-height: 50vh;
+ }
+ /* manager 宽表：允许横滚，不把 popup 撑爆 */
+ .page-popup table {
+     min-width: 640px;
+ }
+ /* popup 窄框：多列网格统一收成 2 列 / 单列 */
+ .page-popup .grid-cols-4,
+ .page-popup .sm\:grid-cols-3,
+ .page-popup .xl\:grid-cols-4 {
+     grid-template-columns: repeat(2, minmax(0, 1fr));
+ }
+ .page-popup .grid-cols-3,
+ .page-popup .sm\:grid-cols-2,
+ .page-popup .md\:grid-cols-2,
+ .page-popup .lg\:grid-cols-3,
+ .page-popup .lg\:grid-cols-\[minmax\(0\,1fr\)_minmax\(0\,0\.85fr\)\],
+ .page-popup .lg\:grid-cols-\[minmax\(0\,0\.85fr\)_minmax\(0\,1\.15fr\)\],
+ .page-popup .xl\:grid-cols-\[minmax\(0\,1fr\)_22rem\],
+ .page-popup .xl\:grid-cols-\[minmax\(0\,1\.1fr\)_minmax\(0\,0\.9fr\)\] {
+     grid-template-columns: minmax(0, 1fr);
+ }
+ /* popup 窄框：横向 flex 行改纵排 */
+ .page-popup .lg\:flex-row {
+     flex-direction: column;
+     align-items: stretch;
+ }
+ /* popup 窄框：输入组不撑宽，input 可收缩 */
+ .page-popup [data-slot="input-group"] {
+     min-width: 0;
+     max-width: 100%;
+ }
+ .page-popup [data-slot="input-group-control"] {
+     min-width: 0;
+     width: 0;
+     flex: 1 1 0;
+ }
+ </style>

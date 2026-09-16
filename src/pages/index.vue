@@ -47,7 +47,7 @@ const list = [
                 <CardTitle>{{ $t("home.welcome") }}</CardTitle>
             </CardHeader>
             <CardContent>
-                <div class="flex gap-2">
+                <div class="flex flex-wrap gap-2">
                     <!-- 快捷导航 -->
                     <Button
                         v-for="item in list"
@@ -69,7 +69,7 @@ const list = [
             </CardHeader>
             <CardContent>
                 <div
-                    class="grid grid-cols-3 items-center gap-4 justify-items-center links"
+                    class="grid grid-cols-1 items-center gap-4 justify-items-center sm:grid-cols-2 md:grid-cols-3 links"
                 >
                     <a
                         href="https://mod.3dmgame.com/"
@@ -121,7 +121,7 @@ const list = [
             </CardHeader>
             <CardContent>
                 <div
-                    class="grid grid-cols-4 items-center gap-4 justify-items-center links"
+                    class="grid grid-cols-1 items-center gap-4 justify-items-center sm:grid-cols-2 md:grid-cols-4 links"
                 >
                     <a
                         href="https://one.gloscai.com/"

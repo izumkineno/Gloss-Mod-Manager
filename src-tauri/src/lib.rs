@@ -382,6 +382,12 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_deep_link::init());
+    // 本地调试桥：让 tauri-mcp CLI 能连 webview（截图/点选/读 console）。
+    // 仅 debug 生效，release 不打包。
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    }
 
     builder
         .setup(|app| {

@@ -354,7 +354,7 @@ async function copyVscodeConfig() {
                 <h2>相关视频</h2>
             </CardHeader>
             <CardContent>
-                <div class="w-87 rounded-xl border-rounded-l overflow-hidden">
+                <div class="max-w-full overflow-hidden rounded-xl border">
                     <a
                         href="https://www.bilibili.com/video/BV13K1YBtE6e/"
                         target="_blank"

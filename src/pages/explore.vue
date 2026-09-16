@@ -329,7 +329,7 @@ function handleTranslationLoadingChange(loading: boolean) {
         </header>
 
         <nav
-            class="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1"
+            class="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-1 no-scrollbar"
             :aria-label="$t('explore.common.providerTabs')"
         >
             <button

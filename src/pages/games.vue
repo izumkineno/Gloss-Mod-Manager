@@ -50,7 +50,7 @@ function deleteGame(item: ISupportedGames) {
 <template>
     <Card>
         <CardHeader>
-            <CardTitle class="flex items-center gap-4">
+            <CardTitle class="flex flex-wrap items-center gap-4">
                 {{ t("games.library") }}
                 <div class="flex flex-wrap items-center gap-2">
                     <SelectGame />
@@ -59,7 +59,7 @@ function deleteGame(item: ISupportedGames) {
             </CardTitle>
         </CardHeader>
         <CardContent
-            class="grid grid-cols-4 items-center gap-4 justify-items-center"
+            class="grid grid-cols-1 items-center gap-4 justify-items-center sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
         >
             <div
                 v-for="item in manager.managerGameList"

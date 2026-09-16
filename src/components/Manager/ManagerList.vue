@@ -652,8 +652,8 @@ watch(showSortDialog, (opened) => {
 </script>
 <template>
     <Card>
-        <CardContent class="max-h-[calc(100vh-430px)] overflow-auto">
-            <Table v-if="!managerGridEnabled">
+        <CardContent class="max-h-[calc(100vh-430px)] overflow-auto p-0 sm:p-6">
+            <Table v-if="!managerGridEnabled" class="min-w-[640px]">
                 <TableHeader>
                     <TableRow>
                         <TableHead v-if="manager.selectionMode" class="w-12">
@@ -884,7 +884,7 @@ watch(showSortDialog, (opened) => {
 
             <div
                 v-else
-                class="grid gap-4 py-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+                class="grid grid-cols-1 gap-4 py-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
             >
                 <article
                     v-for="item in manager.filteredMods"

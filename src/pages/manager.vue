@@ -774,49 +774,6 @@ function openGamesPage() {
                                 </DropdownMenuContent>
                             </DropdownMenu>
                             <StartGame :game="manager.managerGame" />
-                            <Button
-                                variant="outline"
-                                @click="manager.loadManagerData()"
-                            >
-                                <RefreshCw class="h-4 w-4" />
-                                刷新
-                            </Button>
-                            <Button
-                                variant="outline"
-                                :disabled="updateChecking"
-                                @click="checkForUpdates"
-                            >
-                                <Download class="h-4 w-4" />
-                                {{ updateChecking ? "检查中…" : "检查更新" }}
-                            </Button>
-                            <Button
-                                :variant="selectionMode ? 'default' : 'outline'"
-                                @click="
-                                    manager.selectionMode =
-                                        !manager.selectionMode
-                                "
-                            >
-                                <CheckSquare class="h-4 w-4" />
-                                多选
-                            </Button>
-                            <Button
-                                :variant="
-                                    managerGridEnabled ? 'default' : 'outline'
-                                "
-                                @click="
-                                    managerGridEnabled = !managerGridEnabled
-                                "
-                            >
-                                <component
-                                    :is="
-                                        managerGridEnabled
-                                            ? ListIcon
-                                            : LayoutGrid
-                                    "
-                                    class="h-4 w-4"
-                                />
-                                {{ managerGridEnabled ? "列表" : "网格" }}
-                            </Button>
                             <DropdownMenu>
                                 <DropdownMenuTrigger>
                                     <Button variant="outline">
@@ -825,9 +782,24 @@ function openGamesPage() {
                                     </Button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end" class="w-56">
-                                    <DropdownMenuItem
-                                        @click="openModRootFolder"
-                                    >
+                                    <DropdownMenuItem @click="manager.loadManagerData()">
+                                        <RefreshCw class="h-4 w-4" />
+                                        刷新
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem :disabled="updateChecking" @click="checkForUpdates">
+                                        <Download class="h-4 w-4" />
+                                        {{ updateChecking ? "检查中…" : "检查更新" }}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem @click="manager.selectionMode = !manager.selectionMode">
+                                        <CheckSquare class="h-4 w-4" />
+                                        多选
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem @click="managerGridEnabled = !managerGridEnabled">
+                                        <component :is="managerGridEnabled ? ListIcon : LayoutGrid" class="h-4 w-4" />
+                                        {{ managerGridEnabled ? "列表" : "网格" }}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem @click="openModRootFolder">
                                         <FolderOpen class="h-4 w-4" />
                                         打开 Mod 目录
                                     </DropdownMenuItem>
@@ -836,16 +808,10 @@ function openGamesPage() {
                                         打开游戏目录
                                     </DropdownMenuItem>
                                     <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                        :disabled="
-                                            !manager.managerModList.length
-                                        "
-                                        @click="openGmmExportDialog"
-                                    >
+                                    <DropdownMenuItem :disabled="!manager.managerModList.length" @click="openGmmExportDialog">
                                         <Upload class="h-4 w-4" />
                                         导出 GMM 包
                                     </DropdownMenuItem>
-                                    <DropdownMenuSeparator />
                                 </DropdownMenuContent>
                             </DropdownMenu>
                         </div>
@@ -859,8 +825,9 @@ function openGamesPage() {
                             </InputGroupAddon>
                         </InputGroup>
                     </div>
-                    <div class="flex flex-wrap items-center gap-2 text-sm">
+                    <div class="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1 text-sm no-scrollbar">
                         <Button
+                            class="shrink-0"
                             :variant="
                                 manager.selectedType === 0
                                     ? 'default'
@@ -872,6 +839,7 @@ function openGamesPage() {
                             全部 ({{ getTypeCount(0) }})
                         </Button>
                         <Button
+                            class="shrink-0"
                             v-for="item in manager.availableTypes"
                             :key="item.id"
                             :variant="
@@ -985,35 +953,35 @@ function openGamesPage() {
                         </DialogDescription>
                     </DialogHeader>
                     <div class="grid gap-3 py-2">
-                        <div class="grid grid-cols-4 items-center gap-3">
-                            <Label class="text-right">作者</Label>
+                        <div class="grid grid-cols-1 items-center gap-3 sm:grid-cols-4">
+                            <Label class="text-left sm:text-right">作者</Label>
                             <Input
                                 v-model="batchEditForm.modAuthor"
-                                class="col-span-3"
+                                class="sm:col-span-3"
                                 placeholder="留空表示不修改"
                             />
                         </div>
-                        <div class="grid grid-cols-4 items-center gap-3">
-                            <Label class="text-right">版本</Label>
+                        <div class="grid grid-cols-1 items-center gap-3 sm:grid-cols-4">
+                            <Label class="text-left sm:text-right">版本</Label>
                             <Input
                                 v-model="batchEditForm.modVersion"
-                                class="col-span-3"
+                                class="sm:col-span-3"
                                 placeholder="留空表示不修改"
                             />
                         </div>
-                        <div class="grid grid-cols-4 items-center gap-3">
-                            <Label class="text-right">网站</Label>
+                        <div class="grid grid-cols-1 items-center gap-3 sm:grid-cols-4">
+                            <Label class="text-left sm:text-right">网站</Label>
                             <Input
                                 v-model="batchEditForm.modWebsite"
-                                class="col-span-3"
+                                class="sm:col-span-3"
                                 placeholder="留空表示不修改"
                             />
                         </div>
-                        <div class="grid grid-cols-4 items-center gap-3">
-                            <Label class="text-right">标签</Label>
+                        <div class="grid grid-cols-1 items-center gap-3 sm:grid-cols-4">
+                            <Label class="text-left sm:text-right">标签</Label>
                             <Input
                                 v-model="batchEditForm.tagsText"
-                                class="col-span-3"
+                                class="sm:col-span-3"
                                 placeholder="逗号分隔，留空表示不修改"
                             />
                         </div>

@@ -545,7 +545,7 @@ async function goBackToExplore() {
 
                     <div
                         v-if="coverImages.length > 1"
-                        class="grid grid-cols-4 gap-2"
+                        class="grid grid-cols-3 gap-2 sm:grid-cols-4"
                     >
                         <div
                             v-for="(item, index) in coverImages.slice(1, 9)"

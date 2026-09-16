@@ -14,7 +14,7 @@ provide("pinnedPopupOpen", pinnedPopupOpen);
             <Sidebar />
             <main class="relative flex flex-1 flex-col min-w-0 bg-background">
                 <div
-                    class="flex-1 overflow-y-auto overflow-x-hidden p-6 scroll-smooth">
+                    class="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6 scroll-smooth">
                     <slot />
                 </div>
                 <!-- 主页面遮罩：popup 打开时压暗内容区，点击关闭 -->

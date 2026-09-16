@@ -68,8 +68,9 @@ function linkClass(active: boolean) {
                         class="absolute left-0 top-1/2 h-1/2 w-1 -translate-y-1/2 rounded-r-full bg-primary"
                     />
                 </router-link>
-                <!-- hover 出现置顶钮；右键同样可切换 -->
+                <!-- 折叠时不出现 hover 置顶钮（w-16 下会盖住图标）；右键照常可用 -->
                 <button
+                    v-if="!settings.sidebarCollapsed"
                     class="absolute right-1 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground/60 hover:bg-accent hover:text-foreground group-hover/item:flex"
                     :title="$t(isPinned(item.path) ? 'nav.unpin' : 'nav.pin')"
                     @click="togglePin(item.path)"
@@ -98,6 +99,7 @@ function linkClass(active: boolean) {
                     }}</span>
                 </router-link>
                 <button
+                    v-if="!settings.sidebarCollapsed"
                     class="absolute right-1 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground/60 hover:bg-accent hover:text-foreground group-hover/item:flex"
                     :title="$t(isPinned(item.path) ? 'nav.unpin' : 'nav.pin')"
                     @click="togglePin(item.path)"

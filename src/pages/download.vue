@@ -2062,41 +2062,33 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                         <IconPlus />
                         添加 Mod
                     </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        @click="openDownloaderSettingsDialog"
-                    >
-                        <IconSettings2 />
-                        下载设置
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        @click="selectDownloadDirectory"
-                    >
-                        <IconFolderSearch />
-                        选择下载目录
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        @click="openDownloadDirectory"
-                    >
-                        <IconFolderOpen />
-                        打开目录
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        :disabled="refreshingTasks"
-                        @click="refreshTaskLists()"
-                    >
-                        <IconRefreshCw
-                            :class="refreshingTasks ? 'animate-spin' : ''"
-                        />
-                        刷新任务
-                    </Button>
+                    <DropdownMenu>
+                        <DropdownMenuTrigger as-child>
+                            <Button variant="outline" size="sm">
+                                <IconMenu />
+                                更多
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" class="w-56">
+                            <DropdownMenuItem @click="openDownloaderSettingsDialog">
+                                <IconSettings2 />
+                                下载设置
+                            </DropdownMenuItem>
+                            <DropdownMenuItem @click="selectDownloadDirectory">
+                                <IconFolderSearch />
+                                选择下载目录
+                            </DropdownMenuItem>
+                            <DropdownMenuItem @click="openDownloadDirectory">
+                                <IconFolderOpen />
+                                打开目录
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem :disabled="refreshingTasks" @click="refreshTaskLists()">
+                                <IconRefreshCw :class="refreshingTasks ? 'animate-spin' : ''" />
+                                刷新任务
+                            </DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
                 </div>
 
                 <div
@@ -2520,7 +2512,7 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                             </div>
 
                             <div
-                                class="grid grid-cols-3 gap-3 text-center text-xs"
+                                class="grid grid-cols-3 gap-2 text-center text-xs sm:gap-3"
                             >
                                 <div class="rounded-xl bg-muted/40 px-3 py-3">
                                     <div class="text-muted-foreground">

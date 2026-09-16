@@ -6,6 +6,7 @@
     "permissions": [
         "core:default",
         "core:app:allow-default-window-icon",
+        "mcp-bridge:default",
         "opener:default",
         "notification:default",
         "os:default",

@@ -133,9 +133,9 @@ watch(
                         </CardTitle>
                     </CardHeader>
                     <CardContent class="flex flex-col gap-8">
-                        <div class="grid grid-cols-4 items-center gap-8">
+                        <div class="grid grid-cols-1 items-center gap-4 sm:grid-cols-2 sm:gap-6 xl:grid-cols-4 xl:gap-8">
                             <!-- 这个站两格 -->
-                            <div class="col-span-2 items-center">
+                            <div class="col-span-1 items-center sm:col-span-2">
                                 <InputGroup>
                                     <InputGroupInput
                                         id="storage-path"
@@ -161,7 +161,7 @@ watch(
                                     </InputGroupAddon>
                                 </InputGroup>
                             </div>
-                            <div class="flex gap-2 items-center">
+                            <div class="flex w-full items-center justify-between gap-2">
                                 <Label
                                     for="theme-model"
                                     class="text-sm font-medium"
@@ -188,7 +188,7 @@ watch(
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <div class="flex gap-2 items-center">
+                            <div class="flex w-full items-center justify-between gap-2">
                                 <Label
                                     for="language-model"
                                     class="text-sm font-medium"
@@ -216,7 +216,7 @@ watch(
                                     </SelectContent>
                                 </Select>
                             </div>
-                            <div class="flex gap-2 items-center">
+                            <div class="flex w-full items-center justify-between gap-2">
                                 <Label
                                     for="default-start-page"
                                     class="text-sm font-medium"
@@ -247,8 +247,8 @@ watch(
                                 </Select>
                             </div>
                         </div>
-                        <div class="grid grid-cols-4 items-center gap-8">
-                            <div class="flex gap-2 items-center">
+                        <div class="grid grid-cols-1 items-center gap-4 sm:grid-cols-2 sm:gap-6 xl:grid-cols-4 xl:gap-8">
+                            <div class="flex w-full items-center justify-between gap-2">
                                 <Label for="auto-add-after-download">{{
                                     t("settings.autoAddAfterDownload")
                                 }}</Label>
@@ -257,7 +257,7 @@ watch(
                                     v-model="autoAddAfterDownload"
                                 />
                             </div>
-                            <div class="flex gap-2 items-center">
+                            <div class="flex w-full items-center justify-between gap-2">
                                 <Label for="select-game-by-folder">{{
                                     t("settings.selectGameByFolder")
                                 }}</Label>
@@ -266,7 +266,7 @@ watch(
                                     v-model="selectGameByFolder"
                                 />
                             </div>
-                            <div class="flex gap-2 items-center">
+                            <div class="flex w-full items-center justify-between gap-2">
                                 <Label for="auto-start">{{
                                     t("settings.autoStart")
                                 }}</Label>
@@ -276,7 +276,7 @@ watch(
                                     :disabled="autoStartLoading"
                                 />
                             </div>
-                            <div class="flex gap-2 items-center">
+                            <div class="flex w-full items-center justify-between gap-2">
                                 <Label for="modifiable-during-game">{{
                                     t("settings.modifiableDuringGame")
                                 }}</Label>
@@ -285,7 +285,7 @@ watch(
                                     v-model="modifiableDuringGame"
                                 />
                             </div>
-                            <div class="flex gap-2 items-center">
+                            <div class="flex w-full items-center justify-between gap-2">
                                 <Label for="show-preload-list">{{
                                     t("settings.showPreloadList")
                                 }}</Label>
@@ -294,7 +294,7 @@ watch(
                                     v-model="showPreloadList"
                                 />
                             </div>
-                            <div class="flex gap-2 items-center">
+                            <div class="flex w-full items-center justify-between gap-2">
                                 <Label for="disable-symlink-install">{{
                                     t("settings.closeSoftLinks")
                                 }}</Label>
@@ -313,8 +313,8 @@ watch(
                         </CardTitle>
                     </CardHeader>
                     <CardContent class="flex flex-col gap-4">
-                        <div class="grid grid-cols-3 items-center gap-4">
-                            <div class="flex items-center">
+                        <div class="grid grid-cols-1 items-center gap-4 lg:grid-cols-3">
+                            <div class="flex min-w-0 items-center">
                                 <InputGroup>
                                     <InputGroupInput
                                         type="text"
@@ -326,7 +326,7 @@ watch(
                                     </InputGroupAddon>
                                 </InputGroup>
                             </div>
-                            <div class="flex items-center">
+                            <div class="flex min-w-0 items-center">
                                 <InputGroup>
                                     <InputGroupInput
                                         type="password"
@@ -466,7 +466,7 @@ watch(
                                         3DM Mods
                                     </span>
                                 </div>
-                                <InputGroup claww="w-full">
+                                <InputGroup class="w-full">
                                     <InputGroupInput
                                         type="password"
                                         placeholder="输入你的3DM Mods Key"
@@ -487,8 +487,8 @@ watch(
                         </CardTitle>
                     </CardHeader>
                     <CardContent class="flex flex-col gap-4">
-                        <div class="grid grid-cols-4 items-center gap-4">
-                            <div class="flex gap-2 items-center">
+                        <div class="grid grid-cols-1 items-center gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                            <div class="flex w-full items-center justify-between gap-2">
                                 <Label for="debug-mode">{{
                                     t("settings.debugMode")
                                 }}</Label>
