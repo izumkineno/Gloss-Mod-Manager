@@ -2120,9 +2120,6 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                         清理已结束
                     </Button>
                 </CardTitle>
-                <CardDescription>
-                    内置引擎任务：暂停即中止、可断点续传；失败任务保留错误信息，可重试。
-                </CardDescription>
             </CardHeader>
             <CardContent class="flex flex-col gap-4">
                 <div class="flex flex-wrap gap-2">

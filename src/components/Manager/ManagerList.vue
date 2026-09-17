@@ -43,6 +43,18 @@ const dragPosition = ref<"before" | "after">("before");
 const tagDropTargetId = ref<number | null>(null);
 const operatingIds = ref<number[]>([]);
 const updateingIds = ref<number[]>([]);
+// 右键菜单目标行：右键冒泡时记录，菜单动作作用于该行
+const contextTargetMod = ref<IModInfo | null>(null);
+
+function handleRowContextmenu(item: IModInfo) {
+    contextTargetMod.value = item;
+}
+
+function runContextAction(fn: (item: IModInfo) => void) {
+    const target = contextTargetMod.value;
+    if (target) fn(target);
+    contextTargetMod.value = null;
+}
 const pendingModDragId = ref<number | null>(null);
 const pendingPointerPosition = ref<{ x: number; y: number } | null>(null);
 const editForm = reactive<IEditModForm>({
@@ -653,6 +665,9 @@ watch(showSortDialog, (opened) => {
 <template>
     <Card>
         <CardContent class="max-h-[calc(100vh-430px)] overflow-auto p-0 sm:p-6">
+            <ContextMenu>
+                <ContextMenuTrigger as-child>
+                    <div class="contents">
             <Table v-if="!managerGridEnabled" class="min-w-[640px]">
                 <TableHeader>
                     <TableRow>
@@ -675,6 +690,7 @@ watch(showSortDialog, (opened) => {
                         @pointerenter="handleRowPointerEnter(item.id)"
                         @pointermove="handleRowPointerMove($event, item.id)"
                         @pointerleave="handleRowPointerLeave(item.id)"
+                        @contextmenu="handleRowContextmenu(item)"
                     >
                         <TableCell v-if="manager.selectionMode">
                             <input
@@ -894,6 +910,7 @@ watch(showSortDialog, (opened) => {
                     @pointerenter="handleRowPointerEnter(item.id)"
                     @pointermove="handleRowPointerMove($event, item.id)"
                     @pointerleave="handleRowPointerLeave(item.id)"
+                    @contextmenu="handleRowContextmenu(item)"
                 >
                     <div
                         class="relative aspect-video overflow-hidden bg-muted/20"
@@ -1125,6 +1142,83 @@ watch(showSortDialog, (opened) => {
                     </div>
                 </article>
             </div>
+                    </div>
+                </ContextMenuTrigger>
+                <ContextMenuContent v-if="contextTargetMod" class="w-48">
+                    <ContextMenuItem
+                        @select="runContextAction(openEditDialog)"
+                    >
+                        编辑
+                        <ContextMenuShortcut>
+                            <IconSquarePen />
+                        </ContextMenuShortcut>
+                    </ContextMenuItem>
+                    <ContextMenuItem @select="runContextAction(open)">
+                        打开
+                        <ContextMenuShortcut>
+                            <IconFolderOpen />
+                        </ContextMenuShortcut>
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                        :disabled="manager.managerModList.length < 2"
+                        @select="runContextAction(openSortDialog)"
+                    >
+                        调整排序
+                        <ContextMenuShortcut>
+                            <IconGripVertical />
+                        </ContextMenuShortcut>
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                        v-if="
+                            contextTargetMod.from === 'GlossMod' &&
+                            contextTargetMod.webId
+                        "
+                        @select="runContextAction(queueModUpdate)"
+                    >
+                        {{
+                            isUpdateing(contextTargetMod.id)
+                                ? "更新中..."
+                                : "更新"
+                        }}
+                        <ContextMenuShortcut>
+                            <IconRefreshCw
+                                :class="
+                                    isUpdateing(contextTargetMod.id)
+                                        ? 'animate-spin'
+                                        : ''
+                                "
+                            />
+                        </ContextMenuShortcut>
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                        v-if="contextTargetMod.modWebsite"
+                        as-child
+                    >
+                        <a
+                            :href="contextTargetMod.modWebsite"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                        >
+                            网址
+                            <ContextMenuShortcut>
+                                <IconGlobe />
+                            </ContextMenuShortcut>
+                        </a>
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                        variant="destructive"
+                        :disabled="deletingModId === contextTargetMod.id"
+                        @select="runContextAction(deleteMod)"
+                    >
+                        删除
+                        <ContextMenuShortcut>
+                            <IconTrash class="text-destructive" />
+                        </ContextMenuShortcut>
+                    </ContextMenuItem>
+                </ContextMenuContent>
+            </ContextMenu>
         </CardContent>
     </Card>
     <Dialog v-model:open="showEditDialog" modal>

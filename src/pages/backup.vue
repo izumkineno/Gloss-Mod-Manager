@@ -49,6 +49,20 @@ interface IFileDetailDialogState {
     zipFile: string;
 }
 
+// 右键菜单目标：section + 备份项
+const contextTarget = reactive<{
+    scopeKey: BackupScopeKey | null;
+    item: IArchive | null;
+}>({
+    scopeKey: null,
+    item: null,
+});
+
+function handleBackupContextmenu(scopeKey: BackupScopeKey, item: IArchive) {
+    contextTarget.scopeKey = scopeKey;
+    contextTarget.item = item;
+}
+
 const manager = useManager();
 const settings = useSettings();
 const router = useRouter();
@@ -1020,14 +1034,16 @@ watch(showArchiveBackup, (visible) => {
                                 暂无备份
                             </div>
 
-                            <div
-                                v-else
-                                class="flex max-h-128 flex-col gap-3 overflow-auto pr-1"
-                            >
+                            <ContextMenu>
+                                <ContextMenuTrigger as-child>
+                                    <div
+                                        class="flex max-h-128 flex-col gap-3 overflow-auto pr-1"
+                                    >
                                 <div
                                     v-for="item in section.backups"
                                     :key="item.zipFile"
                                     class="rounded-xl border border-border/60 bg-card/90 p-4"
+                                    @contextmenu="handleBackupContextmenu(section.key, item)"
                                 >
                                     <div
                                         class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"
@@ -1196,7 +1212,79 @@ watch(showArchiveBackup, (visible) => {
                                         </div>
                                     </div>
                                 </div>
-                            </div>
+                                    </div>
+                                </ContextMenuTrigger>
+                                <ContextMenuContent
+                                    v-if="contextTarget.item && contextTarget.scopeKey"
+                                    class="w-44"
+                                >
+                                    <ContextMenuItem
+                                        :disabled="section.actionLoading"
+                                        @select="
+                                            contextTarget.item &&
+                                                contextTarget.scopeKey &&
+                                                openFileDetailDialog(
+                                                    contextTarget.scopeKey,
+                                                    contextTarget.item,
+                                                )
+                                        "
+                                    >
+                                        查看文件
+                                    </ContextMenuItem>
+                                    <ContextMenuItem
+                                        :disabled="section.actionLoading"
+                                        @select="
+                                            contextTarget.item &&
+                                                contextTarget.scopeKey &&
+                                                startRename(
+                                                    contextTarget.scopeKey,
+                                                    contextTarget.item,
+                                                )
+                                        "
+                                    >
+                                        重命名
+                                    </ContextMenuItem>
+                                    <ContextMenuItem
+                                        :disabled="section.actionLoading"
+                                        @select="
+                                            contextTarget.item &&
+                                                contextTarget.scopeKey &&
+                                                restoreBackup(
+                                                    contextTarget.scopeKey,
+                                                    contextTarget.item,
+                                                )
+                                        "
+                                    >
+                                        恢复
+                                    </ContextMenuItem>
+                                    <ContextMenuItem
+                                        :disabled="section.actionLoading"
+                                        @select="
+                                            contextTarget.item &&
+                                                openBackupLocation(
+                                                    contextTarget.item.zipFile,
+                                                )
+                                        "
+                                    >
+                                        定位
+                                    </ContextMenuItem>
+                                    <ContextMenuSeparator />
+                                    <ContextMenuItem
+                                        variant="destructive"
+                                        :disabled="section.actionLoading"
+                                        @select="
+                                            contextTarget.item &&
+                                                contextTarget.scopeKey &&
+                                                deleteBackup(
+                                                    contextTarget.scopeKey,
+                                                    contextTarget.item,
+                                                )
+                                        "
+                                    >
+                                        删除
+                                    </ContextMenuItem>
+                                </ContextMenuContent>
+                            </ContextMenu>
                         </CardContent>
                     </Card>
                 </CardContent>
