@@ -131,9 +131,6 @@ const fileDetailDialog = reactive<IFileDetailDialogState>({
     zipFile: "",
 });
 
-const gameLabel = computed(
-    () => managerGame.value?.gameShowName ?? managerGame.value?.gameName ?? "",
-);
 
 const allSections = [sections.archive, sections.game];
 
@@ -836,9 +833,6 @@ watch(showArchiveBackup, (visible) => {
             <CardContent class="flex flex-col gap-3">
                 <template v-if="managerGame">
                     <div class="flex flex-wrap gap-2">
-                        <Badge variant="secondary"
-                            >当前游戏：{{ gameLabel }}</Badge
-                        >
                         <Badge variant="outline">
                             储存路径：{{ storagePath || "未设置" }}
                         </Badge>

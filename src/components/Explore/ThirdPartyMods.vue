@@ -1995,17 +1995,7 @@ function renderDescription(
                         })
                     }}
                 </span>
-                <template v-if="currentGameName">
-                    <span aria-hidden="true">·</span>
-                    <span>
-                        {{
-                            t("explore.common.currentGame", {
-                                game: currentGameName,
-                            })
-                        }}
-                    </span>
-                </template>
-                <template v-else>
+                <template v-if="!currentGameName">
                     <span aria-hidden="true">·</span>
                     <span>{{ t("explore.thirdParty.noLocalGameProvider") }}</span>
                 </template>

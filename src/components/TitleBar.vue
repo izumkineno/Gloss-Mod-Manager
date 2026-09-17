@@ -84,7 +84,7 @@ async function closeWindow() {
 <template>
     <!-- 对齐官方示例：仅拖拽区拥有 data-tauri-drag-region，控制按钮区不带该属性 -->
     <header
-        class="flex h-8 shrink-0 select-none items-center border-b border-border/40 bg-background/80 backdrop-blur-xl"
+        class="flex h-10 shrink-0 select-none items-center border-b border-border/40 bg-background/80 backdrop-blur-xl"
     >
         <div
             id="titlebar"
@@ -100,6 +100,10 @@ async function closeWindow() {
                 draggable="false"
             />
             <span class="text-xs font-semibold tracking-tight">Gloss Mod Manager</span>
+            <!-- 全局游戏选择:pin 图标左侧,唯一入口 -->
+            <div class="flex items-center" data-tauri-drag-region-exclude @mousedown.stop>
+                <SelectGame />
+            </div>
             <!-- 顶部快捷入口：置顶 tab + 浮窗选择器（需排除拖拽，避免按钮点不动） -->
             <div class="ml-2 flex items-center" data-tauri-drag-region-exclude @mousedown.stop>
                 <PinnedTabs />

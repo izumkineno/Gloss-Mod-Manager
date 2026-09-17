@@ -2057,7 +2057,6 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
             </CardHeader>
             <CardContent class="flex flex-col gap-4">
                 <div class="flex flex-wrap items-center gap-2">
-                    <SelectGame />
                     <Button size="sm" @click="openAddModDialog">
                         <IconPlus />
                         添加 Mod

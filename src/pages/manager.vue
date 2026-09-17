@@ -727,7 +727,6 @@ function openGamesPage() {
                 </CardDescription>
             </CardHeader>
             <CardContent class="flex flex-wrap items-center gap-3">
-                <SelectGame />
                 <Button variant="outline" @click="openGamesPage">
                     <Gamepad2 class="h-4 w-4" />
                     打开游戏库
@@ -743,14 +742,12 @@ function openGamesPage() {
                     >
                         <div class="flex items-center gap-3">
                             <h3 class="text-2xl">Mod 管理</h3>
-                            <CurrentGameBadge />
                         </div>
                     </CardTitle>
                 </CardHeader>
                 <CardContent class="flex flex-col gap-4">
                     <div class="flex flex-wrap items-center gap-4">
                         <div class="flex flex-wrap items-center gap-2">
-                            <SelectGame />
                             <DropdownMenu>
                                 <DropdownMenuTrigger>
                                     <Button variant="secondary">

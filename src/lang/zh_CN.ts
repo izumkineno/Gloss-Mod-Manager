@@ -171,6 +171,12 @@ const lang = {
     home: {
         welcome: "欢迎使用 Gloss Mod Manager，在这里你可以快速管理 Mod。",
         partners: "合作方",
+        trending: {
+            title: "Mod 趋势",
+            subtitle: "Top 10",
+            range: { week: "近一周", all: "全部" },
+            sort: { downloads: "按下载量", updatedAt: "按更新时间" },
+        },
     },
     settings: {
         title: "设置",

@@ -363,11 +363,103 @@ getVersion();
                     </article>
                 </CardContent>
             </Card>
+            <Card class="border-border/70 shadow-sm">
+                <CardHeader>
+                    <CardTitle>{{ $t("home.partners") }}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <div
+                        class="grid grid-cols-1 items-center gap-4 justify-items-center sm:grid-cols-2 md:grid-cols-3 links"
+                    >
+                        <a
+                            href="https://mod.3dmgame.com/"
+                            target="_blank"
+                            class="flex w-full items-center justify-center"
+                        >
+                            <img src="/imgs/3DMGAME.webp" alt="3DMGAME" />
+                        </a>
+                        <a
+                            href="https://thunderstore.io/"
+                            target="_blank"
+                            class="flex w-full items-center justify-center"
+                        >
+                            <Thunderstore width="100%"></Thunderstore>
+                        </a>
+                        <a
+                            href="https://mod.io/"
+                            target="_blank"
+                            class="flex w-full items-center justify-center"
+                        >
+                            <ModIo width="100%"></ModIo>
+                        </a>
+                        <a
+                            href="https://www.curseforge.com/"
+                            target="_blank"
+                            class="flex w-full items-center justify-center"
+                        >
+                            <CurseForge width="100%"></CurseForge>
+                        </a>
+                        <a
+                            href="https://gamebanana.com/"
+                            target="_blank"
+                            class="flex w-full items-center justify-center"
+                        >
+                            <img src="/imgs/Gamebanana.png" alt="Gamebanana" />
+                        </a>
+                        <a
+                            href="https://www.nexusmods.com/"
+                            target="_blank"
+                            class="flex w-full items-center justify-center"
+                        >
+                            <NexusMods height="84px" width="100%"></NexusMods>
+                        </a>
+                    </div>
+                </CardContent>
+            </Card>
+            <Card class="border-border/70 shadow-sm">
+                <CardHeader>
+                    <CardTitle>AI {{ $t("home.partners") }}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <div
+                        class="grid grid-cols-1 items-center gap-4 justify-items-center sm:grid-cols-2 md:grid-cols-4 links"
+                    >
+                        <a
+                            href="https://one.gloscai.com/"
+                            target="_blank"
+                            class="flex w-full items-center justify-evenly"
+                        >
+                            <img
+                                src="https://assets-mod.3dmgame.com/static/upload/mod/202605/MOD6a0bd12f001d1.png@webp"
+                                alt="Glosc AI One"
+                                class="h-25"
+                            />
+                            <h3 class="text-xl font-semibold tracking-tight">
+                                Glosc AI One
+                            </h3>
+                        </a>
+                    </div>
+                    <div class="mt-2 text-sm text-muted-foreground">
+                        AI 合作方招募中, 如果您是供应商, 并对此项目感兴趣, 欢迎
+                        <a
+                            href="https://gmm.aoe.top/docs/Cooperation"
+                            target="_blank"
+                            class="text-blue-400"
+                            >联系我们
+                            <icon-external-link class="inline-block h-4 w-4" />
+                        </a>
+                    </div>
+                </CardContent>
+            </Card>
         </div>
     </div>
 </template>
 
 <style scoped>
+.links a:hover {
+    transition: all 0.5s;
+    transform: scale(1.05);
+}
 .doc-article {
     color: color-mix(in srgb, var(--foreground) 90%, transparent);
 }

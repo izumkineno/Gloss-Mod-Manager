@@ -36,6 +36,12 @@ const lang = {
         welcome:
             "Welcome to Gloss Mod Manager. Here you can manage your mods quickly.",
         partners: "Partners",
+        trending: {
+            title: "Trending Mods",
+            subtitle: "Top 10",
+            range: { week: "Past week", all: "All time" },
+            sort: { downloads: "By downloads", updatedAt: "By updated" },
+        },
     },
     settings: {
         title: "Settings",

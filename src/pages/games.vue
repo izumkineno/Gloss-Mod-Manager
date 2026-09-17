@@ -72,7 +72,6 @@ function handleCardContextmenu(item: ISupportedGames) {
             <CardTitle class="flex flex-wrap items-center gap-4">
                 {{ t("games.library") }}
                 <div class="flex flex-wrap items-center gap-2">
-                    <SelectGame />
                     <CustomGameDialog />
                 </div>
             </CardTitle>

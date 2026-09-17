@@ -2,6 +2,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { dirname, join } from "@tauri-apps/api/path";
 import { ElMessage } from "element-plus-message";
+import { ChevronDown, Gamepad2 } from "lucide-vue-next";
 import { useI18n } from "vue-i18n";
 
 const manager = useManager();
@@ -43,7 +44,6 @@ async function select(item: ISupportedGames) {
         item.steamAppID,
         item.installdir,
     );
-    // console.log({ item, path });
 
     const selectGameByFolder = await PersistentStore.get(
         "selectGameByFolder",
@@ -67,7 +67,6 @@ async function select(item: ISupportedGames) {
                     ...item,
                     gamePath: folder,
                 };
-                // console.log(manager.managerGame);
             } else {
                 ElMessage.error(
                     t("games.selectFolderError", { exe: item.gameExe }),
@@ -78,7 +77,6 @@ async function select(item: ISupportedGames) {
             // 判断 item.gameExe 是否存在于 files 中
             let exe = item.gameExe.find((item) => files.includes(item.name));
             if (exe) {
-                // console.log(exe);
                 manager.managerGame = {
                     ...item,
                     gamePath: await join(folder, ...exe.rootPath),
@@ -124,9 +122,27 @@ async function select(item: ISupportedGames) {
     <div class="select-game">
         <Dialog with-backdrop v-model:open="showSelectDialog">
             <DialogTrigger as-child>
-                <Button variant="outline" size="sm">
-                    <IconPlus /> {{ t("games.selectGame") }}
-                </Button>
+                <button
+                    type="button"
+                    class="flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-sm font-medium transition-colors hover:bg-accent/60"
+                >
+                    <img
+                        v-if="manager.managerGame?.gameCoverImg"
+                        :src="manager.managerGame.gameCoverImg"
+                        :alt="manager.managerGame.gameName"
+                        class="h-5 w-5 rounded object-cover"
+                        draggable="false"
+                    />
+                    <Gamepad2 v-else class="size-3.5 text-muted-foreground" />
+                    <span class="max-w-40 truncate leading-none">
+                        {{
+                            manager.managerGame
+                                ? $t(manager.managerGame.gameName)
+                                : t("games.selectGame")
+                        }}
+                    </span>
+                    <ChevronDown class="size-3 shrink-0 text-muted-foreground" />
+                </button>
             </DialogTrigger>
             <DialogContent class="w-225 max-w-[70%]!">
                 <DialogHeader>

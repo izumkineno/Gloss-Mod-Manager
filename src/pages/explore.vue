@@ -193,7 +193,6 @@ function handleTranslationLoadingChange(loading: boolean) {
                         {{ $t("explore.common.pageSubtitle") }}
                     </p>
                 </div>
-                <SelectGame />
             </div>
             <div class="flex flex-wrap items-center gap-2">
                 <Button
