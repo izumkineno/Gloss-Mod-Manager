@@ -190,6 +190,9 @@ export const useManager = defineStore("Manager", () => {
     const managerRoot = ref("");
     const selectionMode = ref(false);
     const selectionIds = ref<number[]>([]);
+    // 右侧详情栏：选中 mod + 开关（默认开，有选中才有内容）
+    const selectedDetailModId = ref<number | null>(null);
+    const detailPanelOpen = ref(true);
     const runtimeLoading = ref(false);
     const loadError = ref("");
 
@@ -1135,6 +1138,8 @@ export const useManager = defineStore("Manager", () => {
         managerRoot,
         selectionMode,
         selectionIds,
+        selectedDetailModId,
+        detailPanelOpen,
         selectedMods,
         setSelection,
         clearSelection,

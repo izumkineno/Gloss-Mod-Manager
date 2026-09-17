@@ -700,7 +700,7 @@ function openGamesPage() {
 }
 </script>
 <template>
-    <div ref="dragImportRootRef" class="relative flex flex-col gap-6">
+    <div ref="dragImportRootRef" class="relative flex h-[calc(100vh-120px)] flex-col gap-4 overflow-hidden">
         <Card v-if="!storagePath">
             <CardHeader>
                 <CardTitle>先配置储存路径</CardTitle>
@@ -735,22 +735,15 @@ function openGamesPage() {
         </Card>
 
         <template v-else>
-            <Card>
-                <CardHeader>
-                    <CardTitle
-                        class="flex flex-wrap justify-between items-center gap-3"
-                    >
-                        <div class="flex items-center gap-3">
-                            <h3 class="text-2xl">Mod 管理</h3>
-                        </div>
-                    </CardTitle>
-                </CardHeader>
-                <CardContent class="flex flex-col gap-4">
-                    <div class="flex flex-wrap items-center gap-4">
+            <div class="flex min-h-0 flex-1 items-stretch gap-4 overflow-hidden">
+                <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden">
+                    <Card class="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <CardContent class="flex shrink-0 flex-col gap-2 border-b py-3">
+                    <div class="flex flex-wrap items-center gap-2">
                         <div class="flex flex-wrap items-center gap-2">
                             <DropdownMenu>
                                 <DropdownMenuTrigger>
-                                    <Button variant="secondary">
+                                    <Button variant="secondary" size="sm">
                                         <FolderPlus class="h-4 w-4" />导入
                                     </Button>
                                 </DropdownMenuTrigger>
@@ -773,7 +766,7 @@ function openGamesPage() {
                             <StartGame :game="manager.managerGame" />
                             <DropdownMenu>
                                 <DropdownMenuTrigger>
-                                    <Button variant="outline">
+                                    <Button variant="outline" size="sm">
                                         <IconMenu class="h-4 w-4" />
                                         更多
                                     </Button>
@@ -794,6 +787,10 @@ function openGamesPage() {
                                     <DropdownMenuItem @click="managerGridEnabled = !managerGridEnabled">
                                         <component :is="managerGridEnabled ? ListIcon : LayoutGrid" class="h-4 w-4" />
                                         {{ managerGridEnabled ? "列表" : "网格" }}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem @click="manager.detailPanelOpen = !manager.detailPanelOpen">
+                                        <SquarePen class="h-4 w-4" />
+                                        {{ manager.detailPanelOpen ? "关闭详情栏" : "打开详情栏" }}
                                     </DropdownMenuItem>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem @click="openModRootFolder">
@@ -822,9 +819,9 @@ function openGamesPage() {
                             </InputGroupAddon>
                         </InputGroup>
                     </div>
-                    <div class="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1 text-sm no-scrollbar">
+                    <div class="-mx-1 flex items-center gap-1.5 overflow-x-auto px-1 text-sm no-scrollbar">
                         <Button
-                            class="shrink-0"
+                            class="h-7 shrink-0 px-2.5 text-xs"
                             :variant="
                                 manager.selectedType === 0
                                     ? 'default'
@@ -853,10 +850,14 @@ function openGamesPage() {
                     </div>
                     <ManagerTags />
                 </CardContent>
-            </Card>
-            <ManagerPreloadList />
-            <ManagerList />
-
+                <div class="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+                    <ManagerPreloadList />
+                    <ManagerList />
+                    </div>
+                    </Card>
+                </div>
+                <ModDetailPanel />
+            </div>
             <Card v-if="manager.loadError">
                 <CardContent
                     class="flex items-center justify-between gap-4 py-6"
