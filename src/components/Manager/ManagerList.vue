@@ -1006,57 +1006,56 @@ watch(showSortDialog, (opened) => {
                     </div>
                 </ContextMenuTrigger>
                 <ContextMenuContent v-if="contextTargetMod" class="w-48">
-                    <ContextMenuItem @select="runContextAction(openEditDialog)">
+                    <ContextMenuItem @select="runContextAction(openEditDialog)"><IconSquarePen class="mr-2 h-4 w-4" />
                         编辑
-                        <ContextMenuShortcut>
-                            <IconSquarePen />
-                        </ContextMenuShortcut>
                     </ContextMenuItem>
-                    <ContextMenuItem @select="runContextAction(open)">
+                    <ContextMenuItem @select="runContextAction(open)"><IconFolderOpen class="mr-2 h-4 w-4" />
                         打开
-                        <ContextMenuShortcut>
-                            <IconFolderOpen />
-                        </ContextMenuShortcut>
                     </ContextMenuItem>
                     <ContextMenuSeparator />
                     <ContextMenuItem :disabled="manager.managerModList.length < 2"
-                        @select="runContextAction(openSortDialog)">
+                        @select="runContextAction(openSortDialog)"><IconGripVertical class="mr-2 h-4 w-4" />
                         调整排序
-                        <ContextMenuShortcut>
-                            <IconGripVertical />
-                        </ContextMenuShortcut>
                     </ContextMenuItem>
                     <ContextMenuItem v-if="
                         contextTargetMod.from === 'GlossMod' &&
                         contextTargetMod.webId
-                    " @select="runContextAction(queueModUpdate)">
+                    " @select="runContextAction(queueModUpdate)"><IconRefreshCw class="mr-2 h-4 w-4" :class="isUpdateing(contextTargetMod.id)
+                                    ? 'animate-spin'
+                                    : ''
+                                " />
                         {{
                             isUpdateing(contextTargetMod.id)
                                 ? "更新中..."
                                 : "更新"
                         }}
-                        <ContextMenuShortcut>
-                            <IconRefreshCw :class="isUpdateing(contextTargetMod.id)
-                                    ? 'animate-spin'
-                                    : ''
-                                " />
-                        </ContextMenuShortcut>
                     </ContextMenuItem>
                     <ContextMenuItem v-if="contextTargetMod.modWebsite" as-child>
-                        <a :href="contextTargetMod.modWebsite" target="_blank" rel="noopener noreferrer">
+                        <a :href="contextTargetMod.modWebsite" target="_blank" rel="noopener noreferrer" class="flex items-center">
+                            <IconGlobe class="mr-2 h-4 w-4" />
                             网址
-                            <ContextMenuShortcut>
-                                <IconGlobe />
-                            </ContextMenuShortcut>
                         </a>
                     </ContextMenuItem>
                     <ContextMenuSeparator />
+                    <ContextMenuSub v-if="manager.tags.length">
+                        <ContextMenuSubTrigger><IconTag class="mr-2 h-4 w-4" />
+                        标签
+                    </ContextMenuSubTrigger>
+                        <ContextMenuSubContent class="max-h-64 w-48 overflow-y-auto">
+                            <ContextMenuCheckboxItem
+                                v-for="tag in manager.tags"
+                                :key="tag.name"
+                                :checked="(contextTargetMod.tags ?? []).some((t) => t.name === tag.name)"
+                                @select="(e: Event) => { e.preventDefault(); if (contextTargetMod) toggleTagOnMod(contextTargetMod, tag.name); }">
+                                <div class="h-2 w-2 rounded-full" :style="{ backgroundColor: tag.color }"></div>
+                                {{ tag.name }}
+                            </ContextMenuCheckboxItem>
+                        </ContextMenuSubContent>
+                    </ContextMenuSub>
+                    <ContextMenuSeparator v-if="manager.tags.length" />
                     <ContextMenuItem variant="destructive" :disabled="deletingModId === contextTargetMod.id"
-                        @select="runContextAction(deleteMod)">
+                        @select="runContextAction(deleteMod)"><IconTrash class="text-destructive mr-2 h-4 w-4" />
                         删除
-                        <ContextMenuShortcut>
-                            <IconTrash class="text-destructive" />
-                        </ContextMenuShortcut>
                     </ContextMenuItem>
                 </ContextMenuContent>
             </ContextMenu>

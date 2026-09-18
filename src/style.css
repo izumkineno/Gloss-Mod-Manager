@@ -118,6 +118,28 @@
     @apply bg-background text-foreground;
   }
 }
+/* 全局细窄滚动条:覆盖管理界面所有 overflow 容器 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted-foreground);
+  background-clip: content-box;
+}
 
  @utility no-scrollbar {
      scrollbar-width: none;
@@ -125,6 +147,4 @@
          display: none;
      }
  }
-body{
-  user-select: none;
-}
+/* 文本默认可选:不再全局禁用选中 */

@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { openUrl } from "@tauri-apps/plugin-opener";
-import MarkdownIt from "markdown-it";
-import markdownItAnchor from "markdown-it-anchor";
 import { ElMessage } from "element-plus-message";
 import { useI18n } from "vue-i18n";
+import RichModDesc from "@/components/common/RichModDesc.vue";
 import { Downloader } from "@/lib/native-downloader";
 import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
 import type { IDownloaderTask } from "@/lib/download-task-types";
@@ -31,7 +30,6 @@ import {
     type IThirdPartyModFacets,
     type IThirdPartyModFile,
     type IThirdPartyModItem,
-    type ThirdPartyDescriptionFormat,
     type ThirdPartyProvider,
 } from "@/lib/third-party-mod-api";
 import type { AppLocale } from "@/lang/locales";
@@ -132,14 +130,6 @@ const dateFormatter = computed(
             day: "numeric",
         }),
 );
-const markdownParser = new MarkdownIt({
-    html: false,
-    breaks: true,
-    linkify: true,
-    typographer: true,
-}).use(markdownItAnchor, {
-    level: [1, 2, 3],
-});
 const sortOptions = computed<IThirdPartySortOption[]>(() => [
     { label: t("explore.filters.sortDefault"), value: "default" },
     { label: t("explore.filters.sortUpdatedAt"), value: "updatedAt" },
@@ -234,18 +224,6 @@ const thunderstoreCacheAgeText = computed(() => {
     return t("explore.thirdParty.cacheAgeMinutes", {
         count: Math.floor(age / 60),
     });
-});
-const renderedDescription = computed(() => {
-    return renderDescription(
-        getSelectedModDescription(),
-        getSelectedModDescriptionFormat(),
-    );
-});
-const originalRenderedDescription = computed(() => {
-    return renderDescription(
-        selectedMod.value?.description ?? "",
-        selectedMod.value?.descriptionFormat ?? "text",
-    );
 });
 const shouldShowOriginalDescription = computed(() => {
     const mod = selectedMod.value;
@@ -1302,20 +1280,6 @@ function hasSelectedModDescriptionTranslation() {
     );
 }
 
-function getSelectedModDescriptionFormat(): ThirdPartyDescriptionFormat {
-    const mod = selectedMod.value;
-
-    if (!mod) {
-        return "text";
-    }
-
-    return hasDifferentTranslation(
-        mod.description,
-        getDetailTranslation(mod)?.description,
-    )
-        ? "text"
-        : mod.descriptionFormat;
-}
 
 function toNumber(value?: string | number) {
     const normalized = Number(value ?? 0);
@@ -1896,25 +1860,6 @@ function toErrorMessage(error: unknown, fallbackMessage: string) {
     return fallbackMessage;
 }
 
-function renderDescription(
-    source: string,
-    format: ThirdPartyDescriptionFormat,
-) {
-    if (!source.trim()) {
-        return `<p class="empty-markdown">${t("explore.detail.noDescription")}</p>`;
-    }
-
-    // 简介来自第三方平台接口，属于不可信输入，渲染前统一净化。
-    if (format === "markdown") {
-        return sanitizeHtml(markdownParser.render(source));
-    }
-
-    if (format === "html") {
-        return sanitizeHtml(source);
-    }
-
-    return `<p>${escapeHtmlText(source).replace(/\n/gu, "<br />")}</p>`;
-}
 </script>
 
 <template>
@@ -2632,13 +2577,10 @@ function renderDescription(
                         >
                             {{ t("explore.translation.translating") }}
                         </p>
-                        <p
-                            v-else-if="detailTranslationErrorMessage"
-                            class="empty-markdown"
-                        >
-                            {{ detailTranslationErrorMessage }}
-                        </p>
-                        <div v-else v-html="renderedDescription"></div>
+                        <RichModDesc
+                            v-else
+                            :source="getSelectedModDescription()"
+                        />
                         <div
                             v-if="shouldShowOriginalDescription"
                             class="mt-5 border-t pt-4"
@@ -2646,7 +2588,9 @@ function renderDescription(
                             <p class="empty-markdown mb-2">
                                 {{ t("explore.translation.originalText") }}
                             </p>
-                            <div v-html="originalRenderedDescription"></div>
+                            <RichModDesc
+                                :source="selectedMod?.description ?? ''"
+                            />
                         </div>
                     </section>
 
@@ -2730,10 +2674,34 @@ function renderDescription(
     color: var(--muted-foreground);
 }
 
-/* 项目未安装 @tailwindcss/typography，这里手写渲染后 Markdown 的排版 */
+/* Nexus 风格暗色正文面板:深底+浅字,BBCode 颜色在暗底上可读 */
 .mod-description {
     font-size: 0.875rem;
     line-height: 1.75;
+    background: #0f0f12;
+    color: #d7d7db;
+    border: 1px solid #2a2a30;
+    border-radius: 0.75rem;
+    padding: 1.25rem 1.5rem;
+}
+.mod-description :deep(font[size="5"]),
+.mod-description :deep(font[size="6"]),
+.mod-description :deep(font[size="7"]) {
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    line-height: 1.4;
+}
+.mod-description :deep(font[size="4"]) {
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+}
+.mod-description :deep(font[size="2"]),
+.mod-description :deep(font[size="1"]) {
+    font-size: 0.8rem;
+    line-height: 1.6;
 }
 
 .mod-description :deep(h1),
@@ -2777,29 +2745,27 @@ function renderDescription(
 }
 
 .mod-description :deep(a) {
-    color: var(--primary);
+    color: #e3dee0;
     text-decoration: underline;
     text-underline-offset: 0.2rem;
 }
-
-.mod-description :deep(blockquote) {
-    border-left: 2px solid var(--border);
-    padding-left: 1rem;
-    color: var(--muted-foreground);
+.mod-description :deep(a):hover {
+    color: #ffffff;
 }
 
 .mod-description :deep(code) {
     border-radius: 0.35rem;
-    background: var(--muted);
+    background: #232329;
+    color: #e8e8ea;
     padding: 0.1rem 0.35rem;
     font-size: 0.875em;
 }
 
 .mod-description :deep(pre) {
     overflow-x: auto;
-    border: 1px solid var(--border);
+    border: 1px solid #2a2a30;
     border-radius: 0.75rem;
-    background: var(--muted);
+    background: #1a1a1f;
     padding: 1rem;
 }
 
@@ -2818,14 +2784,14 @@ function renderDescription(
 .mod-description :deep(table) {
     width: 100%;
     border-collapse: collapse;
-    border: 1px solid var(--border);
+    border: 1px solid #2a2a30;
     border-radius: 0.75rem;
     overflow: hidden;
 }
 
 .mod-description :deep(th),
 .mod-description :deep(td) {
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid #2a2a30;
     padding: 0.5rem 0.7rem;
     text-align: left;
 }
@@ -2835,7 +2801,7 @@ function renderDescription(
 }
 
 .mod-description :deep(th) {
-    background: var(--muted);
+    background: #1a1a1f;
     font-weight: 600;
 }
 </style>

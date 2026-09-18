@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
-import MarkdownIt from "markdown-it";
-import markdownItAnchor from "markdown-it-anchor";
 import { ElMessage } from "element-plus-message";
 import {
     hasGlossMultipleResources,
     queueGlossModDownloadWithSelection,
 } from "@/lib/download-file-selection";
 import { resolveGlossModKey } from "@/lib/gloss-mod-api";
-import { useSettings } from "@/stores/settings";
+import RichModDesc from "@/components/common/RichModDesc.vue";
 
 const GLOSS_MOD_API_BASE_URL = "https://mod.3dmgame.com/api/v3";
 const GLOSS_MOD_WEB_BASE_URL = "https://mod.3dmgame.com";
@@ -51,39 +49,6 @@ const queueingResourceKey = ref("");
 
 let requestSequence = 0;
 
-const markdownParser = new MarkdownIt({
-    html: false,
-    breaks: true,
-    linkify: true,
-    typographer: true,
-}).use(markdownItAnchor, {
-    level: [1, 2, 3],
-});
-
-const defaultLinkRender =
-    markdownParser.renderer.rules.link_open ??
-    ((tokens, index, options, _environment, self) =>
-        self.renderToken(tokens, index, options));
-
-markdownParser.renderer.rules.link_open = (
-    tokens,
-    index,
-    options,
-    environment,
-    self,
-) => {
-    const token = tokens[index];
-
-    if (token.attrIndex("target") < 0) {
-        token.attrPush(["target", "_blank"]);
-    }
-
-    if (token.attrIndex("rel") < 0) {
-        token.attrPush(["rel", "noopener noreferrer"]);
-    }
-
-    return defaultLinkRender(tokens, index, options, environment, self);
-};
 
 const routeModId = computed(() => {
     const { params } = route;
@@ -125,22 +90,6 @@ const markdownSource = computed(() => {
     }
 
     return [summary, detail].filter(Boolean).join("\n\n");
-});
-const renderedMarkdown = computed(() => {
-    if (!markdownSource.value) {
-        return '<p class="empty-markdown">暂无详细介绍内容。</p>';
-    }
-
-    const rendered = markdownParser.render(markdownSource.value);
-
-    const withAbsoluteUrls = rendered.replace(
-        /(href|src)=(['"])(\/[^'"#][^'"]*)\2/giu,
-        (_fullMatch, attribute, quote, value) =>
-            `${attribute}=${quote}${GLOSS_MOD_WEB_BASE_URL}${value}${quote}`,
-    );
-
-    // 详情正文来自远程接口，补全域名后再统一净化。
-    return sanitizeHtml(withAbsoluteUrls);
 });
 
 watch(
@@ -574,7 +523,7 @@ async function goBackToExplore() {
             <section class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
                 <div class="min-w-0 space-y-4">
                     <h2 class="text-sm font-medium">详细介绍</h2>
-                    <article class="markdown-body" v-html="renderedMarkdown"></article>
+                    <RichModDesc :source="markdownSource" />
                 </div>
 
                 <div class="space-y-6">
@@ -709,130 +658,3 @@ async function goBackToExplore() {
     </div>
 </template>
 
-<style scoped>
-.markdown-body {
-    color: var(--foreground);
-    font-size: 0.9rem;
-    line-height: 1.8;
-}
-
-.markdown-body :deep(.empty-markdown) {
-    margin: 0;
-    color: var(--muted-foreground);
-}
-
-.markdown-body :deep(h1),
-.markdown-body :deep(h2),
-.markdown-body :deep(h3),
-.markdown-body :deep(h4) {
-    margin-top: 1.6rem;
-    margin-bottom: 0.8rem;
-    font-weight: 600;
-    line-height: 1.4;
-    letter-spacing: -0.01em;
-    scroll-margin-top: 5rem;
-}
-
-.markdown-body :deep(h1) {
-    font-size: 1.4rem;
-}
-
-.markdown-body :deep(h2) {
-    font-size: 1.2rem;
-}
-
-.markdown-body :deep(h3) {
-    font-size: 1.05rem;
-}
-
-.markdown-body :deep(p),
-.markdown-body :deep(ul),
-.markdown-body :deep(ol),
-.markdown-body :deep(blockquote),
-.markdown-body :deep(pre),
-.markdown-body :deep(table) {
-    margin: 0 0 1rem;
-}
-
-.markdown-body :deep(ul),
-.markdown-body :deep(ol) {
-    padding-left: 1.3rem;
-}
-
-.markdown-body :deep(li + li) {
-    margin-top: 0.35rem;
-}
-
-.markdown-body :deep(a) {
-    color: var(--primary);
-    text-decoration: underline;
-    text-underline-offset: 0.2rem;
-}
-
-.markdown-body :deep(blockquote) {
-    margin-left: 0;
-    border-left: 2px solid var(--border);
-    padding: 0.1rem 0 0.1rem 1rem;
-    color: var(--muted-foreground);
-}
-
-.markdown-body :deep(code) {
-    border-radius: 0.35rem;
-    background: var(--muted);
-    padding: 0.1rem 0.35rem;
-    font-size: 0.875em;
-}
-
-.markdown-body :deep(pre) {
-    overflow-x: auto;
-    border: 1px solid var(--border);
-    border-radius: 0.75rem;
-    background: var(--muted);
-    padding: 1rem;
-}
-
-.markdown-body :deep(pre code) {
-    background: transparent;
-    padding: 0;
-    font-size: 0.85rem;
-    color: inherit;
-}
-
-.markdown-body :deep(table) {
-    width: 100%;
-    border-collapse: collapse;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: 0.75rem;
-    font-size: 0.875rem;
-}
-
-.markdown-body :deep(th),
-.markdown-body :deep(td) {
-    border-bottom: 1px solid var(--border);
-    padding: 0.6rem 0.8rem;
-    text-align: left;
-}
-
-.markdown-body :deep(tr:last-child td) {
-    border-bottom: none;
-}
-
-.markdown-body :deep(th) {
-    background: var(--muted);
-    font-weight: 600;
-}
-
-.markdown-body :deep(hr) {
-    margin: 1.5rem 0;
-    border: none;
-    border-top: 1px solid var(--border);
-}
-
-.markdown-body :deep(img) {
-    display: block;
-    max-width: 100%;
-    border-radius: 0.75rem;
-    margin: 1rem 0;
-}
-</style>

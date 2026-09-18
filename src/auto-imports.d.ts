@@ -57,6 +57,7 @@ declare global {
   const autoImportCompletedDownloadTasks: typeof import('./lib/gloss-download-monitor').autoImportCompletedDownloadTasks
   const autoImportCompletedGlossTasks: typeof import('./lib/gloss-download-monitor').autoImportCompletedGlossTasks
   const autoResetRef: typeof import('@vueuse/core').autoResetRef
+  const bbcodeToHtml: typeof import('./lib/bbcode').bbcodeToHtml
   const buildAiChatAttachmentPromptText: typeof import('./lib/ai-chat-attachments').buildAiChatAttachmentPromptText
   const buildBundledAiChatSkillsPrompt: typeof import('./lib/ai-chat-skills').buildBundledAiChatSkillsPrompt
   const buildGlossOutputFileName: typeof import('./lib/gloss-download-queue').buildGlossOutputFileName

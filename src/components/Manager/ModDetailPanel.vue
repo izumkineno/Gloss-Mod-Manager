@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { PanelRightClose } from "lucide-vue-next";
+import RichModDesc from "@/components/common/RichModDesc.vue";
 
 const MANAGER_FALLBACK_COVER = "/imgs/logo.png";
 
@@ -78,6 +79,7 @@ function closePanel() {
 function getCoverSrc(item: IModInfo) {
     return item.cover || MANAGER_FALLBACK_COVER;
 }
+// 介绍渲染已抽到公共组件 RichModDesc
 </script>
 <template>
     <Card
@@ -129,18 +131,12 @@ function getCoverSrc(item: IModInfo) {
                     {{ tag.name }}
                 </Badge>
             </div>
-            <!-- 描述 -->
+            <!-- 描述:公共富文本组件,紧凑暗色面板 -->
             <div class="space-y-1">
                 <div class="text-xs font-medium text-muted-foreground">
                     介绍
                 </div>
-                <p
-                    v-if="detailMod.modDesc"
-                    class="max-h-48 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed"
-                >
-                    {{ detailMod.modDesc }}
-                </p>
-                <p v-else class="text-sm text-muted-foreground">暂无介绍</p>
+                <RichModDesc :source="detailMod.modDesc" compact />
             </div>
             <!-- 官网 -->
             <Button
@@ -188,3 +184,4 @@ function getCoverSrc(item: IModInfo) {
         </CardContent>
     </Card>
 </template>
+<!-- 介绍样式已收敛至公共组件 RichModDesc -->
