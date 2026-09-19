@@ -15,6 +15,7 @@ const lang = {
         manager: "Менеджер",
         explore: "Обзор",
         download: "Загрузки",
+        collection: "Коллекции",
         mcp: "MCP",
         backup: "Резервные копии",
         about: "О программе",

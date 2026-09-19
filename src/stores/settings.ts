@@ -64,6 +64,7 @@ export const settingsStartPageOptions = [
     { labelKey: "settings.pages.manager", value: "/manager" },
     { labelKey: "settings.pages.explore", value: "/explore" },
     { labelKey: "settings.pages.download", value: "/download" },
+    { labelKey: "settings.pages.collection", value: "/collection" },
     { labelKey: "settings.pages.mcp", value: "/mcp" },
     { labelKey: "settings.pages.backup", value: "/backup" },
     { labelKey: "settings.pages.about", value: "/about" },

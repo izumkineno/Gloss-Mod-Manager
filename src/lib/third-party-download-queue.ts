@@ -42,6 +42,7 @@ export interface IQueueThirdPartyDownloadOptions {
     nexusDownloadAuthorization?: INexusModsDownloadAuthorization | null;
     nexusDirect?: INexusModsDirectOptions | null;
     replaceLocalModId?: number;
+    collectionId?: string;
 }
 
 export interface IQueueThirdPartyDownloadResult {
@@ -173,6 +174,7 @@ function buildDownloadOptions(
     runtime: IQueueRuntimeContext,
     mod: IThirdPartyModDetail,
     outputFileName: string,
+    collectionId?: string,
 ) {
     const options: Record<string, string> = {
         dir: runtime.outputDirectory,
@@ -190,6 +192,10 @@ function buildDownloadOptions(
 
     if (runtime.proxy) {
         options["all-proxy"] = runtime.proxy;
+    }
+
+    if (collectionId) {
+        options.collectionId = collectionId;
     }
 
     return options;
@@ -232,7 +238,7 @@ async function createThirdPartyDownloadTask(
 ) {
     const gid = await Downloader.addUri(
         [downloadUrl],
-        buildDownloadOptions(runtime, options.mod, outputFileName),
+        buildDownloadOptions(runtime, options.mod, outputFileName, options.collectionId),
     );
     const now = new Date().toISOString();
 
@@ -241,11 +247,12 @@ async function createThirdPartyDownloadTask(
         externalId: options.mod.id,
         resourceId: file.id,
         replaceLocalModId: options.replaceLocalModId,
-        modTitle: options.mod.title,
+        // 治本：title 为空时逐级回退，保证卡片左侧标题恒有值（download.vue:2296 v-if）。
+        modTitle:
+            (options.mod.title || file.name || outputFileName).trim() || outputFileName,
         gameName: options.gameName || "",
         resourceName: file.name,
         fileName: outputFileName,
-        author: options.mod.author,
         version: file.version || options.mod.version,
         cover: options.mod.cover,
         content: options.mod.description || options.mod.summary,
@@ -410,20 +417,24 @@ export async function queueThirdPartyModDownload(
         };
 
         if (currentTask.status === "paused") {
-            await Downloader.unpause(currentTask.gid);
-            nextTaskMetaMap[currentTask.gid].taskStatus = "waiting";
-            await saveTaskMetaMap(nextTaskMetaMap);
-
+            // 暂停闸开着时保持暂停，不自动恢复；由用户显式继续。
             return {
-                status: "resumed",
+                status: "exists",
                 gid: currentTask.gid,
                 mod: options.mod,
                 file,
-                message: `已继续下载任务：${file.name}`,
+                message: `已在下载队列中（已暂停）：${file.name}`,
             };
         }
 
         if (currentTask.status === "error") {
+            // 旧 error 任务已终局：先 forget + 删旧 meta，避免孤儿条目堆积（新任务新 gid）。
+            const staleGid = currentTask.gid;
+            try {
+                await Downloader.removeDownloadResult(staleGid);
+            } catch {
+                // 旧任务已被清理属于正常竞态，忽略。
+            }
             const gid = await createThirdPartyDownloadTask(
                 runtime,
                 options,
@@ -431,6 +442,11 @@ export async function queueThirdPartyModDownload(
                 downloadUrl,
                 outputFileName,
             );
+            const nextMap = { ...runtime.taskMetaMap };
+            delete nextMap[staleGid];
+            await saveTaskMetaMap(nextMap);
+            await removeDownloadTaskSnapshot(staleGid);
+            runtime.taskMetaMap = nextMap;
 
             return {
                 status: "retried",

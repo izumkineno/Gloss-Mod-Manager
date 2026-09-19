@@ -15,6 +15,7 @@ const lang = {
         manager: "관리",
         explore: "탐색",
         download: "다운로드",
+        collection: "컬렉션",
         mcp: "MCP",
         backup: "백업",
         about: "정보",

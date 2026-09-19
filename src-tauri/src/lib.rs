@@ -1,3 +1,4 @@
+mod collection_pending;
 mod downloader;
 mod explore;
 mod fsops;
@@ -223,7 +224,9 @@ fn init_tracing(log_directory: PathBuf, session_file_name: String) {
     // 将依赖中 `log::` 的输出桥接到 tracing，避免 Tauri 内部日志丢失。
     let _ = tracing_log::LogTracer::init();
 
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // dev 默认 debug 便于排查，release 默认 info 降噪；RUST_LOG 环境变量可覆盖。
+    let default_level = if cfg!(debug_assertions) { "debug" } else { "info" };
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
 
     // 使用本地时区的 Rfc3339，与旧 `format_local_timestamp` 保持一致。
     let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
@@ -363,7 +366,17 @@ pub fn run() {
             downloader::dl_tell_stopped,
             downloader::dl_global_stat,
             explore::explore_list,
-            thunderstore::thunderstore_list,
+            collection_pending::nexus_collection_info,
+            collection_pending::nexus_collection_files,
+            collection_pending::collection_pending_list,
+            collection_pending::collection_pending_save,
+            downloader::dl_pause_all,
+            downloader::dl_resume_all,
+            downloader::dl_pause_collection,
+            downloader::dl_resume_collection,
+            collection_pending::collection_pending_update_item,
+            collection_pending::collection_pending_remove,
+            collection_pending::collection_pending_clear_finished,
             thunderstore::thunderstore_cache_status,
             thunderstore::thunderstore_refresh,
             thunderstore::thunderstore_detail,

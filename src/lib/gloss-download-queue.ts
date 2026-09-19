@@ -361,7 +361,9 @@ async function createGlossDownloadTask(
         resourceId: resource.id,
         replaceLocalModId,
         resourceFormat: resource.mods_resource_formart,
-        modTitle: mod.mods_title,
+        modTitle:
+            (mod.mods_title || resource.mods_resource_name || outputFileName).trim() ||
+            outputFileName,
         gameName: mod.game_name,
         resourceName: resource.mods_resource_name,
         fileName: outputFileName,

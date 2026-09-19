@@ -461,15 +461,25 @@ async function batchInstall(install: boolean) {
 }
 
 async function batchRemove() {
-    const count = selectionIds.value.length;
-
-    manager.managerModList = manager.managerModList.filter(
-        (m) => !selectionIds.value.includes(m.id),
-    );
+    // 批量移除：复用 removeModRecord，逐个删除磁盘缓存目录 + 列表记录（与单条删除同语义，避免留孤儿目录）。
+    const ids = [...selectionIds.value];
+    const failures: string[] = [];
+    for (const id of ids) {
+        try {
+            await manager.removeModRecord(id);
+        } catch {
+            // 单个失败不中断：记录名称继续删其余，最后统一提示。
+            failures.push(manager.managerModList.find((m) => m.id === id)?.modName ?? String(id));
+        }
+    }
     selectionIds.value = [];
     manager.selectionMode = false;
-    await manager.saveManagerData();
-    ElMessage.success(`已移除 ${count} 个 Mod。`);
+    const removed = ids.length - failures.length;
+    if (failures.length === 0) {
+        ElMessage.success(`已移除 ${removed} 个 Mod（含本地缓存目录）。`);
+    } else {
+        ElMessage.error(`已移除 ${removed} 个，${failures.length} 个删除失败：${failures.join("、")}。`);
+    }
 }
 
 async function openModRootFolder() {

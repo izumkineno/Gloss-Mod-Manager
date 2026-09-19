@@ -15,6 +15,7 @@ const lang = {
         manager: "Gerenciador",
         explore: "Explorar",
         download: "Downloads",
+        collection: "Coleções",
         mcp: "MCP",
         backup: "Backup",
         about: "Sobre",

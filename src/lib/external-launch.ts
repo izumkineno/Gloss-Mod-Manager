@@ -7,6 +7,7 @@ import { SecretStore } from "@/lib/secret-store";
 import { readGmmPackageDetails } from "@/lib/gmm-package";
 import { importGmmShareCode, parseGmmShareCode } from "@/lib/gmm-share-code";
 import { normalizeCompareText } from "@/lib/gloss-download";
+import { queueNexusCollectionDownloadWithSelection } from "@/lib/nexus-collection-download";
 import {
     NexusModsAuthorizationError,
     fetchThirdPartyModDetail,
@@ -42,6 +43,12 @@ type TParsedLaunchIntent =
           fileId: string;
           key?: string;
           expires?: string;
+      }
+    | {
+          type: "nxm-collection";
+          domainName: string;
+          slug: string;
+          revision?: number;
       };
 
 interface ILaunchFilesEventPayload {
@@ -141,8 +148,26 @@ function resolveNxmIntent(rawValue: string): TParsedLaunchIntent | null {
         const parsedUrl = new URL(rawValue);
         const pathParts = parsedUrl.pathname.split("/").filter(Boolean);
 
+        if (parsedUrl.protocol !== "nxm:") {
+            return null;
+        }
+
+        if (pathParts[0] === "collections" && pathParts[1]) {
+            const revisionIndex = pathParts.findIndex(
+                (part) => part.toLowerCase() === "revisions",
+            );
+            const revisionRaw =
+                revisionIndex >= 0 ? pathParts[revisionIndex + 1] : undefined;
+            const revision = revisionRaw ? Number(revisionRaw) : NaN;
+            return {
+                type: "nxm-collection",
+                domainName: parsedUrl.hostname,
+                slug: pathParts[1],
+                revision: Number.isFinite(revision) && revision > 0 ? revision : undefined,
+            };
+        }
+
         if (
-            parsedUrl.protocol !== "nxm:" ||
             pathParts[0] !== "mods" ||
             pathParts[2] !== "files"
         ) {
@@ -161,7 +186,6 @@ function resolveNxmIntent(rawValue: string): TParsedLaunchIntent | null {
         return null;
     }
 }
-
 function resolveGmmFileIntent(rawValue: string): TParsedLaunchIntent | null {
     const normalizedPath = stripWrappingQuotes(rawValue);
 
@@ -173,6 +197,41 @@ function resolveGmmFileIntent(rawValue: string): TParsedLaunchIntent | null {
         type: "gmm-file",
         filePath: normalizedPath,
     };
+}
+
+// 网页链接两形：/{game}/collections/{slug} 与 /games/{game}/collections/{slug}，与 nxm 深链同等处理。
+function resolveNexusWebCollectionIntent(rawValue: string): TParsedLaunchIntent | null {
+    let parsedUrl: URL;
+    try {
+        parsedUrl = new URL(rawValue);
+    } catch {
+        return null;
+    }
+    if (!/^(www\.)?nexusmods\.com$/iu.test(parsedUrl.hostname)) {
+        return null;
+    }
+    const pathParts = parsedUrl.pathname.split("/").filter(Boolean);
+    // /games/{game}/collections/{slug}
+    if (
+        pathParts.length >= 4 &&
+        pathParts[0].toLowerCase() === "games" &&
+        pathParts[2].toLowerCase() === "collections"
+    ) {
+        return {
+            type: "nxm-collection",
+            domainName: pathParts[1],
+            slug: pathParts[3],
+        };
+    }
+    // /{game}/collections/{slug}
+    if (pathParts.length >= 3 && pathParts[1].toLowerCase() === "collections") {
+        return {
+            type: "nxm-collection",
+            domainName: pathParts[0],
+            slug: pathParts[2],
+        };
+    }
+    return null;
 }
 
 function parseLaunchIntent(rawValue: string): TParsedLaunchIntent | null {
@@ -196,6 +255,11 @@ function parseLaunchIntent(rawValue: string): TParsedLaunchIntent | null {
 
     if (/^nxm:\/\//iu.test(normalizedValue)) {
         return resolveNxmIntent(normalizedValue);
+    }
+
+    const webCollection = resolveNexusWebCollectionIntent(normalizedValue);
+    if (webCollection) {
+        return webCollection;
     }
 
     return resolveGmmFileIntent(normalizedValue);
@@ -447,6 +511,47 @@ async function handleNxmIntent(
         throw error;
     }
 }
+async function handleNxmCollectionIntent(
+    intent: Extract<TParsedLaunchIntent, { type: "nxm-collection" }>,
+) {
+    const manager = useManager();
+    const settings = useSettings();
+    const targetGame = await ensureManagerGame({
+        nexusDomain: intent.domainName,
+    });
+    if (!targetGame) {
+        await navigateTo("/games");
+        ElMessage.warning("当前未找到与该 NXM 链接对应的游戏配置。");
+        return;
+    }
+    try {
+        const result = await queueNexusCollectionDownloadWithSelection({
+            gameDomain: intent.domainName,
+            slug: intent.slug,
+            revision: intent.revision,
+            game: targetGame,
+            gameName: targetGame.gameName,
+            managerModList: manager.managerModList,
+            nexusUser: settings.nexusModsUser,
+            nexusDirect: {
+                mode: settings.nexusModsDownloadMode === "cookie" ? "cookie" : "api",
+                cookie: settings.nexusModsCookie,
+            },
+        });
+        if (result) {
+            ElMessage.success(
+                `Collection 已加入下载：成功 ${result.successCount} 个，失败 ${result.failedCount} 个。`,
+            );
+        }
+    } catch (error: unknown) {
+        if (error instanceof NexusModsAuthorizationError) {
+            await navigateTo("/settings");
+            ElMessage.warning("请先在设置页完成 NexusMods 授权。");
+            return;
+        }
+        throw error;
+    }
+}
 
 async function handleLaunchIntent(intent: TParsedLaunchIntent) {
     switch (intent.type) {
@@ -464,6 +569,9 @@ async function handleLaunchIntent(intent: TParsedLaunchIntent) {
             return;
         case "nxm":
             await handleNxmIntent(intent);
+            return;
+        case "nxm-collection":
+            await handleNxmCollectionIntent(intent);
             return;
     }
 }

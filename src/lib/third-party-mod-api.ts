@@ -2,6 +2,8 @@
 import { invoke } from "@tauri-apps/api/core";
 // 统一走带超时与重试的封装，避免对端无响应时请求永久挂起。
 import { requestWithRetry as httpFetch } from "@/lib/http-client";
+import { PersistentStore } from "@/lib/persistent-store";
+import { SecretStore } from "@/lib/secret-store";
 
 export type ThirdPartyProvider =
     | "NexusMods"
@@ -210,6 +212,8 @@ export interface INexusModsDirectOptions {
     cookie?: string;
     // 下载模式，默认 api。
     mode?: NexusModsDownloadMode;
+    // 下载代理（后端 reqwest 显式代理，如 http://127.0.0.1:7890）；不传则读 downloadProxy。
+    proxy?: string | null;
 }
 
 export const THIRD_PARTY_PROVIDER_OPTIONS: IThirdPartyProviderOption[] = [
@@ -316,7 +320,7 @@ export async function fetchThirdPartyModDetail(
 ) {
     switch (provider) {
         case "NexusMods":
-            return fetchNexusModsDetail(game, routeId, nexusUser);
+            return fetchNexusModsDetail(game, routeId, nexusUser, routeQuery);
         case "Thunderstore":
             return fetchThunderstoreDetail(
                 routeQuery.namespace,
@@ -341,6 +345,11 @@ export async function resolveThirdPartyDownloadUrl(
     nexusDownloadAuthorization?: INexusModsDownloadAuthorization | null,
     nexusDirect?: INexusModsDirectOptions | null,
 ) {
+    // 凭据走 Stronghold 异步水合：启动热路径（NXM 深链/开页即重试）可能读到空值，
+    // 先等水合完成再读，避免空 Cookie 误报"未配置"并回退到无权限的 API 模式。
+    if (detail.source === "NexusMods" && nexusDirect?.mode === "cookie") {
+        await SecretStore.ready("nexusModsCookie");
+    }
     if (detail.source !== "NexusMods") {
         const targetFile =
             detail.files.find((item) => item.id === fileId) ??
@@ -368,13 +377,15 @@ export async function resolveThirdPartyDownloadUrl(
         if (!cookie) {
             throw new Error("未配置 NexusMods Cookie，请在设置页填写后重试。");
         }
+        // 代理未显式传入时读全局下载代理：后端 reqwest 只认显式代理，直连 www.nexusmods.com 会被墙。
+        const storedProxy = ((await PersistentStore.get<string>("downloadProxy", "")) ?? "").trim();
         return invoke<string>("nexus_resolve_direct", {
             gameDomain,
             modId: detail.id,
             fileId: targetFile.id,
             cookie,
             isNmm: false,
-            proxy: null,
+            proxy: nexusDirect.proxy ?? (storedProxy || null),
         });
     }
 
@@ -1047,8 +1058,13 @@ async function fetchNexusModsDetail(
     game: ISupportedGames,
     routeId: string,
     nexusUser?: INexusModsUser | null,
+    routeQuery?: Record<string, string>,
 ) {
-    const gameDomain = game.nexusMods?.game_domain_name?.trim() ?? "";
+    // game 经后端 JSON 往返可能丢失 nexusMods 嵌套字段，用调用方透传的 gameDomain 兜底。
+    const gameDomain =
+        game.nexusMods?.game_domain_name?.trim() ||
+        routeQuery?.gameDomain?.trim() ||
+        "";
     const modId =
         normalizeText(routeId).split("_")[0] ?? normalizeText(routeId);
 

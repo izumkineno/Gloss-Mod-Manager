@@ -49,6 +49,8 @@ struct TaskEntry {
     handle: Option<tauri::async_runtime::JoinHandle<()>>,
     /// 上次 dl-progress 发送时刻（MonitorUpdate 节流，0.5s 一跳）。
     last_emit: Option<std::time::Instant>,
+    /// 所属 collection 待下载清单 id（collection 建任务时透传，普通任务为 None）。
+    collection_id: Option<String>,
 }
 
 impl TaskEntry {
@@ -65,6 +67,10 @@ impl TaskEntry {
 struct Inner {
     tasks: HashMap<String, TaskEntry>,
     pending: VecDeque<String>,
+    /// 全局暂停闸：开启后 pump 不再起新任务。
+    paused_all: bool,
+    /// collection 暂停闸：集合内的 id 不再被 pump 起任务。
+    paused_collections: std::collections::HashSet<String>,
 }
 
 #[derive(Default, Clone)]
@@ -275,7 +281,8 @@ fn spawn_task(state: DownloaderState, gid: String) {
                             ..
                         } => {
                             entry.total = entry.total.max(total_size);
-                            entry.downloaded = total_downloaded;
+                            // 单调钳：MonitorUpdate 与块级累加两条路打架时，小值不覆盖大值（进度条倒流根因）。
+                            entry.downloaded = entry.downloaded.max(total_downloaded);
                             entry.speed = total_speed;
                             // 0.5s 节流：事件只做触发器，前端收到后拉快照。
                             let now = std::time::Instant::now();
@@ -356,9 +363,13 @@ fn spawn_task(state: DownloaderState, gid: String) {
 }
 
 /// 泵出等待队列：临界区只做标记，spawn 在锁外，避免与 worker 回调的锁嵌套。
+/// 暂停闸：paused_all 开启，或任务所属 collection 被暂停，均不启动，只留在 pending。
 fn pump(state: DownloaderState) {
     let starters: Vec<String> = {
         let mut inner = state.inner.lock().expect("downloader lock");
+        if inner.paused_all {
+            return;
+        }
         let active = inner
             .tasks
             .values()
@@ -366,15 +377,20 @@ fn pump(state: DownloaderState) {
             .count();
         let mut slots = MAX_ACTIVE.saturating_sub(active);
         let mut starters = Vec::new();
+        let mut deferred = Vec::new();
         while slots > 0 {
             let Some(next) = inner.pending.pop_front() else {
                 break;
             };
-            let alive = inner
-                .tasks
-                .get(&next)
-                .is_some_and(|entry| entry.status == TaskStatus::Waiting);
-            if !alive {
+            let gated = inner.tasks.get(&next).is_some_and(|entry| {
+                entry.status != TaskStatus::Waiting
+                    || entry
+                        .collection_id
+                        .as_ref()
+                        .is_some_and(|id| inner.paused_collections.contains(id))
+            });
+            if gated {
+                deferred.push(next);
                 continue;
             }
             slots -= 1;
@@ -383,6 +399,10 @@ fn pump(state: DownloaderState) {
                 entry.error = None;
             }
             starters.push(next);
+        }
+        // 被闸住的任务放回队列头部，下次 pump 到闸解除时再起。
+        for next in deferred.into_iter().rev() {
+            inner.pending.push_front(next);
         }
         starters
     };
@@ -400,6 +420,7 @@ pub fn dl_enqueue(
     headers: HashMap<String, String>,
     workers: u64,
     proxy: Option<String>,
+    collection_id: Option<String>,
 ) -> Result<String, String> {
     if url.trim().is_empty() {
         return Err("下载地址为空".to_string());
@@ -409,8 +430,12 @@ pub fn dl_enqueue(
     }
     let gid = uuid::Uuid::new_v4().to_string();
     let header_vec: Vec<(String, String)> = headers.into_iter().collect();
-    {
+    let gated = {
         let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let gated = inner.paused_all
+            || collection_id
+                .as_ref()
+                .is_some_and(|id| inner.paused_collections.contains(id));
         inner.tasks.insert(
             gid.clone(),
             TaskEntry {
@@ -428,21 +453,175 @@ pub fn dl_enqueue(
                         Some(trimmed)
                     }
                 }),
-                status: TaskStatus::Waiting,
+                // 被闸住的任务直接 Paused，不进 pending；闸解除后由 resume 显式恢复。
+                status: if gated { TaskStatus::Paused } else { TaskStatus::Waiting },
                 total: 0,
                 downloaded: 0,
                 speed: 0.0,
                 error: None,
                 handle: None,
                 last_emit: None,
+                collection_id: collection_id.clone(),
             },
         );
-        inner.pending.push_back(gid.clone());
+        if !gated {
+            inner.pending.push_back(gid.clone());
+        }
+        gated
+    };
+    if gated {
+        state.emit_changed(&gid, TaskStatus::Paused.as_status_str());
+        return Ok(gid);
     }
     pump((*state).clone());
     // 入队即事件：前端纯事件驱动需要此触发器，否则新任务要等下一次刷新才出现。
     state.emit_changed(&gid, TaskStatus::Waiting.as_status_str());
     Ok(gid)
+}
+
+/// 全局暂停闸：开启后 pump 不起新任务；已 active 的逐个中止。
+#[tauri::command]
+pub fn dl_pause_all(state: tauri::State<DownloaderState>) -> Result<usize, String> {
+    let gids: Vec<String> = {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        inner.paused_all = true;
+        inner
+            .tasks
+            .iter_mut()
+            .filter(|(_, entry)| {
+                entry.status == TaskStatus::Active || entry.status == TaskStatus::Waiting
+            })
+            .map(|(gid, entry)| {
+                if entry.status == TaskStatus::Active {
+                    abort_entry(entry);
+                }
+                entry.status = TaskStatus::Paused;
+                gid.clone()
+            })
+            .collect()
+    };
+    {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        inner.pending.retain(|pending| !gids.contains(pending));
+    }
+    let count = gids.len();
+    for gid in &gids {
+        state.emit_changed(gid, TaskStatus::Paused.as_status_str());
+    }
+    Ok(count)
+}
+
+/// 全局暂停闸解除：paused 的任务回 waiting，pump 顶上去。
+#[tauri::command]
+pub fn dl_resume_all(state: tauri::State<DownloaderState>) -> Result<usize, String> {
+    let gids: Vec<String> = {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        inner.paused_all = false;
+        let paused: std::collections::HashSet<String> =
+            inner.paused_collections.iter().cloned().collect();
+        let gids: Vec<String> = inner
+            .tasks
+            .iter_mut()
+            .filter(|(_, entry)| {
+                entry.status == TaskStatus::Paused
+                    && entry
+                        .collection_id
+                        .as_ref()
+                        .is_none_or(|id| !paused.contains(id))
+            })
+            .map(|(gid, entry)| {
+                entry.status = TaskStatus::Waiting;
+                gid.clone()
+            })
+            .collect();
+        for gid in &gids {
+            inner.pending.push_back(gid.clone());
+        }
+        gids
+    };
+    let count = gids.len();
+    for gid in &gids {
+        state.emit_changed(gid, TaskStatus::Waiting.as_status_str());
+    }
+    pump((*state).clone());
+    Ok(count)
+}
+
+/// collection 暂停闸：该清单已建任务全部暂停，后续入队直接 Paused。
+#[tauri::command]
+pub fn dl_pause_collection(
+    state: tauri::State<DownloaderState>,
+    collection_id: String,
+) -> Result<usize, String> {
+    let gids: Vec<String> = {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        inner.paused_collections.insert(collection_id.clone());
+        inner
+            .tasks
+            .iter_mut()
+            .filter(|(_, entry)| {
+                entry.collection_id.as_deref() == Some(collection_id.as_str())
+                    && (entry.status == TaskStatus::Active
+                        || entry.status == TaskStatus::Waiting)
+            })
+            .map(|(gid, entry)| {
+                if entry.status == TaskStatus::Active {
+                    abort_entry(entry);
+                }
+                entry.status = TaskStatus::Paused;
+                gid.clone()
+            })
+            .collect()
+    };
+    // waiting 任务从 pending 摘除，避免 pump 误起（pump 也有闸，双保险）。
+    {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        inner.pending.retain(|pending| !gids.contains(pending));
+    }
+    let count = gids.len();
+    for gid in &gids {
+        state.emit_changed(gid, TaskStatus::Paused.as_status_str());
+    }
+    pump((*state).clone());
+    Ok(count)
+}
+
+/// collection 暂停闸解除：该清单 paused 任务回 waiting。
+#[tauri::command]
+pub fn dl_resume_collection(
+    state: tauri::State<DownloaderState>,
+    collection_id: String,
+) -> Result<usize, String> {
+    let gids: Vec<String> = {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        inner.paused_collections.remove(&collection_id);
+        if inner.paused_all {
+            return Ok(0);
+        }
+        let target = collection_id.clone();
+        let gids: Vec<String> = inner
+            .tasks
+            .iter_mut()
+            .filter(|(_, entry)| {
+                entry.collection_id.as_deref() == Some(target.as_str())
+                    && entry.status == TaskStatus::Paused
+            })
+            .map(|(gid, entry)| {
+                entry.status = TaskStatus::Waiting;
+                gid.clone()
+            })
+            .collect();
+        for gid in &gids {
+            inner.pending.push_back(gid.clone());
+        }
+        gids
+    };
+    let count = gids.len();
+    for gid in &gids {
+        state.emit_changed(gid, TaskStatus::Waiting.as_status_str());
+    }
+    pump((*state).clone());
+    Ok(count)
 }
 
 fn abort_entry(entry: &mut TaskEntry) {
@@ -472,19 +651,31 @@ pub fn dl_pause(state: tauri::State<DownloaderState>, gid: String) -> Result<(),
 
 #[tauri::command]
 pub fn dl_resume(state: tauri::State<DownloaderState>, gid: String) -> Result<(), String> {
-    let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
-    let Some(entry) = inner.tasks.get_mut(&gid) else {
-        return Err(format!("任务不存在：{gid}"));
+    // 先快照闸状态，再拿 entry 可变借用，避免双重借用 inner。
+    let (paused_all, paused_collections): (bool, std::collections::HashSet<String>) = {
+        let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        (inner.paused_all, inner.paused_collections.iter().cloned().collect())
     };
-    if entry.status == TaskStatus::Active || entry.status == TaskStatus::Complete {
-        return Ok(());
+    {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let Some(entry) = inner.tasks.get_mut(&gid) else {
+            return Err(format!("任务不存在：{gid}"));
+        };
+        if entry.status == TaskStatus::Active || entry.status == TaskStatus::Complete {
+            return Ok(());
+        }
+        // 闸开着时 resume 直接拒绝，避免前端自动恢复把暂停顶掉。
+        if paused_all
+            || entry.collection_id.as_ref().is_some_and(|id| paused_collections.contains(id))
+        {
+            return Err("已暂停全部/该 Collection，无法继续任务。".to_string());
+        }
+        entry.status = TaskStatus::Waiting;
+        entry.error = None;
+        if !inner.pending.contains(&gid) {
+            inner.pending.push_back(gid.clone());
+        }
     }
-    entry.status = TaskStatus::Waiting;
-    entry.error = None;
-    if !inner.pending.contains(&gid) {
-        inner.pending.push_back(gid.clone());
-    }
-    drop(inner);
     state.emit_changed(&gid, TaskStatus::Waiting.as_status_str());
     pump((*state).clone());
     Ok(())

@@ -67,6 +67,7 @@ declare global {
   const checkGlossModUpdates: typeof import('./lib/gloss-mod-api').checkGlossModUpdates
   const checkMcpToolDrift: typeof import('./lib/mcp-tool-drift').checkMcpToolDrift
   const classifyModType: typeof import('./lib/mod-classify-rules').classifyModType
+  const clearFinishedCollectionPending: typeof import('./lib/nexus-collection-pending').clearFinishedCollectionPending
   const clearManagerInternalDrag: typeof import('./lib/manager-internal-drag').clearManagerInternalDrag
   const cloneDefinition: typeof import('./lib/custom-definition-utils').cloneDefinition
   const cn: typeof import('./lib/utils').cn
@@ -115,12 +116,15 @@ declare global {
   const fetchGlossGames: typeof import('./lib/gloss-mod-api').fetchGlossGames
   const fetchGlossModDetail: typeof import('./lib/gloss-mod-api').fetchGlossModDetail
   const fetchModIoGameTags: typeof import('./lib/third-party-mod-api').fetchModIoGameTags
+  const fetchNexusCollectionFiles: typeof import('./lib/nexus-collection-api').fetchNexusCollectionFiles
+  const fetchNexusCollectionInfo: typeof import('./lib/nexus-collection-api').fetchNexusCollectionInfo
   const fetchThirdPartyModDetail: typeof import('./lib/third-party-mod-api').fetchThirdPartyModDetail
   const fetchThirdPartyMods: typeof import('./lib/third-party-mod-api').fetchThirdPartyMods
   const fetchThunderstoreCacheStatus: typeof import('./lib/third-party-mod-api').fetchThunderstoreCacheStatus
   const findGlossDuplicateLocalMods: typeof import('./lib/gloss-download').findGlossDuplicateLocalMods
   const findGlossDuplicateTasks: typeof import('./lib/gloss-download').findGlossDuplicateTasks
   const findLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').findLegacyCustomGameDefinition
+  const formatBytes: typeof import('./lib/download-task-ui').formatBytes
   const formatKeywordText: typeof import('./lib/custom-definition-utils').formatKeywordText
   const framelessClose: typeof import('./lib/frameless-window').framelessClose
   const framelessIsMaximized: typeof import('./lib/frameless-window').framelessIsMaximized
@@ -135,6 +139,9 @@ declare global {
   const getExploreTranslationErrorMessage: typeof import('./lib/explore-ai-translation').getExploreTranslationErrorMessage
   const getGlossModPresence: typeof import('./lib/gloss-download').getGlossModPresence
   const getLegacyConfigRoots: typeof import('./lib/legacy-custom-data').getLegacyConfigRoots
+  const getTaskPrimaryFile: typeof import('./lib/download-task-ui').getTaskPrimaryFile
+  const getTaskProgress: typeof import('./lib/download-task-ui').getTaskProgress
+  const getTaskSpeedText: typeof import('./lib/download-task-ui').getTaskSpeedText
   const getThirdPartyProviderLabel: typeof import('./lib/third-party-mod-api').getThirdPartyProviderLabel
   const getUrlFileName: typeof import('./lib/file-name-utils').getUrlFileName
   const h: typeof import('vue').h
@@ -171,6 +178,7 @@ declare global {
   const isThirdPartyProviderSupported: typeof import('./lib/third-party-mod-api').isThirdPartyProviderSupported
   const joinRelativePath: typeof import('./lib/custom-definition-utils').joinRelativePath
   const listArchiveWithSevenZip: typeof import('./lib/sevenZip').listArchiveWithSevenZip
+  const listCollectionPending: typeof import('./lib/nexus-collection-pending').listCollectionPending
   const listLegacyCustomGameDefinitions: typeof import('./lib/legacy-custom-data').listLegacyCustomGameDefinitions
   const listLegacyCustomTypeDefinitions: typeof import('./lib/legacy-custom-data').listLegacyCustomTypeDefinitions
   const loadLegacyCustomGames: typeof import('./lib/legacy-custom-data').loadLegacyCustomGames
@@ -221,6 +229,7 @@ declare global {
   const queueCustomDownload: typeof import('./lib/custom-download-queue').queueCustomDownload
   const queueGlossModDownload: typeof import('./lib/gloss-download-queue').queueGlossModDownload
   const queueGlossModDownloadWithSelection: typeof import('./lib/download-file-selection').queueGlossModDownloadWithSelection
+  const queueNexusCollectionDownloadWithSelection: typeof import('./lib/nexus-collection-download').queueNexusCollectionDownloadWithSelection
   const queueThirdPartyModDownload: typeof import('./lib/third-party-download-queue').queueThirdPartyModDownload
   const queueThirdPartyModDownloadWithSelection: typeof import('./lib/download-file-selection').queueThirdPartyModDownloadWithSelection
   const queueThirdPartyModDownloadsWithSelection: typeof import('./lib/download-file-selection').queueThirdPartyModDownloadsWithSelection
@@ -241,6 +250,7 @@ declare global {
   const refThrottled: typeof import('@vueuse/core').refThrottled
   const refWithControl: typeof import('@vueuse/core').refWithControl
   const refreshThunderstoreCache: typeof import('./lib/third-party-mod-api').refreshThunderstoreCache
+  const removeCollectionPending: typeof import('./lib/nexus-collection-pending').removeCollectionPending
   const removeDownloadTaskSnapshot: typeof import('./lib/download-task-cache').removeDownloadTaskSnapshot
   const removeDownloadTaskSnapshots: typeof import('./lib/download-task-cache').removeDownloadTaskSnapshots
   const requestWithRetry: typeof import('./lib/http-client').requestWithRetry
@@ -256,6 +266,7 @@ declare global {
   const resolveUnref: typeof import('@vueuse/core').resolveUnref
   const sanitizeFileName: typeof import('./lib/file-name-utils').sanitizeFileName
   const sanitizeHtml: typeof import('./lib/html-sanitizer').sanitizeHtml
+  const saveCollectionPending: typeof import('./lib/nexus-collection-pending').saveCollectionPending
   const saveLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').saveLegacyCustomGameDefinition
   const saveLegacyCustomTypeDefinition: typeof import('./lib/legacy-custom-data').saveLegacyCustomTypeDefinition
   const setActivePinia: typeof import('pinia').setActivePinia
@@ -279,6 +290,7 @@ declare global {
   const testArchiveWithSevenZip: typeof import('./lib/sevenZip').testArchiveWithSevenZip
   const throttledRef: typeof import('@vueuse/core').throttledRef
   const throttledWatch: typeof import('@vueuse/core').throttledWatch
+  const toNumber: typeof import('./lib/download-task-ui').toNumber
   const toRaw: typeof import('vue').toRaw
   const toReactive: typeof import('@vueuse/core').toReactive
   const toRef: typeof import('vue').toRef
@@ -294,6 +306,7 @@ declare global {
   const unref: typeof import('vue').unref
   const unrefElement: typeof import('@vueuse/core').unrefElement
   const until: typeof import('@vueuse/core').until
+  const updateCollectionPendingItem: typeof import('./lib/nexus-collection-pending').updateCollectionPendingItem
   const useActiveElement: typeof import('@vueuse/core').useActiveElement
   const useAiChatStore: typeof import('./stores/ai-chat').useAiChatStore
   const useAnimate: typeof import('@vueuse/core').useAnimate
@@ -366,6 +379,7 @@ declare global {
   const useFullscreen: typeof import('@vueuse/core').useFullscreen
   const useGamepad: typeof import('@vueuse/core').useGamepad
   const useGeolocation: typeof import('@vueuse/core').useGeolocation
+  const useGlobalLoadingStore: typeof import('./stores/global-loading').useGlobalLoadingStore
   const useId: typeof import('vue').useId
   const useIdle: typeof import('@vueuse/core').useIdle
   const useImage: typeof import('@vueuse/core').useImage
@@ -591,6 +605,15 @@ declare global {
   // @ts-ignore
   export type { INavItem } from './lib/nav-items'
   import('./lib/nav-items')
+  // @ts-ignore
+  export type { INexusCollectionRevision, INexusCollectionInfo, INexusCollectionFile } from './lib/nexus-collection-api'
+  import('./lib/nexus-collection-api')
+  // @ts-ignore
+  export type { IQueueNexusCollectionOptions, IQueueNexusCollectionResult } from './lib/nexus-collection-download'
+  import('./lib/nexus-collection-download')
+  // @ts-ignore
+  export type { NexusCollectionPendingItemStatus, INexusCollectionPendingItem, INexusCollectionPending } from './lib/nexus-collection-pending'
+  import('./lib/nexus-collection-pending')
   // @ts-ignore
   export type { PersistentStore } from './lib/persistent-store'
   import('./lib/persistent-store')

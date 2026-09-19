@@ -1,40 +1,23 @@
 <script setup lang="ts">
 import { documentDir, join } from "@tauri-apps/api/path";
-import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
 import { open } from "@tauri-apps/plugin-dialog";
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import { ElMessage } from "element-plus-message";
 import { Downloader } from "@/lib/native-downloader";
+import { useDownloadTasks } from "@/composables/useDownloadTasks";
 import {
-    type IDownloaderGlobalStat,
     type IDownloaderEnsureOptions,
     type IDownloaderTask,
     type IDownloaderSettings,
 } from "@/lib/download-task-types";
 import {
-    importLocalModSources,
-    type ILocalModImportSource,
-} from "@/lib/local-mod-import";
-import {
-    buildUniqueGlossFileName,
-    findGlossDuplicateLocalMods,
-    findGlossDuplicateTasks,
-    getGlossModPresence,
-    type IGlossDownloadTaskMeta,
-} from "@/lib/gloss-download";
-import { autoImportCompletedDownloadTasks } from "@/lib/gloss-download-monitor";
-import {
-    buildGlossOutputFileName,
-    resolveGlossDownloadImportSourceType,
-} from "@/lib/gloss-download-queue";
-import { resolveGlossModKey } from "@/lib/gloss-mod-api";
-import {
-    mergeDownloadTaskSnapshots,
-    removeDownloadTaskSnapshot,
-    removeDownloadTaskSnapshots,
-} from "@/lib/download-task-cache";
+    formatBytes,
+    getTaskPrimaryFile,
+    getTaskProgress,
+    toNumber,
+} from "@/lib/download-task-ui";
 
-type QueueFilter = "all" | "active" | "waiting" | "paused" | "stopped";
+type QueueFilter = "all" | "active" | "waiting" | "paused" | "stopped" | "failed" | "imported" | "unimported";
 type DuplicateDecisionAction =
     | "cancel"
     | "continue"
@@ -107,18 +90,15 @@ const EMPTY_POSTER =
 			<text x="42" y="246" fill="#ffe0a3" font-size="22" font-family="Arial, sans-serif">内置详情与下载</text>
 		</svg>
 	`);
-const defaultGlobalStat = (): IDownloaderGlobalStat => ({
-    downloadSpeed: "0",
-    numActive: "0",
-    numWaiting: "0",
-    numStopped: "0",
-});
 const queueFilterLabels: Record<QueueFilter, string> = {
     all: "全部",
     active: "下载中",
     waiting: "等待中",
     paused: "已暂停",
     stopped: "已结束",
+    failed: "下载失败",
+    imported: "已导入",
+    unimported: "未导入",
 };
 const taskStatusLabels: Record<string, string> = {
     active: "下载中",
@@ -146,7 +126,29 @@ const TASK_STATUS_SORT_ORDER: Record<string, number> = {
     error: 4,
     removed: 5,
 };
-const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
+// 任务快照/订阅/meta/暂停继续/retry 清理统一收口 composable；下载页保留详情/导入/建任务业务。
+const {
+    tasksLoading,
+    tasksErrorMessage,
+    refreshingTasks,
+    globalStat,
+    activeTasks,
+    waitingTasks,
+    stoppedTasks,
+    allTasks,
+    failedTasks,
+    finishedTasks,
+    taskMetaMap,
+    refreshTaskLists,
+    setTaskMeta,
+    saveTaskMetaMap,
+    forgetTaskRecord,
+    removeTaskRecord,
+    startTaskOperation,
+    finishTaskOperation,
+    isTaskOperating,
+} = useDownloadTasks({ focusRefresh: true, onNewlyCompleted: (gids, tasks) => void autoImportCompletedTasks(gids, tasks) });
+const taskImportingIds = ref<string[]>([]);
 
 const manager = useManager();
 const settings = useSettings();
@@ -166,26 +168,18 @@ const downloaderSettings = PersistentStore.useValue<IDownloaderSettings>(
     "nativeDownloaderSettings",
     Downloader.getDefaultSettings(),
 );
-const taskMetaMap = PersistentStore.useValue<
-    Record<string, IGlossDownloadTaskMeta>
->(DOWNLOAD_TASK_META_KEY, {});
-
-// 内置引擎常驻进程内，无 RPC 连接态；loading/error 只反映列表刷新本身。
-const tasksLoading = ref(false);
-const tasksErrorMessage = ref("");
-const refreshingTasks = ref(false);
-const globalStat = ref<IDownloaderGlobalStat>(defaultGlobalStat());
-const activeTasks = ref<IDownloaderTask[]>([]);
-const waitingTasks = ref<IDownloaderTask[]>([]);
-const stoppedTasks = ref<IDownloaderTask[]>([]);
-const taskOperatingIds = ref<string[]>([]);
-const taskImportingIds = ref<string[]>([]);
 
 const modLookupInput = ref("");
 const modLookupLoading = ref(false);
 const modLookupError = ref("");
 const selectedMod = ref<IMod | null>(null);
 const addingResourceKey = ref("");
+const normalizedDownloaderSettings = computed(() =>
+    Downloader.normalizeSettings(downloaderSettings.value),
+);
+const resolvedDownloadDirectory = computed(
+    () => downloadDirectory.value || defaultDownloadDirectory.value,
+);
 
 const queueFilter = ref<QueueFilter>("all");
 const taskPage = ref(1);
@@ -212,30 +206,22 @@ const downloaderSettingsDraft = ref<IDownloaderSettings>(
 );
 const downloadProxyDraft = ref("");
 
-let refreshSequence = 0;
 let detailSequence = 0;
 let duplicateDialogResolver:
     | ((action: DuplicateDecisionAction) => void)
     | null = null;
-let hasCompletedInitialTaskSync = false;
-
-const normalizedDownloaderSettings = computed(() =>
-    Downloader.normalizeSettings(downloaderSettings.value),
-);
-const resolvedDownloadDirectory = computed(
-    () => downloadDirectory.value || defaultDownloadDirectory.value,
-);
 const waitingQueueTasks = computed(() =>
     waitingTasks.value.filter((task) => task.status === "waiting"),
 );
 const pausedTasks = computed(() =>
     waitingTasks.value.filter((task) => task.status === "paused"),
 );
-const allTasks = computed(() => [
-    ...activeTasks.value,
-    ...waitingTasks.value,
-    ...stoppedTasks.value,
-]);
+const importedTasks = computed(() =>
+    allTasks.value.filter((task) => taskMetaMap.value[task.gid]?.localModId != null),
+);
+const unimportedTasks = computed(() =>
+    allTasks.value.filter((task) => taskMetaMap.value[task.gid]?.localModId == null),
+);
 const filteredTasks = computed(() => {
     let tasks: IDownloaderTask[] = [];
 
@@ -249,8 +235,17 @@ const filteredTasks = computed(() => {
         case "paused":
             tasks = pausedTasks.value;
             break;
+        case "failed":
+            tasks = failedTasks.value;
+            break;
         case "stopped":
-            tasks = stoppedTasks.value;
+            tasks = finishedTasks.value;
+            break;
+        case "imported":
+            tasks = importedTasks.value;
+            break;
+        case "unimported":
+            tasks = unimportedTasks.value;
             break;
         default:
             tasks = allTasks.value;
@@ -372,7 +367,22 @@ const queueFilterOptions = computed(() => [
     {
         value: "stopped" as QueueFilter,
         label: queueFilterLabels.stopped,
-        count: stoppedTasks.value.length,
+        count: finishedTasks.value.length,
+    },
+    {
+        value: "failed" as QueueFilter,
+        label: queueFilterLabels.failed,
+        count: failedTasks.value.length,
+    },
+    {
+        value: "imported" as QueueFilter,
+        label: queueFilterLabels.imported,
+        count: importedTasks.value.length,
+    },
+    {
+        value: "unimported" as QueueFilter,
+        label: queueFilterLabels.unimported,
+        count: unimportedTasks.value.length,
     },
 ]);
 const detailParagraphs = computed(() =>
@@ -391,9 +401,6 @@ function getTaskExternalId(metadata?: IGlossDownloadTaskMeta | null) {
     return metadata?.externalId ?? metadata?.modId;
 }
 
-// 纯事件驱动：dl-progress（0.5s 节流）+ dl-task-changed（含入队 waiting）触发刷新；
-// 窗口重新聚焦时补一次，兜底后台期间丢的事件。
-let releaseTaskEvents: (() => void) | null = null;
 
 watch(
     allTasks,
@@ -478,35 +485,13 @@ watch(
 );
 
 onMounted(() => {
-    void subscribeDownloadTaskEvents(() => {
-        void refreshTaskLists(true);
-    }).then((release) => {
-        releaseTaskEvents = release;
-    });
-    window.addEventListener("focus", handleWindowFocusRefresh);
-    document.addEventListener("visibilitychange", handleVisibilityRefresh);
+    // 订阅/focus 兜底由 composable 统一注册，此处只跑页面初始化。
     void initializeDownloadPage();
 });
 
-onUnmounted(() => {
-    releaseTaskEvents?.();
-    releaseTaskEvents = null;
-    window.removeEventListener("focus", handleWindowFocusRefresh);
-    document.removeEventListener("visibilitychange", handleVisibilityRefresh);
-});
-
-// 窗口聚焦/可见性恢复时补一次刷新，兜底后台期间丢的事件。
-function handleWindowFocusRefresh() {
-    void refreshTaskLists(true);
-}
-
-function handleVisibilityRefresh() {
-    if (document.visibilityState === "visible") {
-        void refreshTaskLists(true);
-    }
-}
-
 function getErrorMessage(error: unknown) {
+    // 后端 invoke 失败 reject 的是字符串而非 Error，直接保留原文（collection 页已有同款逻辑）。
+    if (typeof error === "string" && error.trim()) return error;
     if (error instanceof Error && error.message.trim()) {
         return error.message;
     }
@@ -661,104 +646,12 @@ async function initializeDownloadPage() {
     try {
         tasksLoading.value = true;
         tasksErrorMessage.value = "";
-        await hydrateCachedTaskLists();
         await ensureEngineReady();
         await refreshTaskLists();
     } catch (error: unknown) {
         tasksErrorMessage.value = getErrorMessage(error);
     } finally {
         tasksLoading.value = false;
-    }
-}
-
-async function hydrateCachedTaskLists() {
-    const cachedTasks = await mergeDownloadTaskSnapshots(
-        [],
-        taskMetaMap.value,
-        resolvedDownloadDirectory.value,
-    );
-
-    activeTasks.value = cachedTasks.filter((task) => task.status === "active");
-    waitingTasks.value = cachedTasks.filter((task) =>
-        ["waiting", "paused"].includes(task.status),
-    );
-    stoppedTasks.value = cachedTasks.filter(
-        (task) => !["active", "waiting", "paused"].includes(task.status),
-    );
-}
-
-async function refreshTaskLists(silent: boolean = false) {
-    const currentSequence = ++refreshSequence;
-
-    if (!silent) {
-        refreshingTasks.value = true;
-    }
-
-    try {
-        const outputDirectory = await ensureEngineReady();
-
-        const [stat, active, waiting, stopped] = await Promise.all([
-            Downloader.getGlobalStat(),
-            Downloader.tellActive(),
-            Downloader.tellWaiting(0, 100),
-            Downloader.tellStopped(0, 100),
-        ]);
-
-        if (currentSequence !== refreshSequence) {
-            return;
-        }
-
-        const liveTasks = [...active, ...waiting, ...stopped];
-        const mergedTasks = await mergeDownloadTaskSnapshots(
-            liveTasks,
-            taskMetaMap.value,
-            outputDirectory,
-        );
-        const liveGids = new Set(liveTasks.map((task) => task.gid));
-        const restoredTasks = mergedTasks.filter(
-            (task) => !liveGids.has(task.gid),
-        );
-        const displayedStoppedTasks = [
-            ...stopped,
-            ...restoredTasks.filter(
-                (task) =>
-                    !["active", "waiting", "paused"].includes(task.status),
-            ),
-        ];
-        const allDisplayedTasks = [
-            ...active,
-            ...waiting,
-            ...displayedStoppedTasks,
-        ];
-        const newlyCompletedTaskGids = syncTaskMetaStatuses(allDisplayedTasks);
-
-        globalStat.value = stat;
-        activeTasks.value = active;
-        waitingTasks.value = waiting;
-        stoppedTasks.value = displayedStoppedTasks;
-        tasksErrorMessage.value = "";
-
-        if (!hasCompletedInitialTaskSync) {
-            hasCompletedInitialTaskSync = true;
-            return;
-        }
-
-        if (newlyCompletedTaskGids.length > 0) {
-            void autoImportCompletedTasks(
-                newlyCompletedTaskGids,
-                allDisplayedTasks,
-            );
-        }
-    } catch (error: unknown) {
-        if (currentSequence !== refreshSequence) {
-            return;
-        }
-
-        tasksErrorMessage.value = getErrorMessage(error);
-    } finally {
-        if (!silent && currentSequence === refreshSequence) {
-            refreshingTasks.value = false;
-        }
     }
 }
 
@@ -890,33 +783,11 @@ function formatDate(value?: string) {
 
     return dateFormatter.format(parsed);
 }
-
-function toNumber(value?: string | number) {
-    const normalized = typeof value === "number" ? value : Number(value ?? 0);
-
-    return Number.isFinite(normalized) ? normalized : 0;
-}
-
 function formatNumber(value?: string | number) {
     return numberFormatter.format(toNumber(value));
 }
 
-function formatBytes(value?: string | number) {
-    const bytes = toNumber(value);
 
-    if (bytes <= 0) {
-        return "0 B";
-    }
-
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    const exponent = Math.min(
-        Math.floor(Math.log(bytes) / Math.log(1024)),
-        units.length - 1,
-    );
-    const amount = bytes / 1024 ** exponent;
-
-    return `${amount >= 100 ? amount.toFixed(0) : amount.toFixed(1)} ${units[exponent]}`;
-}
 
 function formatSpeed(value?: string | number) {
     return `${formatBytes(value)}/s`;
@@ -966,33 +837,46 @@ function sortTasksByCreatedAt(tasks: IDownloaderTask[]) {
     });
 }
 
-function getTaskProgress(task: IDownloaderTask) {
-    if (task.status === "complete") {
-        return 100;
-    }
-
-    const totalLength = toNumber(task.totalLength);
-
-    if (totalLength <= 0) {
-        return 0;
-    }
-
-    return Math.min(
-        100,
-        Math.round((toNumber(task.completedLength) / totalLength) * 100),
-    );
-}
-
-function getTaskPrimaryFile(task: IDownloaderTask) {
-    return task.files.find((item) => item.path) ?? task.files[0] ?? null;
-}
-
 function getBaseName(filePath?: string) {
     if (!filePath) {
         return "";
     }
 
     return filePath.split(/[\\/]+/u).pop() ?? filePath;
+}
+
+// 打开文件位置：取主文件父目录调系统文件管理器。
+async function openTaskFileLocation(task: IDownloaderTask) {
+    const filePath = getTaskPrimaryFile(task)?.path;
+
+    if (!filePath) {
+        ElMessage.warning("该任务暂无本地文件路径。");
+        return;
+    }
+
+    const dirPath = filePath.replace(/[\\/][^\\/]*$/u, "");
+
+    if (!dirPath) {
+        ElMessage.warning("该任务暂无本地文件路径。");
+        return;
+    }
+
+    const opened = await FileHandler.openFolder(dirPath);
+
+    if (!opened) {
+        ElMessage.error("打开文件位置失败。");
+    }
+}
+
+// 资源是否正在建任务（右键菜单 disabled 用，避免模板内反引号嵌套）。
+function isResourceAdding(resource: IResource) {
+    return addingResourceKey.value === `${selectedMod.value?.id}-${resource.id ?? resource.mods_resource_name}`;
+}
+
+// 在网页打开 Mod 详情页。
+async function openModResourcePage(modId: number | string) {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    await openUrl(`${GLOSS_MOD_WEB_BASE_URL}/mod/${modId}`);
 }
 
 function getTaskDisplayName(task: IDownloaderTask) {
@@ -1056,57 +940,6 @@ function buildOutputFileName(resource: IResource) {
     return buildGlossOutputFileName(resource);
 }
 
-function syncTaskMetaStatuses(tasks: IDownloaderTask[]) {
-    const nextMap = { ...taskMetaMap.value };
-    let changed = false;
-    const newlyCompletedTaskGids: string[] = [];
-
-    for (const task of tasks) {
-        const currentMeta = nextMap[task.gid];
-
-        if (!currentMeta) {
-            continue;
-        }
-
-        const nextMeta: IGlossDownloadTaskMeta = {
-            ...currentMeta,
-            createdAt:
-                currentMeta.createdAt ||
-                currentMeta.downloadedAt ||
-                currentMeta.importedAt ||
-                currentMeta.updatedAt ||
-                new Date().toISOString(),
-            taskStatus: task.status as TaskStatus,
-            updatedAt: new Date().toISOString(),
-        };
-
-        if (
-            task.status === "complete" &&
-            currentMeta.taskStatus !== "complete"
-        ) {
-            newlyCompletedTaskGids.push(task.gid);
-        }
-
-        if (task.status === "complete" && !currentMeta.downloadedAt) {
-            nextMeta.downloadedAt = new Date().toISOString();
-        }
-
-        if (
-            nextMeta.createdAt !== currentMeta.createdAt ||
-            nextMeta.taskStatus !== currentMeta.taskStatus ||
-            nextMeta.downloadedAt !== currentMeta.downloadedAt
-        ) {
-            nextMap[task.gid] = nextMeta;
-            changed = true;
-        }
-    }
-
-    if (changed) {
-        taskMetaMap.value = nextMap;
-    }
-
-    return newlyCompletedTaskGids;
-}
 
 async function autoImportCompletedTasks(
     completedTaskGids: string[],
@@ -1295,68 +1128,6 @@ function getTaskOutputFileName(task: IDownloaderTask) {
     return "download.bin";
 }
 
-function setTaskMeta(gid: string, metadata: IGlossDownloadTaskMeta) {
-    const nextMeta: IGlossDownloadTaskMeta = {
-        ...taskMetaMap.value[gid],
-        ...metadata,
-    };
-
-    if (!nextMeta.createdAt) {
-        nextMeta.createdAt = new Date().toISOString();
-    }
-
-    taskMetaMap.value = {
-        ...taskMetaMap.value,
-        [gid]: nextMeta,
-    };
-}
-
-function removeTaskMeta(gid: string) {
-    if (!taskMetaMap.value[gid]) {
-        return;
-    }
-
-    const nextMap = { ...taskMetaMap.value };
-    delete nextMap[gid];
-    taskMetaMap.value = nextMap;
-}
-
-async function readLatestTaskMetaMap() {
-    const storedTaskMetaMap =
-        (await PersistentStore.get<Record<string, IGlossDownloadTaskMeta>>(
-            DOWNLOAD_TASK_META_KEY,
-            {},
-        )) ?? {};
-
-    return {
-        ...storedTaskMetaMap,
-        ...taskMetaMap.value,
-    };
-}
-
-async function saveTaskMetaMap(
-    nextMap: Record<string, IGlossDownloadTaskMeta>,
-) {
-    await PersistentStore.set(DOWNLOAD_TASK_META_KEY, nextMap, true);
-}
-
-function startTaskOperation(gid: string) {
-    if (taskOperatingIds.value.includes(gid)) {
-        return;
-    }
-
-    taskOperatingIds.value = [...taskOperatingIds.value, gid];
-}
-
-function finishTaskOperation(gid: string) {
-    taskOperatingIds.value = taskOperatingIds.value.filter(
-        (item) => item !== gid,
-    );
-}
-
-function isTaskOperating(gid: string) {
-    return taskOperatingIds.value.includes(gid);
-}
 
 async function createResourceTask(resource: IResource, outputFileName: string) {
     if (!selectedMod.value) {
@@ -1577,14 +1348,38 @@ async function addResourceTask(
     };
 }
 
-async function retryTask(task: IDownloaderTask) {
+// 无有效下载地址判据（真假任务通用）：meta 存的是 nexus 网页回退地址且 files 里无有效直链。
+function isTaskRetryUnrecoverable(task: IDownloaderTask): boolean {
+    const savedUrl = taskMetaMap.value[task.gid]?.downloadUrl?.trim() ?? "";
+    if (savedUrl && !/:\/\/www\.nexusmods\.com\//iu.test(savedUrl)) return false;
+    const hasLiveUri = task.files.some((file) =>
+        (file.uris ?? []).some((item) => {
+            const uri = item.uri?.trim() ?? "";
+            return uri && !/:\/\/www\.nexusmods\.com\//iu.test(uri);
+        }),
+    );
+    return !hasLiveUri;
+}
+
+async function retryTask(task: IDownloaderTask, quiet = false) {
     startTaskOperation(task.gid);
 
     try {
-        const uris = getTaskRetryUris(task);
-
+        // 脏地址拦截（真假任务通用）：免费 key 回退存的是 nexus 网页地址，
+        // 拿它重试等于把网页当直链，会建出无名 0B 废任务且旧任务不减。
+        // 无有效直链的废记录直接清理（后端 forget + 快照 + meta），用户重新添加即可。
+        if (isTaskRetryUnrecoverable(task)) {
+            await forgetTaskRecord(task.gid);
+            await refreshTaskLists();
+            if (!quiet) ElMessage.success(`已清理无地址任务 ${getTaskDisplayName(task)}，请删除后重新添加。`);
+            return null;
+        }
+        const uris = getTaskRetryUris(task).filter((uri) => !/:\/\/www\.nexusmods\.com\//iu.test(uri));
         if (!uris.length) {
-            throw new Error("当前任务没有可重试的下载地址。");
+            await forgetTaskRecord(task.gid);
+            await refreshTaskLists();
+            if (!quiet) ElMessage.success(`已清理无地址任务 ${getTaskDisplayName(task)}，请删除后重新添加。`);
+            return null;
         }
 
         const outputDirectory = task.dir || (await ensureEngineReady());
@@ -1612,32 +1407,104 @@ async function retryTask(task: IDownloaderTask) {
             options["all-proxy"] = trimmedProxy;
         }
 
+        // 按文件名查重复：同 out 文件名已有非终局任务（active/waiting/paused）则直接复用，
+        // 不建新任务，避免失败列表里同文件越重试越多。error/complete 的老记录不管（由 forget 链清理）。
+        const outFileName = (options.out || "").trim().toLowerCase();
+        if (outFileName) {
+            const liveDuplicate = allTasks.value.find((item) => {
+                if (item.gid === task.gid) return false;
+                if (!["active", "waiting", "paused"].includes(item.status)) return false;
+                const itemName = (taskMetaMap.value[item.gid]?.fileName || getTaskPrimaryFile(item)?.path?.split(/[\\/]+/u).pop() || "").trim().toLowerCase();
+                return itemName === outFileName;
+            });
+            if (liveDuplicate) {
+                // 被重试的旧 error 记录已无用，直接清掉，指向存活任务。
+                await forgetTaskRecord(task.gid);
+                await removeStaleSiblingRecords(liveDuplicate.gid);
+                await refreshTaskLists();
+                if (!quiet) {
+                    selectedTaskGid.value = liveDuplicate.gid;
+                    ElMessage.info(`已存在同名下载任务 ${getTaskDisplayName(liveDuplicate)}，已清理重复失败记录。`);
+                }
+                return liveDuplicate.gid;
+            }
+        }
+
+        // 先建新任务（用旧 meta 的 fileName/downloadUrl 定位资源），再 forget 旧任务。
+        // 新任务的 fileName 以本次 out 为准，否则失败 tab 出现无名任务且计数不降。
         const gid = await Downloader.addUri(uris, options);
         const now = new Date().toISOString();
 
         setTaskMeta(gid, {
             ...(metadata ?? {}),
-            fileName: getTaskOutputFileName(task),
+            fileName: options.out,
             downloadUrl: metadata?.downloadUrl || uris[0],
             createdAt: now,
             updatedAt: now,
+            taskStatus: "waiting",
         });
-
-        if (isRestoredDownloadTask(task) && gid !== task.gid) {
-            removeTaskMeta(task.gid);
-            await removeDownloadTaskSnapshot(task.gid);
+        await saveTaskMetaMap(taskMetaMap.value);
+        // 旧 error 任务已终局，三件套清理收口 composable，避免残留失败 tab。
+        // 再按同文件键清掉 stopped 里的兄弟老记录（历史重试攒下的重复）。
+        // 显示名必须在 forget 之前截获：forget 后 meta 已删，getTaskDisplayName 只剩 gid。
+        const retryDisplayName = getTaskDisplayName(task);
+        if (gid !== task.gid) {
+            await forgetTaskRecord(task.gid);
         }
+        await removeStaleSiblingRecords(gid);
 
         await refreshTaskLists();
-        selectedTaskGid.value = gid;
-        ElMessage.success(`已重新加入下载队列：${getTaskDisplayName(task)}`);
+        // 新任务若已秒失败（直链过期会立刻 error），失败计数看起来"没减"：
+        // 实际旧的已清、新又失败，必须明示，否则用户以为重试没生效。
+        const retriedTask = allTasks.value.find((item) => item.gid === gid);
+        if (!quiet) {
+            selectedTaskGid.value = gid;
+            if (retriedTask?.status === "error") {
+                ElMessage.error(`重试的任务再次失败 ${retryDisplayName}：${retriedTask.errorMessage || "下载地址可能已过期，请重新添加。"}`);
+            } else {
+                ElMessage.success(`已重新加入下载队列：${retryDisplayName}`);
+            }
+        }
         return gid;
     } catch (error: unknown) {
-        ElMessage.error(getErrorMessage(error));
+        if (!quiet) ElMessage.error(getErrorMessage(error));
         return null;
     } finally {
         finishTaskOperation(task.gid);
     }
+}
+
+// 失败 tab 的全部重试：先关全局暂停闸，重试任务以 Paused 落库不启动，逐个走 retryTask；
+// 无有效下载地址的废任务直接清理（删记录+本地文件），最后汇总。
+async function retryAllFailedTasks() {
+    if (failedTasks.value.length === 0) {
+        ElMessage.info("当前没有失败的任务。");
+        return;
+    }
+    try {
+        await Downloader.pauseAll();
+    } catch {
+        // 关闸失败不中断，继续重试。
+    }
+    let success = 0;
+    let cleaned = 0;
+    const total = failedTasks.value.length;
+    for (const task of [...failedTasks.value]) {
+        if (isTaskRetryUnrecoverable(task)) {
+            // 废任务：无直链，重试只会建无名 0B 任务，直接清理。
+            try {
+                await removeTaskRecord(task);
+                cleaned += 1;
+            } catch {
+                // 清理失败保留原任务，不中断后续。
+            }
+            continue;
+        }
+        const gid = await retryTask(task, true);
+        if (gid) success += 1;
+    }
+    await refreshTaskLists();
+    ElMessage.success(`已加入待下载队列 ${success} 个，清理无地址任务 ${cleaned} 个，共 ${total} 个，点继续全部开始。`);
 }
 
 function startTaskImport(gid: string) {
@@ -1860,57 +1727,30 @@ async function resumeTask(task: IDownloaderTask) {
         finishTaskOperation(task.gid);
     }
 }
-
-async function removeTaskLocalFile(task: IDownloaderTask) {
-    const primaryFile = getTaskPrimaryFile(task);
-
-    if (!primaryFile?.path) {
-        return;
-    }
-
-    const deleted = await FileHandler.deleteFile(primaryFile.path);
-
-    if (!deleted) {
-        throw new Error(`删除本地文件失败：${getTaskDisplayName(task)}`);
+async function pauseAllTasks() {
+    try {
+        const count = await Downloader.pauseAll();
+        ElMessage.success(count > 0 ? `已暂停全部：${count} 个任务。` : "暂无可暂停的任务。");
+        await refreshTaskLists();
+    } catch (error: unknown) {
+        ElMessage.error(getErrorMessage(error));
     }
 }
 
-async function removeTaskDownloadRecord(gid: string) {
-    let lastError: unknown = null;
-
-    for (let index = 0; index < 6; index += 1) {
-        try {
-            await Downloader.removeDownloadResult(gid);
-            return;
-        } catch (error: unknown) {
-            lastError = error;
-            await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
-        }
+async function resumeAllTasks() {
+    try {
+        const count = await Downloader.resumeAll();
+        ElMessage.success(count > 0 ? `已继续全部：${count} 个任务。` : "暂无可继续的任务。");
+        await refreshTaskLists();
+    } catch (error: unknown) {
+        ElMessage.error(getErrorMessage(error));
     }
-
-    throw lastError ?? new Error("清理下载记录失败，请稍后重试。");
 }
 
 async function removeTask(task: IDownloaderTask) {
     startTaskOperation(task.gid);
-
     try {
-        if (
-            !isRestoredDownloadTask(task) &&
-            ["active", "waiting", "paused"].includes(task.status)
-        ) {
-            await Downloader.remove(task.gid, true);
-            await waitForRemovedTask(task.gid);
-        }
-
-        await removeTaskLocalFile(task);
-        if (!isRestoredDownloadTask(task)) {
-            await removeTaskDownloadRecord(task.gid);
-        }
-        await removeDownloadTaskSnapshot(task.gid);
-        removeTaskMeta(task.gid);
-        // 元数据必须落盘：merge 会从 meta 复活任务，只改内存会导致刷新后恢复。
-        await saveTaskMetaMap(taskMetaMap.value);
+        await removeTaskRecord(task);
         await refreshTaskLists();
     } catch (error: unknown) {
         ElMessage.error(getErrorMessage(error));
@@ -1919,20 +1759,33 @@ async function removeTask(task: IDownloaderTask) {
     }
 }
 
-async function waitForRemovedTask(gid: string) {
-    for (let index = 0; index < 6; index += 1) {
+// 同文件归一键：externalId:resourceId 优先（跨入口/跨模式同文件同键），其次 fileName，其次 gid。
+function getStoppedTaskDedupeKey(task: IDownloaderTask): string {
+    const meta = taskMetaMap.value[task.gid];
+    const externalId = meta?.externalId ?? meta?.modId ?? "";
+    if (externalId && meta?.resourceId) return `id:${externalId}:${meta.resourceId}`;
+    const fileName = meta?.fileName || getTaskPrimaryFile(task)?.path?.split(/[\\/]+/u).pop() || "";
+    if (fileName.trim()) return `file:${fileName.trim().toLowerCase()}`;
+    return `gid:${task.gid}`;
+}
+
+// 同文件老记录清理：新任务落定后，同键的 stopped 老记录全部清掉（后端 forget + 快照 + meta）。
+// 返回清理条数。单条失败不中断。
+async function removeStaleSiblingRecords(newGid: string): Promise<number> {
+    const newTask = allTasks.value.find((task) => task.gid === newGid);
+    if (!newTask) return 0;
+    const key = getStoppedTaskDedupeKey(newTask);
+    let cleaned = 0;
+    for (const task of [...stoppedTasks.value]) {
+        if (task.gid === newGid || getStoppedTaskDedupeKey(task) !== key) continue;
         try {
-            const task = await Downloader.tellStatus(gid);
-
-            if (["removed", "complete", "error"].includes(task.status)) {
-                return;
-            }
+            await forgetTaskRecord(task.gid);
+            cleaned += 1;
         } catch {
-            return;
+            // 单条清理失败不中断。
         }
-
-        await new Promise((resolve) => globalThis.setTimeout(resolve, 250));
     }
+    return cleaned;
 }
 
 async function purgeStoppedTasks() {
@@ -1940,48 +1793,30 @@ async function purgeStoppedTasks() {
         ElMessage.info("当前没有可清理的历史任务。");
         return;
     }
-
-    try {
-        const nextMap = await readLatestTaskMetaMap();
-        const failedMessages: string[] = [];
-        const removedGids: string[] = [];
-        let removedCount = 0;
-
-        for (const task of stoppedTasks.value) {
-            try {
-                await removeTaskLocalFile(task);
-                if (!isRestoredDownloadTask(task)) {
-                    await removeTaskDownloadRecord(task.gid);
-                }
-                delete nextMap[task.gid];
-                removedGids.push(task.gid);
-                removedCount += 1;
-            } catch (error: unknown) {
-                failedMessages.push(
-                    `${getTaskDisplayName(task)}：${getErrorMessage(error)}`,
-                );
-            }
-        }
-
-        await removeDownloadTaskSnapshots(removedGids);
-        await saveTaskMetaMap(nextMap);
-        await refreshTaskLists();
-
-        if (failedMessages.length > 0) {
-            ElMessage.warning(
-                `已清理 ${removedCount} 条历史任务，另有 ${failedMessages.length} 条处理失败：${failedMessages
-                    .slice(0, 2)
-                    .join("；")}${failedMessages.length > 2 ? "……" : ""}`,
+    const failedMessages: string[] = [];
+    let removedCount = 0;
+    for (const task of [...stoppedTasks.value]) {
+        try {
+            await removeTaskRecord(task);
+            removedCount += 1;
+        } catch (error: unknown) {
+            failedMessages.push(
+                `${getTaskDisplayName(task)}：${getErrorMessage(error)}`,
             );
-            return;
         }
-
-        ElMessage.success(
-            `已清理 ${removedCount} 条历史任务，并删除对应本地文件。`,
-        );
-    } catch (error: unknown) {
-        ElMessage.error(getErrorMessage(error));
     }
+    await refreshTaskLists();
+    if (failedMessages.length > 0) {
+        ElMessage.warning(
+            `已清理 ${removedCount} 条历史任务，另有 ${failedMessages.length} 条处理失败：${failedMessages
+                .slice(0, 2)
+                .join("；")}${failedMessages.length > 2 ? "……" : ""}`,
+        );
+        return;
+    }
+    ElMessage.success(
+        `已清理 ${removedCount} 条历史任务，并删除对应本地文件。`,
+    );
 }
 
 async function openTaskFolder(task?: IDownloaderTask | null) {
@@ -2110,14 +1945,41 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                             {{ formatSpeed(globalStat.downloadSpeed) }}
                         </Badge>
                     </span>
-                    <Button
-                        size="sm"
-                        variant="outline"
-                        @click="purgeStoppedTasks"
-                    >
-                        <IconTrash2 />
-                        清理已结束
-                    </Button>
+                    <div class="flex flex-wrap gap-2">
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            @click="pauseAllTasks"
+                        >
+                            <IconPause />
+                            暂停全部
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            @click="resumeAllTasks"
+                        >
+                            <IconPlay />
+                            继续全部
+                        </Button>
+                        <Button
+                            v-if="queueFilter === 'failed'"
+                            size="sm"
+                            variant="outline"
+                            @click="retryAllFailedTasks"
+                        >
+                            <IconRefreshCw />
+                            全部重试
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            @click="purgeStoppedTasks"
+                        >
+                            <IconTrash2 />
+                            清理已结束
+                        </Button>
+                    </div>
                 </CardTitle>
             </CardHeader>
             <CardContent class="flex flex-col gap-4">
@@ -2177,17 +2039,9 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                 </div>
 
                 <div v-else class="space-y-3">
-                    <article
-                        v-for="task in paginatedTasks"
-                        :key="task.gid"
-                        class="cursor-pointer rounded-xl border px-4 py-4 transition-colors hover:border-primary/40"
-                        :class="
-                            selectedTaskGid === task.gid
-                                ? 'border-primary/50 bg-primary/5'
-                                : ''
-                        "
-                        @click="openTaskDetail(task)"
-                    >
+<ContextMenu v-for="task in paginatedTasks" :key="task.gid">
+<ContextMenuTrigger as-child>
+<article class="cursor-pointer rounded-xl border px-4 py-4 transition-colors hover:border-primary/40" :class="selectedTaskGid === task.gid ? 'border-primary/50 bg-primary/5' : ''" @click="openTaskDetail(task)">
                         <div
                             class="flex gap-3 flex-row items-center justify-between"
                         >
@@ -2319,8 +2173,19 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                                 </Button>
                             </div>
                         </div>
-                    </article>
-
+</article>
+</ContextMenuTrigger>
+<ContextMenuContent class="w-48">
+<ContextMenuItem @select="openTaskDetail(task)">查看详情</ContextMenuItem>
+<ContextMenuItem v-if="task.status === 'active' || task.status === 'waiting'" :disabled="isTaskOperating(task.gid)" @select="pauseTask(task)">暂停</ContextMenuItem>
+<ContextMenuItem v-else-if="task.status === 'paused'" :disabled="isTaskOperating(task.gid)" @select="resumeTask(task)">继续</ContextMenuItem>
+<ContextMenuItem v-if="task.status === 'error'" :disabled="isTaskOperating(task.gid)" @select="retryTask(task)">重试</ContextMenuItem>
+<ContextMenuItem v-if="task.status === 'complete'" :disabled="!canImportToLocalManager || isTaskImporting(task.gid)" @select="importTaskToLocalManager(task)">一键导入</ContextMenuItem>
+<ContextMenuItem @select="openTaskFileLocation(task)">打开文件位置</ContextMenuItem>
+<ContextMenuSeparator />
+<ContextMenuItem variant="destructive" :disabled="isTaskOperating(task.gid)" @select="removeTask(task)">删除</ContextMenuItem>
+</ContextMenuContent>
+</ContextMenu>
                     <div
                         v-if="taskTotalPages > 1"
                         class="flex flex-col gap-4 rounded-xl border px-4 py-4 lg:flex-row lg:items-center lg:justify-between"
@@ -2375,12 +2240,12 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                                 下一页
                                 <IconChevronRight />
                             </Button>
+
                         </div>
                     </div>
                 </div>
             </CardContent>
         </Card>
-
         <Dialog v-model:open="showAddModDialog" modal>
             <DialogScrollContent class="sm:max-w-6xl">
                 <DialogHeader>
@@ -2587,11 +2452,10 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                             <div
                                 class="max-h-[48vh] space-y-3 overflow-y-auto pr-1"
                             >
-                                <div
-                                    v-for="resource in selectedMod.mods_resource"
-                                    :key="`${selectedMod.id}-${resource.id}`"
-                                    class="rounded-xl border px-4 py-4"
-                                >
+<div v-for="resource in selectedMod.mods_resource" :key="`${selectedMod.id}-${resource.id}`">
+<ContextMenu>
+<ContextMenuTrigger as-child>
+<div class="rounded-xl border px-4 py-4">
                                     <div
                                         class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"
                                     >
@@ -2713,6 +2577,13 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                                         </Button>
                                     </div>
                                 </div>
+</ContextMenuTrigger>
+<ContextMenuContent class="w-48">
+<ContextMenuItem :disabled="isResourceAdding(resource)" @select="addResourceTask(resource)">下载该资源</ContextMenuItem>
+<ContextMenuItem @select="openModResourcePage(selectedMod.id)">在网页打开 Mod</ContextMenuItem>
+</ContextMenuContent>
+</ContextMenu>
+</div>
                             </div>
                         </div>
                     </div>

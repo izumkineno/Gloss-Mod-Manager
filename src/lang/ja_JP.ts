@@ -15,6 +15,7 @@ const lang = {
         manager: "管理",
         explore: "探索",
         download: "ダウンロード",
+        collection: "コレクション",
         mcp: "MCP",
         backup: "バックアップ",
         about: "概要",

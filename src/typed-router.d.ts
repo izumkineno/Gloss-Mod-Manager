@@ -55,6 +55,13 @@ declare module 'vue-router/auto-routes' {
       Record<never, never>,
       | never
     >,
+    '/collection': RouteRecordInfo<
+      '/collection',
+      '/collection',
+      Record<never, never>,
+      Record<never, never>,
+      | never
+    >,
     '/detail/[id]': RouteRecordInfo<
       '/detail/[id]',
       '/detail/:id',
@@ -145,6 +152,12 @@ declare module 'vue-router/auto-routes' {
     'src/pages/backup.vue': {
       routes:
         | '/backup'
+      views:
+        | never
+    }
+    'src/pages/collection.vue': {
+      routes:
+        | '/collection'
       views:
         | never
     }

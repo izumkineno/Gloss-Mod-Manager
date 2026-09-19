@@ -168,6 +168,7 @@ export class Downloader {
             headers,
             workers,
             proxy,
+            collectionId: options.collectionId ?? null,
         });
     }
     // 从服务器获取文件名：HEAD 优先、Range 0-0 回退；headers/proxy 与下载链路一致。
@@ -219,6 +220,22 @@ export class Downloader {
     public static async unpause(gid: string) {
         await invoke("dl_resume", { gid });
         return gid;
+    }
+
+    public static async pauseAll() {
+        return invoke<number>("dl_pause_all");
+    }
+
+    public static async resumeAll() {
+        return invoke<number>("dl_resume_all");
+    }
+
+    public static async pauseCollection(collectionId: string) {
+        return invoke<number>("dl_pause_collection", { collectionId });
+    }
+
+    public static async resumeCollection(collectionId: string) {
+        return invoke<number>("dl_resume_collection", { collectionId });
     }
 
     // 停止任务但保留文件（文件清理仍由调用方负责）。

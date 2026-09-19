@@ -26,6 +26,7 @@ const PAGE_COMPONENTS: Record<string, unknown> = {
     "/manager": defineAsyncComponent(() => import("@/pages/manager.vue")),
     "/explore": defineAsyncComponent(() => import("@/pages/explore.vue")),
     "/download": defineAsyncComponent(() => import("@/pages/download.vue")),
+    "/collection": defineAsyncComponent(() => import("@/pages/collection.vue")),
     "/mcp": defineAsyncComponent(() => import("@/pages/mcp.vue")),
     "/backup": defineAsyncComponent(() => import("@/pages/backup.vue")),
     "/ai-chat": defineAsyncComponent(() => import("@/pages/ai-chat.vue")),
