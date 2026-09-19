@@ -819,6 +819,7 @@ function openGamesPage() {
                                 </DropdownMenuContent>
                             </DropdownMenu>
                         </div>
+                        <span class="shrink-0 text-xs text-muted-foreground">共 {{ manager.filteredMods.length }} 个 Mod</span>
                         <InputGroup>
                             <InputGroupInput
                                 v-model="manager.search"

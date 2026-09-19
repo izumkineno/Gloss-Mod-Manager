@@ -43,6 +43,22 @@ const dragPosition = ref<"before" | "after">("before");
 const tagDropTargetId = ref<number | null>(null);
 const operatingIds = ref<number[]>([]);
 const updateingIds = ref<number[]>([]);
+// 分页：避免大列表全量渲染卡顿（列表/网格共用）
+const pageSize = ref(50);
+const currentPage = ref(1);
+const totalItems = computed(() => manager.filteredMods.length);
+const totalPages = computed(() => Math.max(1, Math.ceil(totalItems.value / pageSize.value)));
+const pagedMods = computed(() => {
+    if (currentPage.value > totalPages.value) currentPage.value = totalPages.value;
+    const start = (currentPage.value - 1) * pageSize.value;
+    return manager.filteredMods.slice(start, start + pageSize.value);
+});
+// 筛选变化时回到第一页
+watch(() => manager.filteredMods.length, () => { currentPage.value = 1; });
+watch(() => managerGridEnabled.value, () => { currentPage.value = 1; });
+function goPage(page: number) {
+    currentPage.value = Math.min(Math.max(1, page), totalPages.value);
+}
 // 右键菜单目标行：右键冒泡时记录，菜单动作作用于该行
 const contextTargetMod = ref<IModInfo | null>(null);
 
@@ -680,6 +696,7 @@ watch(showSortDialog, (opened) => {
                                     <TableHead v-if="manager.selectionMode" class="w-12">
                                         选择
                                     </TableHead>
+                                    <TableHead class="w-14">序号</TableHead>
                                     <TableHead>名称</TableHead>
                                     <TableHead class="w-30">版本</TableHead>
                                     <TableHead class="w-30">类型</TableHead>
@@ -689,7 +706,7 @@ watch(showSortDialog, (opened) => {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                <TableRow v-for="item in manager.filteredMods" :key="item.id" :class="getRowClass(item)"
+                                <TableRow v-for="(item, index) in pagedMods" :key="item.id" :class="getRowClass(item)"
                                     @click="handleRowClick($event, item)" @pointerenter="handleRowPointerEnter(item.id)"
                                     @pointermove="handleRowPointerMove($event, item.id)"
                                     @pointerleave="handleRowPointerLeave(item.id)"
@@ -698,6 +715,7 @@ watch(showSortDialog, (opened) => {
                                         <input type="checkbox" class="h-4 w-4 accent-primary" :checked="manager.selectionIds.includes(item.id)
                                             " @change="handleSelectionChange($event, item.id)" />
                                     </TableCell>
+                                    <TableCell class="text-muted-foreground tabular-nums">{{ (currentPage - 1) * pageSize + index + 1 }}</TableCell>
                                     <TableCell>
                                         <div class="flex items-center gap-2">
                                             <span v-if="!manager.selectionMode"
@@ -839,8 +857,7 @@ watch(showSortDialog, (opened) => {
                             </TableBody>
                         </Table>
 
-                        <div v-else class="grid grid-cols-1 gap-4 py-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                            <article v-for="item in manager.filteredMods" :key="item.id"
+                            <article v-for="(item, index) in pagedMods" :key="item.id"
                                 :class="getItemContainerClass(item)"
                                 class="overflow-hidden rounded-xl border bg-card shadow-sm transition-colors"
                                 @click="handleRowClick($event, item)" @pointerenter="handleRowPointerEnter(item.id)"
@@ -850,6 +867,8 @@ watch(showSortDialog, (opened) => {
                                 <div class="relative aspect-video overflow-hidden bg-muted/20">
                                     <AsyncImage :src="getModCoverSrc(item)" :fallback-src="MANAGER_FALLBACK_COVER"
                                         :alt="`${item.modName} 封面`" class="h-full w-full object-cover" />
+                                    <Badge variant="secondary"
+                                        class="absolute right-3 top-3 tabular-nums backdrop-blur">{{ (currentPage - 1) * pageSize + index + 1 }}</Badge>
                                     <Badge v-if="item.isUpdate" variant="outline"
                                         class="absolute left-3 top-3 border-emerald-500/40 bg-emerald-500/10 text-white backdrop-blur">
                                         可更新
@@ -1002,6 +1021,15 @@ watch(showSortDialog, (opened) => {
                                     </div>
                                 </div>
                             </article>
+                        </div>
+                    <!-- 分页条：列表/网格共用，大列表只渲染当前页 -->
+                    <div v-if="totalItems > 0" class="flex flex-wrap items-center justify-between gap-2 px-1 py-3 text-xs text-muted-foreground">
+                        <span>共 {{ totalItems }} 个，第 {{ currentPage }} / {{ totalPages }} 页（每页 {{ pageSize }} 个）</span>
+                        <div class="flex items-center gap-1.5">
+                            <Button variant="outline" size="sm" :disabled="currentPage <= 1" @click="goPage(1)">首页</Button>
+                            <Button variant="outline" size="sm" :disabled="currentPage <= 1" @click="goPage(currentPage - 1)">上一页</Button>
+                            <Button variant="outline" size="sm" :disabled="currentPage >= totalPages" @click="goPage(currentPage + 1)">下一页</Button>
+                            <Button variant="outline" size="sm" :disabled="currentPage >= totalPages" @click="goPage(totalPages)">末页</Button>
                         </div>
                     </div>
                 </ContextMenuTrigger>

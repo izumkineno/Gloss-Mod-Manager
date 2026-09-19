@@ -3,6 +3,9 @@ export interface IDownloadFilePickerItem {
     title: string;
     description: string;
     badges: string[];
+    // 已导入等不可选：禁用勾选，确认时过滤。
+    disabled?: boolean;
+    disabledReason?: string;
 }
 
 export interface IDownloadFilePickerRequest {
@@ -49,7 +52,8 @@ export const useDownloadFilePickerStore = defineStore(
         }
 
         function selectItem(itemId: string) {
-            if (!items.value.some((item) => item.id === itemId)) {
+            const target = items.value.find((item) => item.id === itemId);
+            if (!target || target.disabled) {
                 return;
             }
 
@@ -80,7 +84,7 @@ export const useDownloadFilePickerStore = defineStore(
                 : [itemId ?? selectedItemId.value];
 
             const validItemIds = nextItemIds.filter((id) =>
-                items.value.some((item) => item.id === id),
+                items.value.some((item) => item.id === id && !item.disabled),
             );
 
             if (validItemIds.length === 0) {
@@ -118,13 +122,13 @@ export const useDownloadFilePickerStore = defineStore(
                     options.items.some((item) => item.id === id)
                 );
             });
+            const firstSelectable = options.items.find((item) => !item.disabled) ?? null;
             selectedItemIds.value =
                 initialItemIds.length > 0
                     ? initialItemIds
-                    : options.items[0]
-                      ? [options.items[0].id]
+                    : firstSelectable
+                      ? [firstSelectable.id]
                       : [];
-            selectedItemId.value = selectedItemIds.value[0] ?? "";
             confirmLabel.value = options.confirmLabel ?? "下载选中文件";
             cancelLabel.value = options.cancelLabel ?? "取消";
             open.value = true;

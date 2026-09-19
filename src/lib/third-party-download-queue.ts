@@ -13,6 +13,7 @@ import {
 } from "@/lib/gloss-download";
 import { PersistentStore } from "@/lib/persistent-store";
 import {
+    fetchNexusModsSingleFileName,
     resolveThirdPartyDownloadUrl,
     type INexusModsDirectOptions,
     type IThirdPartyModDetail,
@@ -201,33 +202,6 @@ function buildDownloadOptions(
     return options;
 }
 
-function getTaskPrimaryFile(task: IDownloaderTask) {
-    return task.files.find((item) => item.path) ?? task.files[0] ?? null;
-}
-
-async function removeCompletedDuplicateTask(
-    runtime: IQueueRuntimeContext,
-    task: IDownloaderTask,
-) {
-    const primaryFile = getTaskPrimaryFile(task);
-
-    await Downloader.removeDownloadResult(task.gid);
-
-    if (primaryFile?.path) {
-        const deleted = await FileHandler.deleteFile(primaryFile.path);
-
-        if (!deleted) {
-            throw new Error("删除旧下载文件失败，请稍后重试。");
-        }
-    }
-
-    const nextTaskMetaMap = { ...runtime.taskMetaMap };
-    delete nextTaskMetaMap[task.gid];
-    await saveTaskMetaMap(nextTaskMetaMap);
-    await removeDownloadTaskSnapshot(task.gid);
-    runtime.taskMetaMap = nextTaskMetaMap;
-    runtime.allTasks = runtime.allTasks.filter((item) => item.gid !== task.gid);
-}
 
 async function createThirdPartyDownloadTask(
     runtime: IQueueRuntimeContext,
@@ -292,7 +266,9 @@ function getExistingTaskMessage(task: IDownloaderTask, file: IThirdPartyModFile)
 export async function queueThirdPartyModDownload(
     options: IQueueThirdPartyDownloadOptions,
 ): Promise<IQueueThirdPartyDownloadResult> {
-    const file =
+    // 全链路分段日志：定位重建卡在哪一段（resolve 前/后、去重分支、建任务）。
+    const queueTag = `[queue] modId=${options.mod.id} fileId=${options.fileId ?? ""}`;
+    let file =
         options.mod.files.find((item) => item.id === options.fileId) ??
         options.mod.primaryFile;
 
@@ -300,6 +276,9 @@ export async function queueThirdPartyModDownload(
         throw new Error("未找到可下载的资源。");
     }
 
+    console.debug(`${queueTag} stage=file-resolved fileName=${file.name ?? ""}`);
+    console.debug(`${queueTag} stage=resolve-url-start mode=${options.nexusDirect?.mode ?? "api"}`);
+    const resolveStart = Date.now();
     const downloadUrl = (
         await resolveThirdPartyDownloadUrl(
             options.mod,
@@ -309,6 +288,7 @@ export async function queueThirdPartyModDownload(
             options.nexusDirect,
         )
     ).trim();
+    console.debug(`${queueTag} stage=resolve-url-done costMs=${Date.now() - resolveStart} urlLen=${downloadUrl.length} urlHead=${downloadUrl.slice(0, 60)}`);
 
     if (!downloadUrl) {
         throw new Error("当前资源暂时没有可用下载地址。");
@@ -325,8 +305,23 @@ export async function queueThirdPartyModDownload(
             message: `当前资源无法获取直链，已打开 ${options.provider} 网页。`,
         };
     }
-
+    // 治本：最小 detail 缺 fileName 时，用单文件接口回填权威 file_name（含后缀）。
+    // 接口 403/失败返回空，不阻塞，后续走 probe 回退。
+    if (options.provider === "NexusMods" && !file.fileName?.trim()) {
+        const gameDomain = options.mod.routeQuery.gameDomain?.trim() ?? "";
+        if (gameDomain) {
+            const hydrated = await fetchNexusModsSingleFileName(gameDomain, options.mod.id, file.id, options.nexusUser);
+            if (hydrated) {
+                file = { ...file, fileName: hydrated };
+                console.debug(`${queueTag} stage=file-hydrated fileName=${hydrated}`);
+            } else {
+                console.debug(`${queueTag} stage=file-hydrate-miss`);
+            }
+        }
+    }
     let outputFileName = buildOutputFileName(options.mod, file, downloadUrl);
+
+    console.debug(`${queueTag} stage=url-ok`);
     let duplicateCriteria = {
         sourceType: options.provider as sourceType,
         externalId: options.mod.id,
@@ -343,7 +338,11 @@ export async function queueThirdPartyModDownload(
         Number.isFinite(Number(options.replaceLocalModId)) &&
         Number(options.replaceLocalModId) > 0;
 
-    if (duplicateLocalMods.length > 0 && !allowReplacingLocalMod) {
+    // 只有同一来源 webId 双匹配（score>=100）才算真重复：文件名/标题命中（60/40）误伤太多，
+    // 只记日志不拦截，同名落盘由改名逻辑兜底。
+    const identityDuplicate = duplicateLocalMods.find((item) => item.score >= 100) ?? null;
+    console.debug(`${queueTag} stage=local-dedupe hits=${duplicateLocalMods.length} best=${duplicateLocalMods[0]?.score ?? 0}:${duplicateLocalMods[0]?.reason ?? "none"}`);
+    if (identityDuplicate && !allowReplacingLocalMod) {
         return {
             status: "imported",
             gid: null,
@@ -354,6 +353,7 @@ export async function queueThirdPartyModDownload(
     }
 
     const runtime = await getQueueRuntimeContext();
+    console.debug(`${queueTag} stage=runtime-ready`);
     // 本地名缺后缀时从服务器探测补全（Nexus CDN 等哈希直链），失败回退本地名。
     outputFileName = await Downloader.ensureFileName(
         downloadUrl,
@@ -364,7 +364,13 @@ export async function queueThirdPartyModDownload(
         },
         runtime.proxy || null,
     );
+    // 治本第二道闸：到这里仍无后缀说明回填+探测全失败，直接抛错不建任务，
+    // 避免无后缀文件再次落盘（禁止事后补后缀）。
+    if (!getFileNameExtension(outputFileName)) {
+        throw new Error(`未能获取 ${file.name} 的真实文件名（含后缀），已阻止建任务，请稍后重试。`);
+    }
     duplicateCriteria = { ...duplicateCriteria, fileName: outputFileName };
+    console.debug(`${queueTag} stage=filename-probed final=${outputFileName}`);
     const duplicateTasks = findGlossDuplicateTasks(
         runtime.taskMetaMap,
         duplicateCriteria,
@@ -380,27 +386,20 @@ export async function queueThirdPartyModDownload(
             ): item is { task: IDownloaderTask; meta: IGlossDownloadTaskMeta } =>
                 item.task !== null && item.task.status !== "removed",
         );
+    console.debug(`${queueTag} stage=task-dedupe hits=${duplicateTasks.length}`);
 
     if (duplicateTasks.length > 0) {
         const currentTask = duplicateTasks[0].task;
+    console.debug(`${queueTag} stage=dedupe-hit gid=${currentTask.gid} status=${currentTask.status}`);
 
         if (currentTask.status === "complete") {
-            await removeCompletedDuplicateTask(runtime, currentTask);
-
-            const gid = await createThirdPartyDownloadTask(
-                runtime,
-                options,
-                file,
-                downloadUrl,
-                outputFileName,
-            );
-
+            // 已完成任务直接复用，不删除、不新建，避免重复下载。
             return {
-                status: "retried",
-                gid,
+                status: "exists",
+                gid: currentTask.gid,
                 mod: options.mod,
                 file,
-                message: `已重新下载：${file.name}`,
+                message: "已下载",
             };
         }
 

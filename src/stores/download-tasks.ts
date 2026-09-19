@@ -1,6 +1,6 @@
-// 下载任务共享状态 composable：下载页 + collection 页统一任务快照/订阅/meta/暂停继续/retry 清理。
-// 两页只留模板 + 各自业务（下载页详情/导入、collection 页 pending 清单），任务层逻辑全部收口此处。
-import { computed, onMounted, onUnmounted, ref, type ComputedRef, type Ref } from "vue";
+// 下载任务共享 Pinia store：下载页 + collection 页统一任务快照/订阅/meta。
+// 之前是 composable，各页 ref 独立、互不相通；现收口一处，事件订阅引用计数，回调注册制。
+import { computed, ref } from "vue";
 import { ElMessage } from "element-plus-message";
 import { Downloader } from "@/lib/native-downloader";
 import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
@@ -14,20 +14,16 @@ import { FileHandler } from "@/lib/FileHandler";
 import { PersistentStore } from "@/lib/persistent-store";
 import type { IDownloaderGlobalStat, IDownloaderTask } from "@/lib/download-task-types";
 import type { IGlossDownloadTaskMeta } from "@/lib/gloss-download";
+
 export const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
 
 function defaultGlobalStat(): IDownloaderGlobalStat {
     return { downloadSpeed: "0", numActive: "0", numWaiting: "0", numStopped: "0" };
 }
 
-export function useDownloadTasks(options?: {
-    // 事件回调是否只刷任务快照（collection 页用，避免事件风暴写盘）。
-    snapshotOnly?: boolean;
-    // 新完成任务回调（下载页接自动导入）。
-    onNewlyCompleted?: (gids: string[], tasks: IDownloaderTask[]) => void;
-    // 是否监听窗口聚焦/可见性兜底刷新（下载页用）。
-    focusRefresh?: boolean;
-}) {
+type NewlyCompletedHandler = (gids: string[], tasks: IDownloaderTask[]) => void;
+
+export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
     const tasksLoading = ref(false);
     const tasksErrorMessage = ref("");
     const refreshingTasks = ref(false);
@@ -41,6 +37,9 @@ export function useDownloadTasks(options?: {
     let refreshSequence = 0;
     let hasCompletedInitialTaskSync = false;
     let releaseTaskEvents: (() => void) | null = null;
+    let subscriberCount = 0;
+    let focusListenerCount = 0;
+    const completedHandlers = new Set<NewlyCompletedHandler>();
 
     const allTasks = computed(() => [...activeTasks.value, ...waitingTasks.value, ...stoppedTasks.value]);
     const failedTasks = computed(() => stoppedTasks.value.filter((task) => task.status === "error"));
@@ -108,7 +107,7 @@ export function useDownloadTasks(options?: {
                 return;
             }
             if (newlyCompletedTaskGids.length > 0) {
-                options?.onNewlyCompleted?.(newlyCompletedTaskGids, allDisplayedTasks);
+                for (const handler of completedHandlers) handler(newlyCompletedTaskGids, allDisplayedTasks);
             }
         } catch (error: unknown) {
             if (currentSequence !== refreshSequence) return;
@@ -118,16 +117,9 @@ export function useDownloadTasks(options?: {
         }
     }
 
-    // 轻量快照（collection 页用：无 globalStat、无 autoImport、无 focus 兜底）。
+    // 轻量快照：同样走 merge + meta 对齐（之前 snapshotOnly 偷工减料，重启任务/已导入全看不到）。
     async function refreshTaskSnapshot() {
-        const [active, waiting, stopped] = await Promise.all([
-            Downloader.tellActive(),
-            Downloader.tellWaiting(0, 100),
-            Downloader.tellStopped(0, 100),
-        ]);
-        activeTasks.value = active;
-        waitingTasks.value = waiting;
-        stoppedTasks.value = stopped;
+        await refreshTaskLists(true);
     }
 
     function setTaskMeta(gid: string, metadata: IGlossDownloadTaskMeta) {
@@ -150,7 +142,7 @@ export function useDownloadTasks(options?: {
         await PersistentStore.set(DOWNLOAD_TASK_META_KEY, nextMap, true);
     }
 
-    // 重试成功三件套：forget 后端 + 清快照 + 删 meta 落盘（P0/P1 修过，收口此处）。
+    // 重试成功三件套：forget 后端 + 清快照 + 删 meta 落盘。
     async function forgetTaskRecord(gid: string) {
         try {
             await Downloader.removeDownloadResult(gid);
@@ -206,6 +198,7 @@ export function useDownloadTasks(options?: {
             await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 250));
         }
     }
+
     function startTaskOperation(gid: string) {
         if (taskOperatingIds.value.includes(gid)) return;
         taskOperatingIds.value = [...taskOperatingIds.value, gid];
@@ -216,35 +209,54 @@ export function useDownloadTasks(options?: {
     }
 
     function handleWindowFocusRefresh() {
-        void (options?.snapshotOnly ? refreshTaskSnapshot() : refreshTaskLists(true));
+        void refreshTaskLists(true);
     }
 
     function handleVisibilityRefresh() {
         if (document.visibilityState === "visible") {
-            void (options?.snapshotOnly ? refreshTaskSnapshot() : refreshTaskLists(true));
+            void refreshTaskLists(true);
         }
     }
 
-    onMounted(() => {
-        void subscribeDownloadTaskEvents(() => {
-            void (options?.snapshotOnly ? refreshTaskSnapshot() : refreshTaskLists(true));
-        }).then((release) => {
-            releaseTaskEvents = release;
-        });
-        if (options?.focusRefresh) {
+    function ensureEventSubscription() {
+        subscriberCount += 1;
+        if (!releaseTaskEvents) {
+            void subscribeDownloadTaskEvents(() => {
+                void refreshTaskLists(true);
+            }).then((release) => {
+                releaseTaskEvents = release;
+            });
+        }
+        return () => {
+            subscriberCount = Math.max(0, subscriberCount - 1);
+            if (subscriberCount === 0) {
+                releaseTaskEvents?.();
+                releaseTaskEvents = null;
+            }
+        };
+    }
+
+    function ensureFocusRefresh() {
+        focusListenerCount += 1;
+        if (focusListenerCount === 1) {
             window.addEventListener("focus", handleWindowFocusRefresh);
             document.addEventListener("visibilitychange", handleVisibilityRefresh);
         }
-    });
+        return () => {
+            focusListenerCount = Math.max(0, focusListenerCount - 1);
+            if (focusListenerCount === 0) {
+                window.removeEventListener("focus", handleWindowFocusRefresh);
+                document.removeEventListener("visibilitychange", handleVisibilityRefresh);
+            }
+        };
+    }
 
-    onUnmounted(() => {
-        releaseTaskEvents?.();
-        releaseTaskEvents = null;
-        if (options?.focusRefresh) {
-            window.removeEventListener("focus", handleWindowFocusRefresh);
-            document.removeEventListener("visibilitychange", handleVisibilityRefresh);
-        }
-    });
+    function onNewlyCompleted(handler: NewlyCompletedHandler) {
+        completedHandlers.add(handler);
+        return () => {
+            completedHandlers.delete(handler);
+        };
+    }
 
     return {
         tasksLoading,
@@ -268,35 +280,11 @@ export function useDownloadTasks(options?: {
         removeTaskRecord,
         startTaskOperation,
         finishTaskOperation,
+        ensureEventSubscription,
+        ensureFocusRefresh,
+        onNewlyCompleted,
         isTaskOperating: (gid: string) => taskOperatingIds.value.includes(gid),
         notifySuccess: (msg: string) => ElMessage.success(msg),
         notifyError: (msg: string) => ElMessage.error(msg),
     };
-}
-
-export interface DownloadTasksStore {
-    tasksLoading: Ref<boolean>;
-    tasksErrorMessage: Ref<string>;
-    refreshingTasks: Ref<boolean>;
-    globalStat: Ref<IDownloaderGlobalStat>;
-    activeTasks: Ref<IDownloaderTask[]>;
-    waitingTasks: Ref<IDownloaderTask[]>;
-    stoppedTasks: Ref<IDownloaderTask[]>;
-    allTasks: ComputedRef<IDownloaderTask[]>;
-    failedTasks: ComputedRef<IDownloaderTask[]>;
-    finishedTasks: ComputedRef<IDownloaderTask[]>;
-    taskOperatingIds: Ref<string[]>;
-    taskMetaMap: Ref<Record<string, IGlossDownloadTaskMeta>>;
-    refreshTaskLists: (silent?: boolean) => Promise<void>;
-    refreshTaskSnapshot: () => Promise<void>;
-    setTaskMeta: (gid: string, metadata: IGlossDownloadTaskMeta) => void;
-    removeTaskMeta: (gid: string) => void;
-    saveTaskMetaMap: (nextMap: Record<string, IGlossDownloadTaskMeta>) => Promise<void>;
-    forgetTaskRecord: (gid: string) => Promise<void>;
-    removeTaskRecord: (task: IDownloaderTask) => Promise<void>;
-    startTaskOperation: (gid: string) => void;
-    finishTaskOperation: (gid: string) => void;
-    isTaskOperating: (gid: string) => boolean;
-    notifySuccess: (msg: string) => void;
-    notifyError: (msg: string) => void;
-}
+});

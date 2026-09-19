@@ -12,6 +12,7 @@ declare global {
   const AutoStart: typeof import('./lib/auto-start').AutoStart
   const DEFAULT_AI_CHAT_SYSTEM_PROMPT: typeof import('./lib/AiChat').DEFAULT_AI_CHAT_SYSTEM_PROMPT
   const DOWNLOAD_TASK_EVENTS: typeof import('./lib/download-task-events').DOWNLOAD_TASK_EVENTS
+  const DOWNLOAD_TASK_META_KEY: typeof import('./stores/download-tasks').DOWNLOAD_TASK_META_KEY
   const DYING_LIGHT_2_CLASSIFY_RULES: typeof import('./lib/mod-classify-rules').DYING_LIGHT_2_CLASSIFY_RULES
   const DotNetTool: typeof import('./lib/dotnet-tool').DotNetTool
   const Downloader: typeof import('./lib/native-downloader').Downloader
@@ -62,6 +63,7 @@ declare global {
   const buildBundledAiChatSkillsPrompt: typeof import('./lib/ai-chat-skills').buildBundledAiChatSkillsPrompt
   const buildGlossOutputFileName: typeof import('./lib/gloss-download-queue').buildGlossOutputFileName
   const buildMcpToolDriftWarnings: typeof import('./lib/mcp-tool-drift').buildMcpToolDriftWarnings
+  const buildMinimalNexusModDetail: typeof import('./lib/third-party-mod-api').buildMinimalNexusModDetail
   const buildUniqueGlossFileName: typeof import('./lib/gloss-download').buildUniqueGlossFileName
   const checkForAppUpdates: typeof import('./lib/app-updater').checkForAppUpdates
   const checkGlossModUpdates: typeof import('./lib/gloss-mod-api').checkGlossModUpdates
@@ -118,6 +120,7 @@ declare global {
   const fetchModIoGameTags: typeof import('./lib/third-party-mod-api').fetchModIoGameTags
   const fetchNexusCollectionFiles: typeof import('./lib/nexus-collection-api').fetchNexusCollectionFiles
   const fetchNexusCollectionInfo: typeof import('./lib/nexus-collection-api').fetchNexusCollectionInfo
+  const fetchNexusModsSingleFileName: typeof import('./lib/third-party-mod-api').fetchNexusModsSingleFileName
   const fetchThirdPartyModDetail: typeof import('./lib/third-party-mod-api').fetchThirdPartyModDetail
   const fetchThirdPartyMods: typeof import('./lib/third-party-mod-api').fetchThirdPartyMods
   const fetchThunderstoreCacheStatus: typeof import('./lib/third-party-mod-api').fetchThunderstoreCacheStatus
@@ -358,6 +361,7 @@ declare global {
   const useDisplayMedia: typeof import('@vueuse/core').useDisplayMedia
   const useDocumentVisibility: typeof import('@vueuse/core').useDocumentVisibility
   const useDownloadFilePickerStore: typeof import('./stores/download-picker').useDownloadFilePickerStore
+  const useDownloadTasksStore: typeof import('./stores/download-tasks').useDownloadTasksStore
   const useDraggable: typeof import('@vueuse/core').useDraggable
   const useDropZone: typeof import('@vueuse/core').useDropZone
   const useElementBounding: typeof import('@vueuse/core').useElementBounding

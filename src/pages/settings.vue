@@ -19,6 +19,7 @@ const {
     defaultStartPage,
     language,
     closeSoftLinks,
+    collectionQueueLimit,
     modifiableDuringGame,
     nexusModsAuthorized,
     nexusModsCookie,
@@ -496,6 +497,25 @@ watch(
                                     <p class="text-xs text-muted-foreground">
                                         {{ t("settings.nexus.cookieHint") }}
                                     </p>
+                                </div>
+                            </div>
+                            <div class="mt-4 space-y-3 border-t border-border/60 pt-4">
+                                <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                                    <div class="space-y-1">
+                                        <div class="text-sm font-medium">
+                                            Collection 排队上限
+                                        </div>
+                                        <p class="text-xs text-muted-foreground">
+                                            等待中任务达上限即暂停塞入，每 5 秒检查一次，有空位再续。
+                                        </p>
+                                    </div>
+                                    <Input
+                                        type="number"
+                                        :min="1"
+                                        :max="100"
+                                        class="w-full lg:w-40"
+                                        v-model.number="collectionQueueLimit"
+                                    />
                                 </div>
                             </div>
                         </div>

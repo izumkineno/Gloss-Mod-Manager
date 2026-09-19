@@ -157,7 +157,11 @@ export const useSettings = defineStore("Settings", () => {
         "nexusModsDownloadMode",
         "api",
     );
-
+    // Collection 建任务背压：等待中任务数达上限即暂停塞入，定时检查有空位再续。
+    const collectionQueueLimit = PersistentStore.useValue<number>(
+        "collectionQueueLimit",
+        10,
+    );
     const baseUrl = PersistentStore.useValue<string>("agentbaseUrl", "");
     // AI API Key 与 GlossMod Key 属于凭据，从明文配置迁移到加密存储。
     const apiKey = SecretStore.useValue("agentApiKey", "agentApiKey");
@@ -384,6 +388,7 @@ export const useSettings = defineStore("Settings", () => {
         nexusModsUser,
         nexusModsCookie,
         nexusModsDownloadMode,
+        collectionQueueLimit,
         nexusModsAuthorized,
         nexusModsLoginLoading,
         debugInfo,

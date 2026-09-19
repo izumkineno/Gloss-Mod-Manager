@@ -642,11 +642,11 @@ export const useManager = defineStore("Manager", () => {
                     async (item) => {
                         const mod = normalizeMod(item);
 
-                        if (
-                            item.modType === undefined ||
-                            item.modType === null ||
-                            item.modType === ""
-                        ) {
+                        // 已有有效类型直接用：300+ mod 进页不再逐个扫 modFiles
+                        const cachedType = Number(item.modType);
+                        if (Number.isFinite(cachedType) && item.modType !== undefined && item.modType !== null && item.modType !== "") {
+                            mod.modType = item.modType;
+                        } else {
                             mod.modType = await detectModType(mod);
                         }
 
@@ -1123,6 +1123,7 @@ export const useManager = defineStore("Manager", () => {
         normalizeMod,
         syncTagsFromMods,
         syncManagerContext,
+        syncManagerGamesFromPersisted,
         loadManagerData,
         refreshRuntimeData,
         saveEditedMod,

@@ -347,8 +347,12 @@ export async function resolveThirdPartyDownloadUrl(
 ) {
     // 凭据走 Stronghold 异步水合：启动热路径（NXM 深链/开页即重试）可能读到空值，
     // 先等水合完成再读，避免空 Cookie 误报"未配置"并回退到无权限的 API 模式。
+    const resolveTag = `[resolve] modId=${detail.id} fileId=${fileId ?? ""}`;
+    console.debug(`${resolveTag} stage=start mode=${nexusDirect?.mode ?? "api"}`);
     if (detail.source === "NexusMods" && nexusDirect?.mode === "cookie") {
+        console.debug(`${resolveTag} stage=secret-ready-wait`);
         await SecretStore.ready("nexusModsCookie");
+        console.debug(`${resolveTag} stage=secret-ready-done`);
     }
     if (detail.source !== "NexusMods") {
         const targetFile =
@@ -377,8 +381,9 @@ export async function resolveThirdPartyDownloadUrl(
         if (!cookie) {
             throw new Error("未配置 NexusMods Cookie，请在设置页填写后重试。");
         }
-        // 代理未显式传入时读全局下载代理：后端 reqwest 只认显式代理，直连 www.nexusmods.com 会被墙。
-        const storedProxy = ((await PersistentStore.get<string>("downloadProxy", "")) ?? "").trim();
+    // 代理未显式传入时读全局下载代理：后端 reqwest 只认显式代理，直连 www.nexusmods.com 会被墙。
+    const storedProxy = ((await PersistentStore.get<string>("downloadProxy", "")) ?? "").trim();
+    console.debug(`${resolveTag} stage=cookie-invoke game=${gameDomain} proxy=${storedProxy ? "yes" : "no"}`);
         return invoke<string>("nexus_resolve_direct", {
             gameDomain,
             modId: detail.id,
@@ -386,8 +391,10 @@ export async function resolveThirdPartyDownloadUrl(
             cookie,
             isNmm: false,
             proxy: nexusDirect.proxy ?? (storedProxy || null),
+            apiKey: nexusUser?.key?.trim() ? nexusUser.key.trim() : null,
         });
     }
+    console.debug(`${resolveTag} stage=api-fallback`);
 
     return resolveNexusModsDownloadUrl(
         gameDomain,
@@ -764,14 +771,20 @@ async function fetchNexusModsApiJson<T>(
     path: string,
     nexusUser?: INexusModsUser | null,
 ) {
-    // 详情/文件接口必须带 apikey；缺 key 时直接抛中文授权错，
+    // A：凭据水合等待。启动热路径 nexusUser.key 可能还是空（Stronghold 未读完），
+    // 先等水合完成；等完仍空才是真未授权，避免误报“请先授权”。
+    console.debug(`[auth] fetchNexusModsApiJson ${path} keyLen=${nexusUser?.key?.trim().length ?? 0}`);
+    if (!nexusUser?.key?.trim()) {
+        await SecretStore.ready("nexusModsToken");
+        console.debug(`[auth] after-ready keyLen=${nexusUser?.key?.trim().length ?? 0}`);
+    }
     // 避免裸调后把 Nexus 的英文原文透给用户。
     const response = await httpFetch(`https://api.nexusmods.com${path}`, {
         method: "GET",
         headers: getNexusModsHeaders(nexusUser, true),
     });
     const payload = (await response.json()) as T | IApiMessageResponse;
-
+    console.debug(`[auth] api status=${response.status} path=${path} msg=${buildNexusModsErrorMessage(payload, "")}`);
     if (response.status === 401 || response.status === 403) {
         throw new NexusModsAuthorizationError();
     }
@@ -852,6 +865,71 @@ function normalizeNexusModsDetailPayload(
         descriptionFormat: item.description ? "html" : "text",
         files: normalizedFiles,
     } satisfies IThirdPartyModDetail;
+}
+
+// 单文件接口回填真实 file_name：collection/pending 重建的最小 detail 没有 fileName，
+// 建任务前调一次 /files/{fileId}.json 拿权威 file_name（含后缀），失败返回空由调用方回退。
+export async function fetchNexusModsSingleFileName(
+    gameDomain: string,
+    modId: string,
+    fileId: string,
+    nexusUser?: INexusModsUser | null,
+): Promise<string> {
+    try {
+        const payload = await fetchNexusModsApiJson<INexusModsFile>(
+            `/v1/games/${gameDomain}/mods/${modId}/files/${fileId}.json`,
+            nexusUser,
+        );
+        return (payload?.file_name || "").trim();
+    } catch {
+        // 403 Mod not available 等：返回空，调用方走原有回退链路，不阻塞建任务。
+        return "";
+    }
+}
+
+ // collection 已知 modId/fileId 时的最小 detail：直调直链，跳过 files 清单接口。
+ // files.json 对部分 mod 返回 403 Mod not available（API 不可见但网页可下）。
+export function buildMinimalNexusModDetail(
+    gameDomain: string,
+    modId: string,
+    fileId: string,
+    name: string,
+    version: string,
+): IThirdPartyModDetail {
+    const file: IThirdPartyModFile = {
+        id: fileId,
+        name,
+        version,
+        size: 0,
+        createdAt: "",
+        downloadUrl: "",
+        detailsUrl: "",
+    };
+    return {
+        source: "NexusMods",
+        id: modId,
+        routeId: modId,
+        routeQuery: { gameDomain },
+        title: name,
+        summary: "",
+        author: "",
+        version,
+        website: buildNexusModsWebsite(gameDomain, modId, fileId),
+        cover: "",
+        gallery: [],
+        downloads: 0,
+        likes: 0,
+        categories: [],
+        tags: [],
+        createdAt: "",
+        updatedAt: "",
+        nsfw: false,
+        filesCount: 1,
+        description: "",
+        descriptionFormat: "text",
+        primaryFile: file,
+        files: [file],
+    };
 }
 
 async function fetchNexusModsDetailById(

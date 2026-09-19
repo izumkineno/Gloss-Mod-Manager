@@ -511,24 +511,19 @@ pub fn dl_pause_all(state: tauri::State<DownloaderState>) -> Result<usize, Strin
     Ok(count)
 }
 
-/// 全局暂停闸解除：paused 的任务回 waiting，pump 顶上去。
+/// 全局暂停闸解除：paused 的任务全部回 waiting，不受 collection 闸限制。
+
+/// 下载页“继续全部”是最高优先级恢复入口，一并清空 paused_collections。
 #[tauri::command]
 pub fn dl_resume_all(state: tauri::State<DownloaderState>) -> Result<usize, String> {
     let gids: Vec<String> = {
         let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
         inner.paused_all = false;
-        let paused: std::collections::HashSet<String> =
-            inner.paused_collections.iter().cloned().collect();
+        inner.paused_collections.clear();
         let gids: Vec<String> = inner
             .tasks
             .iter_mut()
-            .filter(|(_, entry)| {
-                entry.status == TaskStatus::Paused
-                    && entry
-                        .collection_id
-                        .as_ref()
-                        .is_none_or(|id| !paused.contains(id))
-            })
+            .filter(|(_, entry)| entry.status == TaskStatus::Paused)
             .map(|(gid, entry)| {
                 entry.status = TaskStatus::Waiting;
                 gid.clone()
@@ -717,6 +712,44 @@ pub fn dl_forget(state: tauri::State<DownloaderState>, gid: String) -> Result<()
     inner.tasks.remove(&gid);
     inner.pending.retain(|pending| pending != &gid);
     Ok(())
+}
+/// 批量清理已终局任务：一次锁内定名单，锁外删文件、发事件。返回 (已清理数, 失败明细)。
+/// active/waiting 跳过并记入失败；不存在的 gid 直接忽略。
+#[tauri::command]
+pub fn dl_purge_stopped(
+    state: tauri::State<DownloaderState>,
+    gids: Vec<String>,
+    delete_file: bool,
+) -> Result<(usize, Vec<(String, String)>), String> {
+    let (targets, failed): (Vec<(String, String)>, Vec<(String, String)>) = {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut targets = Vec::with_capacity(gids.len());
+        let mut failed = Vec::new();
+        for gid in gids {
+            let Some(mut entry) = inner.tasks.remove(&gid) else {
+                continue;
+            };
+            if entry.status == TaskStatus::Active || entry.status == TaskStatus::Waiting {
+                let status = entry.status.as_status_str().to_string();
+                inner.tasks.insert(gid.clone(), entry);
+                failed.push((gid, format!("任务{status}，跳过")));
+                continue;
+            }
+            abort_entry(&mut entry);
+            targets.push((gid, entry.output_path()));
+        }
+        inner.pending.retain(|pending| !targets.iter().any(|(gid, _)| gid == pending));
+        (targets, failed)
+    };
+    for (gid, output) in &targets {
+        if delete_file {
+            let _ = std::fs::remove_file(output);
+            let _ = std::fs::remove_file(format!("{output}.download.bitcode"));
+        }
+        state.emit_changed(gid, "removed");
+    }
+    pump((*state).clone());
+    Ok((targets.len(), failed))
 }
 
 /// 更新后续启动（重试/恢复）生效的参数。
@@ -973,6 +1006,20 @@ fn ext_for_mime(mime: &str) -> Option<&'static str> {
     }
 }
 
+// 首字节魔数 → 后缀：只认压缩包魔数，不猜测、不编造。
+fn ext_for_magic(head: &[u8]) -> Option<&'static str> {
+    if head.len() >= 4 && head[0] == b'P' && head[1] == b'K' && head[2] == 0x03 && head[3] == 0x04 {
+        return Some("zip");
+    }
+    if head.len() >= 6 && head[0] == b'7' && head[1] == b'z' && head[2] == 0xBC && head[3] == 0xAF && head[4] == 0x27 && head[5] == 0x1C {
+        return Some("7z");
+    }
+    if head.len() >= 4 && head[0] == b'R' && head[1] == b'a' && head[2] == b'r' && head[3] == b'!' {
+        return Some("rar");
+    }
+    None
+}
+
 fn ensure_extension(name: &str, mime: Option<&str>) -> String {
     if let Some(dot) = name.rfind('.') {
         if dot + 1 < name.len() && name.len() - dot - 1 <= 10 {
@@ -983,6 +1030,16 @@ fn ensure_extension(name: &str, mime: Option<&str>) -> String {
         return format!("{name}.{m}");
     }
     name.to_string()
+}
+
+// 无后缀名按魔数补后缀：HEAD 无 body 无法嗅探时返回 None，由调用方发 Range 0-0 再定。
+fn ensure_extension_by_magic(name: &str, head: &[u8]) -> Option<String> {
+    if let Some(dot) = name.rfind('.') {
+        if dot + 1 < name.len() && name.len() - dot - 1 <= 10 {
+            return None;
+        }
+    }
+    ext_for_magic(head).map(|ext| format!("{name}.{ext}"))
 }
 
 fn name_from_url(url: &str) -> Option<String> {
@@ -1130,22 +1187,6 @@ fn origin_referer(url: &str) -> Option<String> {
     Some(format!("{}://{authority}/", &s[..scheme_end]))
 }
 
-fn hit_from_response(resp: &simple_downloader::reqwest::Response) -> Option<ProbeFilename> {
-    let final_url = resp.url().as_str().to_string();
-    let (name, ctype) = suggest_from_headers(resp.headers(), &final_url);
-    name.map(|n| {
-        let is_header = resp
-            .headers()
-            .contains_key(simple_downloader::reqwest::header::CONTENT_DISPOSITION);
-        ProbeFilename {
-            name: n,
-            source: if is_header { "header".to_string() } else { "url".to_string() },
-            content_type: ctype,
-            total_bytes: total_from_headers(resp.headers()),
-        }
-    })
-}
-
 async fn probe_filename_inner(
     url: &str,
     headers: &[(String, String)],
@@ -1157,18 +1198,39 @@ async fn probe_filename_inner(
     // HEAD 优先：不拉取 body；部分服务不支持 HEAD 时回退 Range 0-0。
     if let Ok(resp) = client.head(url).send().await {
         if resp.status().is_success() {
-            if let Some(hit) = hit_from_response(&resp) {
-                return Ok(hit);
+            let final_url = resp.url().as_str().to_string();
+            let (name, ctype) = suggest_from_headers(resp.headers(), &final_url);
+            if let Some(n) = name {
+                let is_header = resp.headers().contains_key(simple_downloader::reqwest::header::CONTENT_DISPOSITION);
+                return Ok(ProbeFilename {
+                    name: n,
+                    source: if is_header { "header".to_string() } else { "url".to_string() },
+                    content_type: ctype,
+                    total_bytes: total_from_headers(resp.headers()),
+                });
             }
         } else {
             status = Some(resp.status().as_u16());
         }
     }
+    // Range 0-0：首字节 body 既定总量又定魔数后缀；无后缀名按魔数补，不编造。
     if let Ok(resp) = client.get(url).header(RANGE, "bytes=0-0").send().await {
         let code = resp.status().as_u16();
         if resp.status().is_success() || code == 206 {
-            if let Some(hit) = hit_from_response(&resp) {
-                return Ok(hit);
+            let total = total_from_headers(resp.headers());
+            let headers = resp.headers().clone();
+            let final_url = resp.url().as_str().to_string();
+            let head: Vec<u8> = resp.bytes().await.unwrap_or_default().into_iter().collect();
+            let (name, ctype) = suggest_from_headers(&headers, &final_url);
+            if let Some(n) = name {
+                let is_header = headers.contains_key(simple_downloader::reqwest::header::CONTENT_DISPOSITION);
+                let fixed = ensure_extension_by_magic(&n, &head).unwrap_or(n);
+                return Ok(ProbeFilename {
+                    name: fixed,
+                    source: if is_header { "header".to_string() } else { "url".to_string() },
+                    content_type: ctype,
+                    total_bytes: total,
+                });
             }
         } else {
             status = Some(code);
@@ -1212,19 +1274,23 @@ pub async fn nexus_resolve_direct(
     cookie: String,
     is_nmm: Option<bool>,
     proxy: Option<String>,
+    api_key: Option<String>,
 ) -> Result<String, String> {
     use simple_downloader::reqwest::header::{HeaderValue, COOKIE, ORIGIN, REFERER, USER_AGENT};
     let game_domain = game_domain.trim().to_string();
     let mod_id = mod_id.trim().to_string();
     let file_id = file_id.trim().to_string();
     let cookie = cookie.trim().to_string();
+    tracing::debug!(target: "nexus", "resolve-start game={} mod={} file={} proxy={}", game_domain, mod_id, file_id, proxy.as_deref().unwrap_or("none"));
     if game_domain.is_empty() || mod_id.is_empty() || file_id.is_empty() {
         return Err("缺少游戏/Mod/文件参数。".to_string());
     }
     if cookie.is_empty() {
         return Err("未配置 NexusMods Cookie，请在设置页填写。".to_string());
     }
-    let game_id = nexus_game_id(&game_domain, &cookie, proxy.as_deref()).await?;
+    let api_key = api_key.as_deref().unwrap_or("").trim().to_string();
+    let game_id = nexus_game_id(&game_domain, &cookie, proxy.as_deref(), &api_key).await?;
+    tracing::debug!(target: "nexus", "resolve-game-id game={} mod={} file={}", game_domain, mod_id, file_id);
     let mut builder = simple_downloader::reqwest::ClientBuilder::new()
         .user_agent(PROBE_UA)
         .connect_timeout(std::time::Duration::from_secs(10))
@@ -1257,6 +1323,7 @@ pub async fn nexus_resolve_direct(
         .send()
         .await
         .map_err(|e| format!("请求 NexusMods 直链失败：{e}"))?;
+    tracing::debug!(target: "nexus", "resolve-post status={} mod={} file={}", resp.status().as_u16(), mod_id, file_id);
     if resp.status().as_u16() == 403 || resp.status().as_u16() == 401 {
         return Err("Cookie 已失效，请重新登录 NexusMods 后更新 Cookie。".to_string());
     }
@@ -1286,6 +1353,7 @@ pub async fn nexus_resolve_direct(
             return Ok(u.to_string());
         }
     }
+    tracing::debug!(target: "nexus", "resolve-no-url len={} head={} mod={} file={}", text.len(), &text[..text.len().min(120)], mod_id, file_id);
     Err("未能解析出下载直链（可能需要登录或文件已归档）。".to_string())
 }
 /// 从响应文本中提取以指定前缀开头的 URL（到引号/空白/反斜杠处截断）。
@@ -1304,8 +1372,59 @@ fn extract_url_with_prefix(text: &str, prefix: &str) -> Option<String> {
         None
     }
 }
-/// game_domain -> 数字 game_id：抓 Mod 页解析 data-game-id，无 Cookie 时也可用匿名访问。
+/// game_domain -> 数字 game_id：优先走官方 REST API（api.nexusmods.com，不吃 Cloudflare 验证），
+/// 无 key/失败时回退抓 www 页解析 data-game-id。Cookie 直链主体逻辑不动。
 async fn nexus_game_id(
+    game_domain: &str,
+    cookie: &str,
+    proxy: Option<&str>,
+    api_key: &str,
+) -> Result<String, String> {
+    if let Some(id) = nexus_game_id_via_api(game_domain, api_key, proxy).await {
+        return Ok(id);
+    }
+    nexus_game_id_via_page(game_domain, cookie, proxy).await
+}
+
+/// API 路径：GET /v1/games/{domain}.json 取数字 id；可选 apikey 鉴权（匿名也可查公开游戏）。
+async fn nexus_game_id_via_api(
+    game_domain: &str,
+    api_key: &str,
+    proxy: Option<&str>,
+) -> Option<String> {
+    use simple_downloader::reqwest::header::HeaderValue;
+    let domain = game_domain.trim();
+    if domain.is_empty() {
+        return None;
+    }
+    let mut builder = simple_downloader::reqwest::ClientBuilder::new()
+        .user_agent(PROBE_UA)
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(20));
+    if let Some(px) = proxy.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Ok(p) = simple_downloader::reqwest::Proxy::all(px) {
+            builder = builder.proxy(p);
+        }
+    }
+    let client = builder.build().ok()?;
+    let mut req = client.get(format!("https://api.nexusmods.com/v1/games/{}.json", domain));
+    let key = api_key.trim();
+    if !key.is_empty() {
+        if let Ok(v) = HeaderValue::from_str(key) {
+            req = req.header("apikey", v);
+        }
+    }
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() {
+        ::tracing::debug!(domain, status = resp.status().as_u16(), "nexus game id api miss, fallback to page");
+        return None;
+    }
+    let value: serde_json::Value = resp.json().await.ok()?;
+    value.get("id").and_then(|id| id.as_u64()).map(|id| id.to_string())
+}
+
+/// 回退路径：抓 www Mod 页解析 data-game-id（可能撞 Cloudflare 验证，失败即报错）。
+async fn nexus_game_id_via_page(
     game_domain: &str,
     cookie: &str,
     proxy: Option<&str>,
@@ -1326,10 +1445,14 @@ async fn nexus_game_id(
     if let Ok(v) = HeaderValue::from_str(cookie) {
         req = req.header(COOKIE, v);
     }
-    let text = req
+    let resp = req
         .send()
         .await
-        .map_err(|e| format!("获取游戏信息失败：{e}"))?
+        .map_err(|e| format!("获取游戏信息失败：{e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("游戏页面返回异常（{}），请稍后重试。", resp.status().as_u16()));
+    }
+    let text = resp
         .text()
         .await
         .map_err(|e| format!("读取游戏页面失败：{e}"))?;

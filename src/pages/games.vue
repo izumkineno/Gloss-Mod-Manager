@@ -121,19 +121,19 @@ function handleCardContextmenu(item: ISupportedGames) {
             <ContextMenuContent v-if="contextTargetGame" class="w-48">
                 <ContextMenuItem
                     @select="contextTargetGame && openGameFolder(contextTargetGame)"
-                >
+                ><IconFolderOpen class="mr-2 h-4 w-4" />
                     {{ t("games.openGameFolder") }}
                 </ContextMenuItem>
                 <ContextMenuItem
                     @select="contextTargetGame && openModFolder(contextTargetGame)"
-                >
+                ><IconPackage class="mr-2 h-4 w-4" />
                     {{ t("games.openModFolder") }}
                 </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem
                     variant="destructive"
                     @select="contextTargetGame && requestDeleteGame(contextTargetGame)"
-                >
+                ><IconTrash2 class="mr-2 h-4 w-4" />
                     {{ t("common.delete") }}
                 </ContextMenuItem>
             </ContextMenuContent>

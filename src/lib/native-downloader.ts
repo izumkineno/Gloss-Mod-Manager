@@ -249,6 +249,11 @@ export class Downloader {
         return gid;
     }
 
+    // 批量清理已终局任务：一次后端调用删记录+删文件，返回 [已清理数, 失败明细]。
+    public static async purgeStopped(gids: string[], deleteFile: boolean) {
+        return invoke<[number, Array<[string, string]>]>("dl_purge_stopped", { gids, deleteFile });
+    }
+
     public static async purgeDownloadResult() {
         const stopped = await Downloader.tellStopped(0, 1000);
 

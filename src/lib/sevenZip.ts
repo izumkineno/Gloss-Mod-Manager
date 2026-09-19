@@ -152,6 +152,12 @@ export class SevenZip {
     private static toArchiveEntry(
         record: Record<string, string>,
     ): SevenZipArchiveEntry | null {
+        // 7z l -slt 开头的压缩包头块（Path = 包自身路径，带 Type = rar/zip/7z）不是条目，直接跳过；
+        // 否则包路径 D:\... 会命中绝对路径校验造成误杀。
+        if ("Type" in record) {
+            return null;
+        }
+
         if (!record.Path) {
             return null;
         }

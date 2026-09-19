@@ -225,8 +225,10 @@ fn init_tracing(log_directory: PathBuf, session_file_name: String) {
     let _ = tracing_log::LogTracer::init();
 
     // dev 默认 debug 便于排查，release 默认 info 降噪；RUST_LOG 环境变量可覆盖。
-    let default_level = if cfg!(debug_assertions) { "debug" } else { "info" };
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
+    // h2/hyper 等底层 HTTP/2 编解码日志极其刷屏，默认压到 warn。
+    let default_directives = format!("{0},h2=warn,hyper=warn", if cfg!(debug_assertions) { "debug" } else { "info" });
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&default_directives));
 
     // 使用本地时区的 Rfc3339，与旧 `format_local_timestamp` 保持一致。
     let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
@@ -358,7 +360,7 @@ pub fn run() {
             downloader::dl_pause,
             downloader::dl_resume,
             downloader::dl_cancel,
-            downloader::dl_forget,
+            downloader::dl_purge_stopped,
             downloader::dl_change_option,
             downloader::dl_tell_status,
             downloader::dl_tell_active,

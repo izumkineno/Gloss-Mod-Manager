@@ -74,12 +74,46 @@ const basePreloadItems = computed(() => {
         return item.game_id.includes(currentGameId.value);
     });
 });
+// 本地 Mod 索引：前置清单逐项匹配从 O(P×N) 降到 O(P)，300+ mod 必备
+const localModLookup = computed(() => {
+    const bySourceId = new Map<string, boolean>();
+    const byFileName = new Map<string, boolean>();
+    const byModName = new Map<string, boolean>();
+    for (const mod of manager.managerModList) {
+        const webId = String(mod.webId ?? "").trim();
+        if (webId && webId !== "0" && mod.from) {
+            bySourceId.set(`${mod.from}:${webId}`, true);
+        }
+        if (mod.from === "GlossMod" && webId && webId !== "0") {
+            bySourceId.set(`GlossMod:${webId}`, true);
+        }
+        const fileName = (mod.fileName ?? "").trim().toLowerCase().replace(/\s+/gu, " ");
+        if (fileName) byFileName.set(fileName, true);
+        const modName = (mod.modName ?? "").trim().toLowerCase().replace(/\s+/gu, " ");
+        if (modName) byModName.set(modName, true);
+    }
+    return { bySourceId, byFileName, byModName };
+});
+function isPreloadImported(item: IGamePlugins): boolean {
+    const lookup = localModLookup.value;
+    const externalId = String(item.web_id ?? item.id ?? "").trim();
+    if (externalId && externalId !== "0") {
+        if (item.from && lookup.bySourceId.has(`${item.from}:${externalId}`)) return true;
+        if (lookup.bySourceId.has(`GlossMod:${externalId}`)) return true;
+    }
+    const fileName = (item.name ?? "").trim().toLowerCase().replace(/\s+/gu, " ");
+    if (fileName && (lookup.byFileName.has(fileName) || lookup.byModName.has(fileName))) return true;
+    return false;
+}
 const preloadStatusMap = computed<Record<string, IPreloadStatus>>(() => {
+    // 先走索引判已导入：命中直接返回，跳过 getGlossModPresence 全表匹配
     return Object.fromEntries(
-        basePreloadItems.value.map((item) => [
-            getPreloadKey(item),
-            resolvePreloadStatus(item),
-        ]),
+        basePreloadItems.value.map((item) => {
+            if (isPreloadImported(item)) {
+                return [getPreloadKey(item), { state: "imported", statusLabel: "已安装", actionLabel: "已安装", progress: 100 } as IPreloadStatus];
+            }
+            return [getPreloadKey(item), resolvePreloadStatus(item)];
+        }),
     );
 });
 const preloadItems = computed(() => {

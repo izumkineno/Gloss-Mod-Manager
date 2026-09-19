@@ -1,7 +1,7 @@
 import { join } from "@tauri-apps/api/path";
+import { stat } from "@tauri-apps/plugin-fs";
 import type { IDownloaderTask } from "@/lib/download-task-types";
 import type { IGlossDownloadTaskMeta } from "@/lib/gloss-download";
-import { PersistentStore } from "@/lib/persistent-store";
 
 const DOWNLOAD_TASK_SNAPSHOT_KEY = "aria2TaskSnapshotMap";
 const RESTORED_TASK_ERROR_CODE = "GMM_RESTORED_TASK";
@@ -21,7 +21,7 @@ function isFinishedByProgress(task: IDownloaderTask) {
     return totalLength > 0 && completedLength >= totalLength;
 }
 
-function normalizeRestoredTask(task: IDownloaderTask, liveGids: Set<string>) {
+async function normalizeRestoredTask(task: IDownloaderTask, liveGids: Set<string>) {
     if (liveGids.has(task.gid) || task.status === "removed") {
         return task;
     }
@@ -37,6 +37,27 @@ function normalizeRestoredTask(task: IDownloaderTask, liveGids: Set<string>) {
     }
 
     if (["active", "waiting", "paused"].includes(task.status)) {
+        // B：快照有、live 无（多为重启后内存表清空）。stat 真实文件，
+        // size >= total 才算 complete，否则保持 error。
+        const filePath = task.files.find((item) => item.path)?.path ?? task.files[0]?.path;
+        const totalLength = toNumber(task.totalLength);
+        if (filePath && totalLength > 0) {
+            try {
+                const metadata = await stat(filePath);
+                if (metadata.size >= totalLength) {
+                    return {
+                        ...task,
+                        status: "complete",
+                        completedLength: String(totalLength),
+                        downloadSpeed: "0",
+                        connections: "0",
+                        errorCode: RESTORED_TASK_ERROR_CODE,
+                    };
+                }
+            } catch {
+                // 文件不存在/不可读：落到下面的 error 分支。
+            }
+        }
         return {
             ...task,
             status: "error",
@@ -155,7 +176,7 @@ export async function mergeDownloadTaskSnapshots(
     const normalizedSnapshots: Record<string, IDownloaderTask> = {};
 
     for (const [gid, task] of Object.entries(nextSnapshots)) {
-        const normalizedTask = normalizeRestoredTask(task, liveGids);
+        const normalizedTask = await normalizeRestoredTask(task, liveGids);
 
         if (normalizedTask.status !== "removed") {
             normalizedSnapshots[gid] = normalizedTask;

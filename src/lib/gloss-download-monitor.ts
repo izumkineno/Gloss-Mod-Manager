@@ -262,6 +262,8 @@ export async function autoImportCompletedDownloadTasks(
                 continue;
             }
 
+            // collection 已安装识别依赖自动导入写入的 webId（externalId）。
+
             await updateTaskMeta(gid, {
                 localModId: importedMod.id,
                 importedAt: new Date().toISOString(),

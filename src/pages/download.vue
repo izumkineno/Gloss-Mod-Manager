@@ -4,7 +4,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { fetch as httpFetch } from "@tauri-apps/plugin-http";
 import { ElMessage } from "element-plus-message";
 import { Downloader } from "@/lib/native-downloader";
-import { useDownloadTasks } from "@/composables/useDownloadTasks";
+import { storeToRefs } from "pinia";
+import { useDownloadTasksStore } from "@/stores/download-tasks";
 import {
     type IDownloaderEnsureOptions,
     type IDownloaderTask,
@@ -16,6 +17,7 @@ import {
     getTaskProgress,
     toNumber,
 } from "@/lib/download-task-ui";
+import { removeDownloadTaskSnapshot } from "@/lib/download-task-cache";
 
 type QueueFilter = "all" | "active" | "waiting" | "paused" | "stopped" | "failed" | "imported" | "unimported";
 type DuplicateDecisionAction =
@@ -126,7 +128,8 @@ const TASK_STATUS_SORT_ORDER: Record<string, number> = {
     error: 4,
     removed: 5,
 };
-// 任务快照/订阅/meta/暂停继续/retry 清理统一收口 composable；下载页保留详情/导入/建任务业务。
+// 任务状态走 Pinia store（下载页 + collection 页共享同一份快照/订阅，禁止页级缓存）。
+const downloadTasksStore = useDownloadTasksStore();
 const {
     tasksLoading,
     tasksErrorMessage,
@@ -139,17 +142,20 @@ const {
     failedTasks,
     finishedTasks,
     taskMetaMap,
+} = storeToRefs(downloadTasksStore);
+const {
     refreshTaskLists,
     setTaskMeta,
+    removeTaskMeta,
     saveTaskMetaMap,
     forgetTaskRecord,
     removeTaskRecord,
     startTaskOperation,
     finishTaskOperation,
-    isTaskOperating,
-} = useDownloadTasks({ focusRefresh: true, onNewlyCompleted: (gids, tasks) => void autoImportCompletedTasks(gids, tasks) });
+} = downloadTasksStore;
+const isTaskOperating = (gid: string) => downloadTasksStore.isTaskOperating(gid);
+let releaseDownloadTasksSubscriptions: (() => void) | null = null;
 const taskImportingIds = ref<string[]>([]);
-
 const manager = useManager();
 const settings = useSettings();
 const route = useRoute();
@@ -485,8 +491,21 @@ watch(
 );
 
 onMounted(() => {
-    // 订阅/focus 兜底由 composable 统一注册，此处只跑页面初始化。
+    const releaseEvents = downloadTasksStore.ensureEventSubscription();
+    const releaseFocus = downloadTasksStore.ensureFocusRefresh();
+    const releaseCompleted = downloadTasksStore.onNewlyCompleted((gids, tasks) => void autoImportCompletedTasks(gids, tasks));
+    releaseDownloadTasksSubscriptions = () => {
+        releaseEvents();
+        releaseFocus();
+        releaseCompleted();
+    };
+    // 页面初始化。
     void initializeDownloadPage();
+});
+
+onUnmounted(() => {
+    releaseDownloadTasksSubscriptions?.();
+    releaseDownloadTasksSubscriptions = null;
 });
 
 function getErrorMessage(error: unknown) {
@@ -1793,30 +1812,24 @@ async function purgeStoppedTasks() {
         ElMessage.info("当前没有可清理的历史任务。");
         return;
     }
-    const failedMessages: string[] = [];
-    let removedCount = 0;
-    for (const task of [...stoppedTasks.value]) {
-        try {
-            await removeTaskRecord(task);
-            removedCount += 1;
-        } catch (error: unknown) {
-            failedMessages.push(
-                `${getTaskDisplayName(task)}：${getErrorMessage(error)}`,
-            );
-        }
+    // 后端批量清理：一次 invoke 删记录+删文件；前端清快照/meta并落盘一次。
+    const tasks = [...stoppedTasks.value];
+    const nameByGid = new Map(tasks.map((task) => [task.gid, getTaskDisplayName(task)]));
+    const gids = tasks.map((task) => task.gid);
+    const [removed, failed] = await Downloader.purgeStopped(gids, true);
+    const failedSet = new Set(failed.map(([gid]) => gid));
+    for (const gid of gids) {
+        if (failedSet.has(gid)) continue;
+        await removeDownloadTaskSnapshot(gid);
+        removeTaskMeta(gid);
     }
+    await saveTaskMetaMap(taskMetaMap.value);
     await refreshTaskLists();
-    if (failedMessages.length > 0) {
-        ElMessage.warning(
-            `已清理 ${removedCount} 条历史任务，另有 ${failedMessages.length} 条处理失败：${failedMessages
-                .slice(0, 2)
-                .join("；")}${failedMessages.length > 2 ? "……" : ""}`,
-        );
+    if (failed.length > 0) {
+        ElMessage.warning(`已清理 ${removed} 条历史任务，另有 ${failed.length} 条处理失败：${failed.slice(0, 2).map(([gid, reason]) => `${nameByGid.get(gid) ?? gid}：${reason}`).join("；")}${failed.length > 2 ? "……" : ""}`);
         return;
     }
-    ElMessage.success(
-        `已清理 ${removedCount} 条历史任务，并删除对应本地文件。`,
-    );
+    ElMessage.success(`已清理 ${removed} 条历史任务，并删除对应本地文件。`);
 }
 
 async function openTaskFolder(task?: IDownloaderTask | null) {
@@ -2130,6 +2143,16 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                                     }}
                                 </Button>
                                 <Button
+                                    v-if="task.status === 'complete'"
+                                    size="sm"
+                                    variant="outline"
+                                    :disabled="isTaskOperating(task.gid)"
+                                    @click="retryTask(task)"
+                                >
+                                    <IconRefreshCw />
+                                    重新下载
+                                </Button>
+                                <Button
                                     v-if="task.status === 'error'"
                                     size="sm"
                                     variant="outline"
@@ -2176,14 +2199,15 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
 </article>
 </ContextMenuTrigger>
 <ContextMenuContent class="w-48">
-<ContextMenuItem @select="openTaskDetail(task)">查看详情</ContextMenuItem>
-<ContextMenuItem v-if="task.status === 'active' || task.status === 'waiting'" :disabled="isTaskOperating(task.gid)" @select="pauseTask(task)">暂停</ContextMenuItem>
-<ContextMenuItem v-else-if="task.status === 'paused'" :disabled="isTaskOperating(task.gid)" @select="resumeTask(task)">继续</ContextMenuItem>
-<ContextMenuItem v-if="task.status === 'error'" :disabled="isTaskOperating(task.gid)" @select="retryTask(task)">重试</ContextMenuItem>
-<ContextMenuItem v-if="task.status === 'complete'" :disabled="!canImportToLocalManager || isTaskImporting(task.gid)" @select="importTaskToLocalManager(task)">一键导入</ContextMenuItem>
-<ContextMenuItem @select="openTaskFileLocation(task)">打开文件位置</ContextMenuItem>
-<ContextMenuSeparator />
-<ContextMenuItem variant="destructive" :disabled="isTaskOperating(task.gid)" @select="removeTask(task)">删除</ContextMenuItem>
+<ContextMenuItem @select="openTaskDetail(task)"><IconEye class="mr-2 h-4 w-4" />查看详情</ContextMenuItem>
+<ContextMenuItem v-if="task.status === 'active' || task.status === 'waiting'" :disabled="isTaskOperating(task.gid)" @select="pauseTask(task)"><IconPause class="mr-2 h-4 w-4" />暂停</ContextMenuItem>
+<ContextMenuItem v-else-if="task.status === 'paused'" :disabled="isTaskOperating(task.gid)" @select="resumeTask(task)"><IconPlay class="mr-2 h-4 w-4" />继续</ContextMenuItem>
+<ContextMenuItem v-if="task.status === 'complete'" :disabled="isTaskOperating(task.gid)" @select="retryTask(task)"><IconRefreshCw class="mr-2 h-4 w-4" />重新下载</ContextMenuItem>
+<ContextMenuItem v-if="task.status === 'error'" :disabled="isTaskOperating(task.gid)" @select="retryTask(task)"><IconRefreshCw class="mr-2 h-4 w-4" />重试</ContextMenuItem>
+<ContextMenuItem v-if="task.status === 'complete'" :disabled="!canImportToLocalManager || isTaskImporting(task.gid)" @select="importTaskToLocalManager(task)"><IconFileUp class="mr-2 h-4 w-4" />一键导入</ContextMenuItem>
+<ContextMenuItem @select="openTaskFileLocation(task)"><IconFolderOpen class="mr-2 h-4 w-4" />打开文件位置</ContextMenuItem>
+ <ContextMenuSeparator />
+<ContextMenuItem variant="destructive" :disabled="isTaskOperating(task.gid)" @select="removeTask(task)"><IconTrash2 class="mr-2 h-4 w-4" />删除</ContextMenuItem>
 </ContextMenuContent>
 </ContextMenu>
                     <div
@@ -2579,8 +2603,8 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                                 </div>
 </ContextMenuTrigger>
 <ContextMenuContent class="w-48">
-<ContextMenuItem :disabled="isResourceAdding(resource)" @select="addResourceTask(resource)">下载该资源</ContextMenuItem>
-<ContextMenuItem @select="openModResourcePage(selectedMod.id)">在网页打开 Mod</ContextMenuItem>
+<ContextMenuItem :disabled="isResourceAdding(resource)" @select="addResourceTask(resource)"><IconDownload class="mr-2 h-4 w-4" />下载该资源</ContextMenuItem>
+<ContextMenuItem @select="openModResourcePage(selectedMod.id)"><IconExternalLink class="mr-2 h-4 w-4" />在网页打开 Mod</ContextMenuItem>
 </ContextMenuContent>
 </ContextMenu>
 </div>
@@ -2888,6 +2912,18 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                                 >
                                     <IconFolderOpen />
                                     打开目录
+                                </Button>
+                                <Button
+                                    v-if="selectedTask.status === 'complete'"
+                                    size="sm"
+                                    variant="outline"
+                                    :disabled="
+                                        isTaskOperating(selectedTask.gid)
+                                    "
+                                    @click="retryTask(selectedTask)"
+                                >
+                                    <IconRefreshCw />
+                                    重新下载
                                 </Button>
                                 <Button
                                     v-if="selectedTask.status === 'error'"
