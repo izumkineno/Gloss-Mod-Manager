@@ -352,7 +352,10 @@ export async function resolveThirdPartyDownloadUrl(
     if (detail.source === "NexusMods" && nexusDirect?.mode === "cookie") {
         console.debug(`${resolveTag} stage=secret-ready-wait`);
         await SecretStore.ready("nexusModsCookie");
-        console.debug(`${resolveTag} stage=secret-ready-done`);
+        // nexusDirect.cookie 是调用时快照：水合后重读，否则刷新后一直空。
+        const fresh = (await SecretStore.getSafe("nexusModsCookie")).trim();
+        if (fresh && fresh !== nexusDirect.cookie?.trim()) nexusDirect = { ...nexusDirect, cookie: fresh };
+        console.debug(`${resolveTag} stage=secret-ready-done cookieLen=${nexusDirect.cookie?.trim().length ?? 0}`);
     }
     if (detail.source !== "NexusMods") {
         const targetFile =
@@ -774,14 +777,22 @@ async function fetchNexusModsApiJson<T>(
     // A：凭据水合等待。启动热路径 nexusUser.key 可能还是空（Stronghold 未读完），
     // 先等水合完成；等完仍空才是真未授权，避免误报“请先授权”。
     console.debug(`[auth] fetchNexusModsApiJson ${path} keyLen=${nexusUser?.key?.trim().length ?? 0}`);
-    if (!nexusUser?.key?.trim()) {
+    let apiKey = nexusUser?.key?.trim() ?? "";
+    if (!apiKey) {
         await SecretStore.ready("nexusModsToken");
-        console.debug(`[auth] after-ready keyLen=${nexusUser?.key?.trim().length ?? 0}`);
+        // nexusUser 是调用时快照：等完水合必须重读，否则传入的空 key 一直空。
+        // 游览页刷新后重读 cookie/认证会卡在这里——keyLen=0 直接抛 401，hydrate 转圈。
+        apiKey = (await SecretStore.getSafe("nexusModsToken")).trim();
+        console.debug(`[auth] after-ready keyLen=${apiKey.length}`);
     }
     // 避免裸调后把 Nexus 的英文原文透给用户。
+    // headers 必须用重读后的 apiKey，不能再传旧快照 nexusUser（keyLen=0 旧对象）。
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (!apiKey) throw new NexusModsAuthorizationError();
+    headers.apikey = apiKey;
     const response = await httpFetch(`https://api.nexusmods.com${path}`, {
         method: "GET",
-        headers: getNexusModsHeaders(nexusUser, true),
+        headers,
     });
     const payload = (await response.json()) as T | IApiMessageResponse;
     console.debug(`[auth] api status=${response.status} path=${path} msg=${buildNexusModsErrorMessage(payload, "")}`);
@@ -938,19 +949,25 @@ export async function fetchNexusModsModMeta(
     modId: string,
     nexusUser?: INexusModsUser | null,
 ): Promise<Pick<IThirdPartyModDetail, "summary" | "description" | "author" | "cover" | "title"> | null> {
+    const metaTag = `[meta] domain=${gameDomain} modId=${modId}`;
+    console.debug(`${metaTag} stage=start keyLen=${nexusUser?.key?.trim().length ?? 0}`);
+    const start = Date.now();
     try {
         const payload = await fetchNexusModsApiJson<INexusModsV1Mod>(
             `/v1/games/${gameDomain}/mods/${modId}.json`,
             nexusUser,
         );
-        return {
+        const result = {
             title: normalizeText(payload.name || ""),
             summary: normalizeText(payload.summary || ""),
             description: normalizeText(payload.description || ""),
             author: normalizeNexusModsAuthor(payload),
             cover: normalizeText(payload.picture_url || ""),
         };
-    } catch {
+        console.debug(`${metaTag} stage=ok costMs=${Date.now() - start} title=${result.title.slice(0, 40)} summaryLen=${result.summary.length} descLen=${result.description.length} author=${result.author} cover=${result.cover ? "yes" : "no"}`);
+        return result;
+    } catch (error: unknown) {
+        console.warn(`${metaTag} stage=fail costMs=${Date.now() - start} error=${error instanceof Error ? error.message : String(error)}`);
         return null;
     }
 }

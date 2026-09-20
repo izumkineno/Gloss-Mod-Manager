@@ -25,14 +25,12 @@ import {
     List as ListIcon,
     Package,
     RefreshCw,
-    Search,
     Settings2,
     Shuffle,
     SquarePen,
     Trash2,
     Upload,
 } from "lucide-vue-next";
-
 interface IBatchEditForm {
     modAuthor: string;
     modType: number | string | "";
@@ -61,7 +59,6 @@ const disableSymlinkInstall = PersistentStore.useValue<boolean>(
     "disableSymlinkInstall",
     false,
 );
-
 const importLoading = ref(false);
 const actioningIds = ref<number[]>([]);
 const updateChecking = ref(false);
@@ -798,125 +795,115 @@ function openGamesPage() {
         <template v-else>
             <div class="flex min-h-0 flex-1 items-stretch gap-4 overflow-hidden">
                 <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden">
-                    <Card class="flex min-h-0 flex-1 flex-col overflow-hidden">
-                <CardContent class="flex shrink-0 flex-col gap-2 border-b py-3">
+                    <div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
+                    <!-- 工具栏 + 列表同一容器：操作 / 搜索 / 筛选一行，标签一行，列表紧跟 -->
+                    <div class="flex shrink-0 flex-col gap-2 border-b px-3 py-2">
                     <div class="flex flex-wrap items-center gap-2">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <DropdownMenu>
-                                <DropdownMenuTrigger>
-                                    <Button variant="secondary" size="sm">
-                                        <FolderPlus class="h-4 w-4" />导入
-                                    </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="start">
-                                    <DropdownMenuItem @click="importModFolder">
-                                        <FolderPlus class="h-4 w-4" />
-                                        导入文件夹
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem @click="importModArchive">
-                                        <FolderPlus class="h-4 w-4" />
-                                        导入压缩包
-                                    </DropdownMenuItem>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem @click="importGmmFile">
-                                        <Package class="h-4 w-4" />
-                                        导入 GMM 包
-                                    </DropdownMenuItem>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-                            <StartGame :game="manager.managerGame" />
-                            <DropdownMenu>
-                                <DropdownMenuTrigger>
-                                    <Button variant="outline" size="sm">
-                                        <IconMenu class="h-4 w-4" />
-                                        更多
-                                    </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" class="w-56">
-                                    <DropdownMenuItem @click="manager.loadManagerData()">
-                                        <RefreshCw class="h-4 w-4" />
-                                        刷新
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem :disabled="updateChecking" @click="checkForUpdates">
-                                        <Download class="h-4 w-4" />
-                                        {{ updateChecking ? "检查中…" : "检查更新" }}
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem @click="manager.selectionMode = !manager.selectionMode">
-                                        <CheckSquare class="h-4 w-4" />
-                                        多选
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem @click="managerGridEnabled = !managerGridEnabled">
-                                        <component :is="managerGridEnabled ? ListIcon : LayoutGrid" class="h-4 w-4" />
-                                        {{ managerGridEnabled ? "列表" : "网格" }}
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem @click="manager.detailPanelOpen = !manager.detailPanelOpen">
-                                        <SquarePen class="h-4 w-4" />
-                                        {{ manager.detailPanelOpen ? "关闭详情栏" : "打开详情栏" }}
-                                    </DropdownMenuItem>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem @click="openModRootFolder">
-                                        <FolderOpen class="h-4 w-4" />
-                                        打开 Mod 目录
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem @click="openGameFolder">
-                                        <FolderOpen class="h-4 w-4" />
-                                        打开游戏目录
-                                    </DropdownMenuItem>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem :disabled="!manager.managerModList.length" @click="openGmmExportDialog">
-                                        <Upload class="h-4 w-4" />
-                                        导出 GMM 包
-                                    </DropdownMenuItem>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-                        </div>
-                        <span class="shrink-0 text-xs text-muted-foreground">共 {{ manager.filteredMods.length }} 个 Mod</span>
-                        <InputGroup>
-                            <InputGroupInput
-                                v-model="manager.search"
-                                placeholder="搜索名称、作者、版本、标签或类型"
-                            />
-                            <InputGroupAddon>
-                                <Search />
-                            </InputGroupAddon>
-                        </InputGroup>
-                    </div>
-                    <div class="-mx-1 flex items-center gap-1.5 overflow-x-auto px-1 text-sm no-scrollbar">
-                        <Button
-                            class="h-7 shrink-0 px-2.5 text-xs"
-                            :variant="
-                                manager.selectedType === 0
-                                    ? 'default'
-                                    : 'outline'
-                            "
-                            size="sm"
-                            @click="manager.selectedType = 0"
-                        >
-                            全部 ({{ getTypeCount(0) }})
-                        </Button>
-                        <Button
-                            class="shrink-0"
-                            v-for="item in manager.availableTypes"
-                            :key="item.id"
-                            :variant="
-                                manager.selectedType === item.id
-                                    ? 'default'
-                                    : 'outline'
-                            "
-                            size="sm"
-                            @click="manager.selectedType = item.id"
-                        >
-                            {{ item.name }} ({{ getTypeCount(item.id) }})
-                        </Button>
-                        <CustomTypeDialog />
-                    </div>
+                    <DropdownMenu>
+                        <DropdownMenuTrigger>
+                            <Button variant="secondary" size="sm">
+                                <FolderPlus class="h-4 w-4" />导入
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                            <DropdownMenuItem @click="importModFolder">
+                                <FolderPlus class="h-4 w-4" />
+                                导入文件夹
+                            </DropdownMenuItem>
+                            <DropdownMenuItem @click="importModArchive">
+                                <FolderPlus class="h-4 w-4" />
+                                导入压缩包
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem @click="importGmmFile">
+                                <Package class="h-4 w-4" />
+                                导入 GMM 包
+                            </DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                    <StartGame :game="manager.managerGame" />
+                    <DropdownMenu>
+                        <DropdownMenuTrigger>
+                            <Button variant="outline" size="sm">
+                                <IconMenu class="h-4 w-4" />
+                                更多
+                            </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" class="w-56">
+                            <DropdownMenuItem @click="manager.loadManagerData()">
+                                <RefreshCw class="h-4 w-4" />
+                                刷新
+                            </DropdownMenuItem>
+                            <DropdownMenuItem :disabled="updateChecking" @click="checkForUpdates">
+                                <Download class="h-4 w-4" />
+                                {{ updateChecking ? "检查中…" : "检查更新" }}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem @click="manager.selectionMode = !manager.selectionMode">
+                                <CheckSquare class="h-4 w-4" />
+                                多选
+                            </DropdownMenuItem>
+                            <DropdownMenuItem @click="managerGridEnabled = !managerGridEnabled">
+                                <component :is="managerGridEnabled ? ListIcon : LayoutGrid" class="h-4 w-4" />
+                                {{ managerGridEnabled ? "列表" : "网格" }}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem @click="manager.detailPanelOpen = !manager.detailPanelOpen">
+                                <SquarePen class="h-4 w-4" />
+                                {{ manager.detailPanelOpen ? "关闭详情栏" : "打开详情栏" }}
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem @click="openModRootFolder">
+                                <FolderOpen class="h-4 w-4" />
+                                打开 Mod 目录
+                            </DropdownMenuItem>
+                            <DropdownMenuItem @click="openGameFolder">
+                                <FolderOpen class="h-4 w-4" />
+                                打开游戏目录
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem :disabled="!manager.managerModList.length" @click="openGmmExportDialog">
+                                <Upload class="h-4 w-4" />
+                                导出 GMM 包
+                            </DropdownMenuItem>
+                        </DropdownMenuContent>
+                    </DropdownMenu>
+                    <Select v-model="manager.selectedType">
+                        <SelectTrigger class="w-36 shrink-0">
+                            <SelectValue placeholder="类型" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem :value="0">全部类型 ({{ getTypeCount(0) }})</SelectItem>
+                            <SelectItem v-for="item in manager.availableTypes" :key="item.id" :value="item.id">{{ item.name }} ({{ getTypeCount(item.id) }})</SelectItem>
+                        </SelectContent>
+                    </Select>
                     <ManagerTags />
-                </CardContent>
-                <div class="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+                    <Select v-model="manager.installStatus">
+                        <SelectTrigger class="w-28 shrink-0">
+                            <SelectValue placeholder="状态" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="all">全部状态</SelectItem>
+                            <SelectItem value="installed">已安装</SelectItem>
+                            <SelectItem value="uninstalled">未安装</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <Select v-model="manager.pageSize">
+                        <SelectTrigger class="w-20 shrink-0">
+                            <SelectValue placeholder="每页" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem :value="50">50 / 页</SelectItem>
+                            <SelectItem :value="100">100 / 页</SelectItem>
+                            <SelectItem :value="200">200 / 页</SelectItem>
+                        </SelectContent>
+                    </Select>
+                    <CustomTypeDialog />
+                    </div>
+                    </div>
+                    <div class="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
                     <ManagerPreloadList />
                     <ManagerList />
                     </div>
-                    </Card>
+                </div>
                 </div>
                 <ModDetailPanel />
             </div>

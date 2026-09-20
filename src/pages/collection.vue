@@ -375,34 +375,34 @@ async function queueSinglePendingItem(entry: INexusCollectionPending, item: INex
             },
             collectionId: entry.id,
         });
-    console.debug(`${singleTag} stage=queue-done status=${result.status} gid=${result.gid ?? "null"} msg=${result.message}`);
-    // 免费 API key 拿不到直链时会回退网页地址走外部打开：不建任务，必须标失败而非幽灵 queued。
-    if (result.status === "external") {
-        const reason = "免费 API key 无直链权限，已用浏览器打开下载页。请切 Cookie 模式或用 NXM 链接导入。";
-        await updateCollectionPendingItem(entry.id, item.modId, item.fileId, "failed", reason);
+        console.debug(`${singleTag} stage=queue-done status=${result.status} gid=${result.gid ?? "null"} msg=${result.message}`);
+        // 免费 API key 拿不到直链时会回退网页地址走外部打开：不建任务，必须标失败而非幽灵 queued。
+        if (result.status === "external") {
+            const reason = "免费 API key 无直链权限，已用浏览器打开下载页。请切 Cookie 模式或用 NXM 链接导入。";
+            await updateCollectionPendingItem(entry.id, item.modId, item.fileId, "failed", reason);
+            await refreshCollectionPending();
+            ElMessage.warning(reason);
+            return;
+        }
+        // 已在本地管理列表：不建任务，无需标 queued（行级已按 installed 显示“已完成”），明示即可。
+        if (result.status === "imported") {
+            console.debug(`${singleTag} stage=already-installed`);
+            await refreshCollectionPending();
+            ElMessage.info(result.message);
+            return;
+        }
+        // 复用存量任务（exists：已完成/已暂停/进行中）：不标 queued 造幽灵态，提示用户去向。
+        if (result.status === "exists") {
+            console.debug(`${singleTag} stage=reused gid=${result.gid ?? "null"}`);
+            await refreshTaskSnapshot();
+            ElMessage.info(result.message);
+            return;
+        }
+        await updateCollectionPendingItem(entry.id, item.modId, item.fileId, "queued", undefined);
+        console.debug(`${singleTag} stage=marked-queued`);
         await refreshCollectionPending();
-        ElMessage.warning(reason);
-        return;
-    }
-    // 已在本地管理列表：不建任务，无需标 queued（行级已按 installed 显示“已完成”），明示即可。
-    if (result.status === "imported") {
-        console.debug(`${singleTag} stage=already-installed`);
-        await refreshCollectionPending();
-        ElMessage.info(result.message);
-        return;
-    }
-    // 复用存量任务（exists：已完成/已暂停/进行中）：不标 queued 造幽灵态，提示用户去向。
-    if (result.status === "exists") {
-        console.debug(`${singleTag} stage=reused gid=${result.gid ?? "null"}`);
         await refreshTaskSnapshot();
-        ElMessage.info(result.message);
-        return;
-    }
-    await updateCollectionPendingItem(entry.id, item.modId, item.fileId, "queued", undefined);
-    console.debug(`${singleTag} stage=marked-queued`);
-    await refreshCollectionPending();
-    await refreshTaskSnapshot();
-    ElMessage.success(result.message);
+        ElMessage.success(result.message);
     } catch (error: unknown) {
         // B：授权错不标失败（凭据问题修好后可重试），提示去设置页授权。
         const rawReason = error instanceof Error ? error.message : typeof error === "string" && error.trim() ? error : "下载建任务失败。";
@@ -548,7 +548,8 @@ onUnmounted(() => {
                         </Badge>
                     </span>
                     <div class="flex flex-wrap gap-2">
-                        <Button size="sm" variant="outline" :disabled="collectionPendingLoading" @click="refreshCollectionPending()">
+                        <Button size="sm" variant="outline" :disabled="collectionPendingLoading"
+                            @click="refreshCollectionPending()">
                             <IconRefreshCw :class="collectionPendingLoading ? 'animate-spin' : ''" />
                             刷新
                         </Button>
@@ -562,141 +563,231 @@ onUnmounted(() => {
             </CardHeader>
             <CardContent class="flex flex-col gap-3">
                 <div class="flex flex-wrap gap-2">
-                    <Button
-                        v-for="opt in collectionFilterOptions"
-                        :key="opt.value"
-                        size="sm"
+                    <Button v-for="opt in collectionFilterOptions" :key="opt.value" size="sm"
                         :variant="collectionFilter === opt.value ? 'default' : 'outline'"
-                        @click="collectionFilter = opt.value"
-                    >
+                        @click="collectionFilter = opt.value">
                         {{ opt.label }}
                     </Button>
                 </div>
                 <div v-if="collectionPendingLoading" class="text-sm text-muted-foreground">正在读取待下载清单…</div>
-<ContextMenu v-for="entry in paginatedCollections" :key="entry.id">
-<ContextMenuTrigger as-child>
-<article class="cursor-pointer rounded-xl border px-4 py-4 transition-colors hover:border-primary/40">
-                    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div class="min-w-0 flex-1 space-y-2">
-                            <div class="flex flex-wrap items-center gap-2">
-                                <div class="truncate text-sm font-medium">{{ entry.name }} R{{ entry.revision }}</div>
-                                <Badge class="rounded-full" variant="outline">{{ entry.gameDomain }}/{{ entry.slug }}</Badge>
-                                <Badge class="rounded-full" variant="outline">
-                                    共 {{ getEntryCounts(entry).total }} 个文件 · 必装 {{ getEntryCounts(entry).required }} · 可选 {{ getEntryCounts(entry).optional }} · 已导入 {{ getEntryCounts(entry).done }}
-                                </Badge>
-                            </div>
-                            <div v-if="getRetryProgress(entry.id)" class="flex items-center gap-2 text-xs text-muted-foreground">
-                                <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                                    <div class="h-full rounded-full bg-primary transition-all" :style="{ width: `${Math.round((getRetryProgress(entry.id)!.done / Math.max(1, getRetryProgress(entry.id)!.total)) * 100)}%` }"></div>
-                                </div>
-                                <span>重试中 {{ getRetryProgress(entry.id)!.done }}/{{ getRetryProgress(entry.id)!.total }}</span>
-                            </div>
-                            <div v-else class="h-2 overflow-hidden rounded-full bg-muted flex" :title="`已完成 ${pendingProgress(entry).done}% · 下载中 ${pendingProgress(entry).downloading}%`">
-                                <div class="h-full bg-primary transition-all" :style="{ width: `${pendingProgress(entry).done}%` }"></div>
-                                <div class="h-full transition-all opacity-70" :style="{ width: `${pendingProgress(entry).downloading}%`, backgroundImage: `repeating-linear-gradient(-55deg, var(--primary) 0 4px, transparent 4px 8px)` }"></div>
-                            </div>
-                        </div>
-                        <div class="grid w-full grid-cols-3 gap-1.5 lg:w-auto lg:flex lg:flex-wrap lg:justify-end lg:gap-2">
-                            <Button size="sm" variant="outline" class="min-w-0 px-2 sm:px-3" @click="togglePendingExpanded(entry.id)">
-                                {{ expandedPendingIds.includes(entry.id) ? "收起" : "展开" }}
-                            </Button>
-                            <Button v-if="!getRetryProgress(entry.id)" size="sm" class="min-w-0 px-2 sm:px-3" @click="retryPendingEntry(entry)">重试未完成</Button>
-                            <Button v-else size="sm" variant="destructive" class="min-w-0 px-2 sm:px-3" @click="cancelRetryEntry(entry.id)">停止重试</Button>
-                            <Button size="sm" variant="outline" class="min-w-0 px-2 sm:px-3" @click="pauseCollectionEntry(entry)">
-                                <IconPause />
-                                <span class="hidden sm:inline">暂停下载</span>
-                            </Button>
-                            <Button size="sm" variant="outline" class="min-w-0 px-2 sm:px-3" @click="resumeCollectionEntry(entry)">
-                                <IconPlay />
-                                <span class="hidden sm:inline">继续下载</span>
-                            </Button>
-                            <Button size="sm" variant="outline" class="min-w-0 px-2 sm:px-3" @click="openCollectionPage(entry)">
-                                <IconExternalLink />
-                                <span class="hidden sm:inline">网页</span>
-                            </Button>
-                            <Button size="sm" variant="outline" class="min-w-0 px-2 sm:px-3" @click="deletePendingEntry(entry.id)">
-                                <IconTrash2 />
-                                <span class="hidden sm:inline">移除</span>
-                            </Button>
-                        </div>
-                    </div>
-                    <div v-if="expandedPendingIds.includes(entry.id)" class="mt-3 max-h-[48vh] space-y-2 overflow-y-auto pr-1">
-                        <div class="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
-                            <input type="checkbox" class="h-4 w-4 shrink-0 accent-primary" :checked="isPageAllSelected(entry)" :disabled="getSelectablePageItems(entry).length === 0" title="全选本页" @click.stop @change="togglePageSelectAll(entry, ($event.target as HTMLInputElement).checked)" />
-                            <span class="text-xs text-muted-foreground">全选本页（{{ getSelectablePageItems(entry).length }} 个可勾选）</span>
-                        </div>
-                        <ContextMenu v-for="item in getPaginatedItems(entry)" :key="`${item.modId}:${item.fileId}`">
-<ContextMenuTrigger as-child>
-<div class="flex flex-col gap-2 rounded-xl border px-3 py-2 text-sm sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-                            <input type="checkbox" class="h-4 w-4 shrink-0 accent-primary" :checked="isItemSelected(entry.id, item)" :disabled="!isItemSelectable(item)" :title="isItemSelectable(item) ? (item.optional ? '可选：勾选后下载' : '必装：默认勾选') : '已导入：不可勾选'" @click.stop @change="setItemSelected(entry.id, item, ($event.target as HTMLInputElement).checked)" />
-                            <div class="min-w-0 flex-1">
-                                <div class="truncate font-medium">{{ item.name }}</div>
-                                <div class="mt-1 text-xs text-muted-foreground">
-                                    mod {{ item.modId }} · file {{ item.fileId }} · {{ item.version }}
-                                    <span v-if="item.optional">· 可选</span>
-                                </div>
-                                <div v-if="getPendingTask(item) && ['active', 'waiting', 'paused'].includes(getPendingTask(item)?.status ?? '')" class="mt-1.5 flex items-center gap-2">
-                                    <div v-if="getPendingTask(item)?.status === 'active'" class="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
-                                        <div class="h-full transition-all opacity-80" :style="{ width: `${getTaskProgress(getPendingTask(item)!)}%`, backgroundImage: `repeating-linear-gradient(-55deg, var(--primary) 0 4px, transparent 4px 8px)`, backgroundSize: `auto`, animation: `collection-stripes 1s linear infinite` }"></div>
+                <ContextMenu v-for="entry in paginatedCollections" :key="entry.id">
+                    <ContextMenuTrigger as-child>
+                        <article
+                            class="cursor-pointer rounded-xl border px-4 py-4 transition-colors hover:border-primary/40">
+                            <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                <div class="min-w-0 flex-1 space-y-2">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <div class="truncate text-sm font-medium">{{ entry.name }} R{{ entry.revision }}
+                                        </div>
+                                        <Badge class="rounded-full" variant="outline">{{ entry.gameDomain }}/{{
+                                            entry.slug }}</Badge>
+                                        <Badge class="rounded-full" variant="outline">
+                                            共 {{ getEntryCounts(entry).total }} 个文件 · 必装 {{
+                                                getEntryCounts(entry).required }} · 可选 {{ getEntryCounts(entry).optional }}
+                                            · 已导入 {{ getEntryCounts(entry).done }}
+                                        </Badge>
                                     </div>
-                                    <div v-else class="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
-                                        <div class="h-full transition-all opacity-60" :style="{ width: `${getTaskProgress(getPendingTask(item)!)}%`, backgroundImage: `repeating-linear-gradient(-55deg, var(--primary) 0 4px, transparent 4px 8px)` }"></div>
+                                    <div v-if="getRetryProgress(entry.id)"
+                                        class="flex items-center gap-2 text-xs text-muted-foreground">
+                                        <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                                            <div class="h-full rounded-full bg-primary transition-all"
+                                                :style="{ width: `${Math.round((getRetryProgress(entry.id)!.done / Math.max(1, getRetryProgress(entry.id)!.total)) * 100)}%` }">
+                                            </div>
+                                        </div>
+                                        <span>重试中 {{ getRetryProgress(entry.id)!.done }}/{{
+                                            getRetryProgress(entry.id)!.total }}</span>
                                     </div>
-                                    <span class="shrink-0 text-xs text-muted-foreground">{{ getTaskProgress(getPendingTask(item)!) }}%<template v-if="getTaskSpeedText(getPendingTask(item)!)"> · {{ getTaskSpeedText(getPendingTask(item)!) }}</template></span>
+                                    <div v-else class="h-2 overflow-hidden rounded-full bg-muted flex"
+                                        :title="`已完成 ${pendingProgress(entry).done}% · 下载中 ${pendingProgress(entry).downloading}%`">
+                                        <div class="h-full bg-primary transition-all"
+                                            :style="{ width: `${pendingProgress(entry).done}%` }"></div>
+                                        <div class="h-full transition-all opacity-70"
+                                            :style="{ width: `${pendingProgress(entry).downloading}%`, backgroundImage: `repeating-linear-gradient(-55deg, var(--primary) 0 4px, transparent 4px 8px)` }">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div
+                                    class="grid w-full grid-cols-3 gap-1.5 lg:w-auto lg:flex lg:flex-wrap lg:justify-end lg:gap-2">
+                                    <Button size="sm" variant="outline" class="min-w-0 px-2 sm:px-3"
+                                        @click="togglePendingExpanded(entry.id)">
+                                        {{ expandedPendingIds.includes(entry.id) ? "收起" : "展开" }}
+                                    </Button>
+                                    <Button v-if="!getRetryProgress(entry.id)" size="sm" class="min-w-0 px-2 sm:px-3"
+                                        @click="retryPendingEntry(entry)">重试未完成</Button>
+                                    <Button v-else size="sm" variant="destructive" class="min-w-0 px-2 sm:px-3"
+                                        @click="cancelRetryEntry(entry.id)">停止重试</Button>
+                                    <Button size="sm" variant="outline" class="min-w-0 px-2 sm:px-3"
+                                        @click="pauseCollectionEntry(entry)">
+                                        <IconPause />
+                                        <span class="hidden sm:inline">暂停下载</span>
+                                    </Button>
+                                    <Button size="sm" variant="outline" class="min-w-0 px-2 sm:px-3"
+                                        @click="resumeCollectionEntry(entry)">
+                                        <IconPlay />
+                                        <span class="hidden sm:inline">继续下载</span>
+                                    </Button>
+                                    <Button size="sm" variant="outline" class="min-w-0 px-2 sm:px-3"
+                                        @click="openCollectionPage(entry)">
+                                        <IconExternalLink />
+                                        <span class="hidden sm:inline">网页</span>
+                                    </Button>
+                                    <Button size="sm" variant="outline" class="min-w-0 px-2 sm:px-3"
+                                        @click="deletePendingEntry(entry.id)">
+                                        <IconTrash2 />
+                                        <span class="hidden sm:inline">移除</span>
+                                    </Button>
                                 </div>
                             </div>
-                            <div class="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-                                <Badge class="rounded-full" variant="outline" :class="getPendingTaskStatus(item) === 'complete' || isPendingItemInstalled(item) ? 'border-green-500/40 text-green-600' : item.status === 'failed' || getPendingTaskStatus(item) === 'error' ? 'border-destructive/40 text-destructive' : hasLiveTask(item) ? 'border-blue-500/40 text-blue-600' : item.status === 'queued' ? 'border-destructive/40 text-destructive' : ''">
-                                    {{ isPendingItemInstalled(item) ? "已完成" : getPendingTaskStatus(item) === "complete" ? "已完成" : getPendingTaskStatus(item) && hasLiveTask(item) ? `任务${getPendingTaskStatus(item) === "active" ? "下载中" : getPendingTaskStatus(item) === "paused" ? "已暂停" : getPendingTaskStatus(item) === "error" ? "失败" : "等待中"}` : hasLiveTask(item) ? "任务未知" : item.status === "queued" ? "任务丢失" : item.status === "failed" ? "失败" : "待处理" }}
-                                </Badge>
-                                <Button v-if="!hasLiveTask(item) && !isPendingItemInstalled(item)" size="sm" variant="outline" class="min-w-0 flex-1 sm:flex-none" @click="queueSinglePendingItem(entry, item)">{{ item.status === "queued" ? "重建任务" : item.status === "failed" || getPendingTaskStatus(item) === "error" ? "重试" : "添加任务" }}</Button>
-                                <Button size="sm" variant="outline" class="min-w-0 flex-1 sm:flex-none" @click="openModPage(entry, item)">
-                                    <IconExternalLink />
-                                    <span class="hidden sm:inline">网页</span>
-                                </Button>
+                            <div v-if="expandedPendingIds.includes(entry.id)"
+                                class="mt-3 max-h-[48vh] space-y-2 overflow-y-auto pr-1">
+                                <div class="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+                                    <input type="checkbox" class="h-4 w-4 shrink-0 accent-primary"
+                                        :checked="isPageAllSelected(entry)"
+                                        :disabled="getSelectablePageItems(entry).length === 0" title="全选本页" @click.stop
+                                        @change="togglePageSelectAll(entry, ($event.target as HTMLInputElement).checked)" />
+                                    <span class="text-xs text-muted-foreground">全选本页（{{
+                                        getSelectablePageItems(entry).length }} 个可勾选）</span>
+                                </div>
+                                <ContextMenu v-for="item in getPaginatedItems(entry)"
+                                    :key="`${item.modId}:${item.fileId}`">
+                                    <ContextMenuTrigger as-child>
+                                        <div
+                                            class="flex flex-col gap-2 rounded-xl border px-3 py-2 text-sm sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                                            <input type="checkbox" class="h-4 w-4 shrink-0 accent-primary"
+                                                :checked="isItemSelected(entry.id, item)"
+                                                :disabled="!isItemSelectable(item)"
+                                                :title="isItemSelectable(item) ? (item.optional ? '可选：勾选后下载' : '必装：默认勾选') : '已导入：不可勾选'"
+                                                @click.stop
+                                                @change="setItemSelected(entry.id, item, ($event.target as HTMLInputElement).checked)" />
+                                            <div class="min-w-0 flex-1">
+                                                <div class="truncate font-medium">{{ item.name }}</div>
+                                                <div class="mt-1 text-xs text-muted-foreground">
+                                                    mod {{ item.modId }} · file {{ item.fileId }} · {{ item.version }}
+                                                    <span v-if="item.optional">· 可选</span>
+                                                </div>
+                                                <div v-if="getPendingTask(item) && ['active', 'waiting', 'paused'].includes(getPendingTask(item)?.status ?? '')"
+                                                    class="mt-1.5 flex items-center gap-2">
+                                                    <div v-if="getPendingTask(item)?.status === 'active'"
+                                                        class="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+                                                        <div class="h-full transition-all opacity-80"
+                                                            :style="{ width: `${getTaskProgress(getPendingTask(item)!)}%`, backgroundImage: `repeating-linear-gradient(-55deg, var(--primary) 0 4px, transparent 4px 8px)`, backgroundSize: `auto`, animation: `collection-stripes 1s linear infinite` }">
+                                                        </div>
+                                                    </div>
+                                                    <div v-else
+                                                        class="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+                                                        <div class="h-full transition-all opacity-60"
+                                                            :style="{ width: `${getTaskProgress(getPendingTask(item)!)}%`, backgroundImage: `repeating-linear-gradient(-55deg, var(--primary) 0 4px, transparent 4px 8px)` }">
+                                                        </div>
+                                                    </div>
+                                                    <span class="shrink-0 text-xs text-muted-foreground">{{
+                                                        getTaskProgress(getPendingTask(item)!) }}%<template
+                                                            v-if="getTaskSpeedText(getPendingTask(item)!)"> · {{
+                                                                getTaskSpeedText(getPendingTask(item)!) }}</template></span>
+                                                </div>
+                                            </div>
+                                            <div class="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                                                <Badge class="rounded-full" variant="outline"
+                                                    :class="getPendingTaskStatus(item) === 'complete' || isPendingItemInstalled(item) ? 'border-green-500/40 text-green-600' : item.status === 'failed' || getPendingTaskStatus(item) === 'error' ? 'border-destructive/40 text-destructive' : hasLiveTask(item) ? 'border-blue-500/40 text-blue-600' : item.status === 'queued' ? 'border-destructive/40 text-destructive' : ''">
+                                                    {{ isPendingItemInstalled(item) ? "已完成" : getPendingTaskStatus(item)
+                                                        === "complete" ? "已完成" :
+                                                        getPendingTaskStatus(item) && hasLiveTask(item) ?
+                                                            `任务${getPendingTaskStatus(item) === "active" ? "下载中" :
+                                                                getPendingTaskStatus(item) === "paused" ? "已暂停" :
+                                                                    getPendingTaskStatus(item) === "error" ? "失败" : "等待中"}` :
+                                                            hasLiveTask(item) ? "任务未知" : item.status === "queued" ? "任务丢失" :
+                                                                item.status === "failed" ? "失败" : "待处理" }}
+                                                </Badge>
+                                                <Button v-if="!hasLiveTask(item) && !isPendingItemInstalled(item)"
+                                                    size="sm" variant="outline" class="min-w-0 flex-1 sm:flex-none"
+                                                    @click="queueSinglePendingItem(entry, item)">{{ item.status ===
+                                                        "queued" ?
+                                                        "重建任务" : item.status === "failed" || getPendingTaskStatus(item) ===
+                                                            "error" ? "重试" : "添加任务" }}</Button>
+                                                <Button size="sm" variant="outline" class="min-w-0 flex-1 sm:flex-none"
+                                                    @click="openModPage(entry, item)">
+                                                    <IconExternalLink />
+                                                    <span class="hidden sm:inline">网页</span>
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </ContextMenuTrigger>
+                                    <ContextMenuContent class="w-40">
+                                        <ContextMenuItem v-if="!hasLiveTask(item) && !isPendingItemInstalled(item)"
+                                            @select="queueSinglePendingItem(entry, item)">
+                                            <IconDownload class="mr-2 h-4 w-4" />{{ item.status === "queued" ? "重建任务" :
+                                                "添加任务" }}
+                                        </ContextMenuItem>
+                                        <ContextMenuItem @select="openModPage(entry, item)">
+                                            <IconExternalLink class="mr-2 h-4 w-4" />在网页打开
+                                        </ContextMenuItem>
+                                        <ContextMenuItem @select="openPendingItemLocation(item)">
+                                            <IconFolderOpen class="mr-2 h-4 w-4" />打开文件位置
+                                        </ContextMenuItem>
+                                    </ContextMenuContent>
+                                </ContextMenu>
+                                <div v-if="getItemTotalPages(entry) > 1"
+                                    class="flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm">
+                                    <div class="text-xs text-muted-foreground">第 {{ getItemPage(entry.id) }} 页，共 {{
+                                        getItemTotalPages(entry) }} 页，累计 {{
+                                            filteredItemsOf(entry).length }} 个文件。</div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <Button size="sm" variant="outline" :disabled="getItemPage(entry.id) <= 1"
+                                            @click="goToItemPage(entry, getItemPage(entry.id) - 1)">上一页</Button>
+                                        <Button size="sm" variant="outline"
+                                            :disabled="getItemPage(entry.id) >= getItemTotalPages(entry)"
+                                            @click="goToItemPage(entry, getItemPage(entry.id) + 1)">下一页</Button>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                        </ContextMenuTrigger>
-                        <ContextMenuContent class="w-40">
-                            <ContextMenuItem v-if="!hasLiveTask(item) && !isPendingItemInstalled(item)" @select="queueSinglePendingItem(entry, item)"><IconDownload class="mr-2 h-4 w-4" />{{ item.status === "queued" ? "重建任务" : "添加任务" }}</ContextMenuItem>
-                            <ContextMenuItem @select="openModPage(entry, item)"><IconExternalLink class="mr-2 h-4 w-4" />在网页打开</ContextMenuItem>
-                            <ContextMenuItem @select="openPendingItemLocation(item)"><IconFolderOpen class="mr-2 h-4 w-4" />打开文件位置</ContextMenuItem>
-                        </ContextMenuContent>
-                        </ContextMenu>
-                        <div v-if="getItemTotalPages(entry) > 1" class="flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 text-sm">
-                            <div class="text-xs text-muted-foreground">第 {{ getItemPage(entry.id) }} 页，共 {{ getItemTotalPages(entry) }} 页，累计 {{ filteredItemsOf(entry).length }} 个文件。</div>
-                            <div class="flex flex-wrap items-center gap-2">
-                                <Button size="sm" variant="outline" :disabled="getItemPage(entry.id) <= 1" @click="goToItemPage(entry, getItemPage(entry.id) - 1)">上一页</Button>
-                                <Button size="sm" variant="outline" :disabled="getItemPage(entry.id) >= getItemTotalPages(entry)" @click="goToItemPage(entry, getItemPage(entry.id) + 1)">下一页</Button>
-                            </div>
-                        </div>
-                    </div>
-</article>
-</ContextMenuTrigger>
-<ContextMenuContent class="w-48">
-<ContextMenuItem @select="toggleEntrySelectAll(entry, !isEntryAllSelected(entry))"><IconListChecks class="mr-2 h-4 w-4" />{{ isEntryAllSelected(entry) ? "取消选择所有" : "选择所有" }}</ContextMenuItem>
-<ContextMenuItem @select="togglePageSelectAll(entry, !isPageAllSelected(entry))"><IconCheckSquare class="mr-2 h-4 w-4" />{{ isPageAllSelected(entry) ? "取消全选" : "全选本页" }}</ContextMenuItem>
-<ContextMenuItem @select="togglePendingExpanded(entry.id)"><IconEye class="mr-2 h-4 w-4" />{{ expandedPendingIds.includes(entry.id) ? "收起" : "展开" }}</ContextMenuItem>
-<ContextMenuItem @select="retryPendingEntry(entry)"><IconRefreshCw class="mr-2 h-4 w-4" />重试未完成</ContextMenuItem>
-<ContextMenuItem @select="pauseCollectionEntry(entry)"><IconPause class="mr-2 h-4 w-4" />暂停下载</ContextMenuItem>
-<ContextMenuItem @select="resumeCollectionEntry(entry)"><IconPlay class="mr-2 h-4 w-4" />继续下载</ContextMenuItem>
-<ContextMenuItem @select="openCollectionPage(entry)"><IconExternalLink class="mr-2 h-4 w-4" />在网页打开</ContextMenuItem>
- <ContextMenuSeparator />
-<ContextMenuItem variant="destructive" @select="deletePendingEntry(entry.id)"><IconTrash2 class="mr-2 h-4 w-4" />移除</ContextMenuItem>
-</ContextMenuContent>
-</ContextMenu>
-                <div v-if="collectionTotalPages > 1" class="flex flex-col gap-3 rounded-xl border px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div class="text-sm text-muted-foreground">当前第 {{ collectionPage }} 页，共 {{ collectionTotalPages }} 页，累计 {{ filteredCollections.length }} 个合集。</div>
+                        </article>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent class="w-48">
+                        <ContextMenuItem @select="toggleEntrySelectAll(entry, !isEntryAllSelected(entry))">
+                            <IconListChecks class="mr-2 h-4 w-4" />{{ isEntryAllSelected(entry) ? "取消选择所有" : "选择所有" }}
+                        </ContextMenuItem>
+                        <ContextMenuItem @select="togglePageSelectAll(entry, !isPageAllSelected(entry))">
+                            <IconCheckSquare class="mr-2 h-4 w-4" />{{ isPageAllSelected(entry) ? "取消全选" : "全选本页" }}
+                        </ContextMenuItem>
+                        <ContextMenuItem @select="togglePendingExpanded(entry.id)">
+                            <IconEye class="mr-2 h-4 w-4" />{{ expandedPendingIds.includes(entry.id) ? "收起" : "展开" }}
+                        </ContextMenuItem>
+                        <ContextMenuItem @select="retryPendingEntry(entry)">
+                            <IconRefreshCw class="mr-2 h-4 w-4" />重试未完成
+                        </ContextMenuItem>
+                        <ContextMenuItem @select="pauseCollectionEntry(entry)">
+                            <IconPause class="mr-2 h-4 w-4" />暂停下载
+                        </ContextMenuItem>
+                        <ContextMenuItem @select="resumeCollectionEntry(entry)">
+                            <IconPlay class="mr-2 h-4 w-4" />继续下载
+                        </ContextMenuItem>
+                        <ContextMenuItem @select="openCollectionPage(entry)">
+                            <IconExternalLink class="mr-2 h-4 w-4" />在网页打开
+                        </ContextMenuItem>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem variant="destructive" @select="deletePendingEntry(entry.id)">
+                            <IconTrash2 class="mr-2 h-4 w-4" />移除
+                        </ContextMenuItem>
+                    </ContextMenuContent>
+                </ContextMenu>
+                <div v-if="collectionTotalPages > 1"
+                    class="flex flex-col gap-3 rounded-xl border px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div class="text-sm text-muted-foreground">当前第 {{ collectionPage }} 页，共 {{ collectionTotalPages }}
+                        页，累计 {{
+                            filteredCollections.length }} 个合集。</div>
                     <div class="flex flex-wrap items-center gap-2">
-                        <Button size="sm" variant="outline" :disabled="collectionPage <= 1" @click="goToCollectionPage(collectionPage - 1)">
+                        <Button size="sm" variant="outline" :disabled="collectionPage <= 1"
+                            @click="goToCollectionPage(collectionPage - 1)">
                             <IconChevronLeft />
                             上一页
                         </Button>
                         <template v-for="item in collectionPageItems" :key="item.key">
-                            <span v-if="item.ellipsis" class="px-2 text-sm text-muted-foreground">{{ item.label }}</span>
-                            <Button v-else size="sm" :variant="item.page === collectionPage ? 'default' : 'outline'" @click="goToCollectionPage(item.page ?? 1)">{{ item.label }}</Button>
+                            <span v-if="item.ellipsis" class="px-2 text-sm text-muted-foreground">{{ item.label
+                            }}</span>
+                            <Button v-else size="sm" :variant="item.page === collectionPage ? 'default' : 'outline'"
+                                @click="goToCollectionPage(item.page ?? 1)">{{ item.label }}</Button>
                         </template>
-                        <Button size="sm" variant="outline" :disabled="collectionPage >= collectionTotalPages" @click="goToCollectionPage(collectionPage + 1)">
+                        <Button size="sm" variant="outline" :disabled="collectionPage >= collectionTotalPages"
+                            @click="goToCollectionPage(collectionPage + 1)">
                             下一页
                             <IconChevronRight />
                         </Button>
@@ -709,7 +800,12 @@ onUnmounted(() => {
 <style scoped>
 /* 下载中条纹滚动：虚线进度条的流动效果，paused/waiting 为静态虚线。 */
 @keyframes collection-stripes {
-    from { background-position: 0 0; }
-    to { background-position: 16px 0; }
+    from {
+        background-position: 0 0;
+    }
+
+    to {
+        background-position: 16px 0;
+    }
 }
 </style>

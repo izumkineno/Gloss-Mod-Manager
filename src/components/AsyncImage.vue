@@ -11,6 +11,7 @@ const props = withDefaults(
         fallbackSrc: "",
     },
 );
+const emit = defineEmits<{ failed: [src: string] }>();
 
 const imageSrc = ref("");
 const fallbackApplied = ref(false);
@@ -44,6 +45,8 @@ function handleImageError() {
 
     fallbackApplied.value = true;
     imageSrc.value = resolveImageSrc(props.fallbackSrc);
+    // 通知父组件原图已死：懒加载可据此重新拉新 cover/介绍，而不是永远 skip。
+    emit("failed", props.src);
 }
 
 watch(

@@ -43,9 +43,9 @@ const dragPosition = ref<"before" | "after">("before");
 const tagDropTargetId = ref<number | null>(null);
 const operatingIds = ref<number[]>([]);
 const updateingIds = ref<number[]>([]);
-// 分页：避免大列表全量渲染卡顿（列表/网格共用）
-const pageSize = ref(50);
+// 分页：store 的 filteredMods 已含全部筛选（搜索/类型/标签/状态），这里只做切片；pageSize 也在 store，顶栏统一改
 const currentPage = ref(1);
+const pageSize = computed(() => manager.pageSize);
 const totalItems = computed(() => manager.filteredMods.length);
 const totalPages = computed(() => Math.max(1, Math.ceil(totalItems.value / pageSize.value)));
 const pagedMods = computed(() => {
@@ -55,9 +55,21 @@ const pagedMods = computed(() => {
 });
 // 筛选变化时回到第一页
 watch(() => manager.filteredMods.length, () => { currentPage.value = 1; });
-watch(() => managerGridEnabled.value, () => { currentPage.value = 1; });
+watch(() => manager.pageSize, () => { currentPage.value = 1; });
 function goPage(page: number) {
     currentPage.value = Math.min(Math.max(1, page), totalPages.value);
+}
+// 搜索本地态 + 防抖：filteredMods 是全量 join+includes，每击键直写 store 会卡输入
+const searchInput = ref(manager.search);
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+function onSearchInput() {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { manager.search = searchInput.value; }, 250);
+}
+function clearSearch() {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchInput.value = "";
+    manager.search = "";
 }
 // 右键菜单目标行：右键冒泡时记录，菜单动作作用于该行
 const contextTargetMod = ref<IModInfo | null>(null);
@@ -83,6 +95,23 @@ const editForm = reactive<IEditModForm>({
 
 function handleRowContextmenu(item: IModInfo) {
     contextTargetMod.value = item;
+    // 多选模式下右键未选项自动加入选择，方便右键连续多选
+    if (manager.selectionMode && !manager.selectionIds.includes(item.id)) {
+        manager.toggleSelection(item.id, true);
+    }
+}
+
+// 右键菜单多选入口：复用底部批量工具栏的实际操作，这里只管进出选择集
+function toggleContextTargetSelection() {
+    const target = contextTargetMod.value;
+    if (!target) return;
+    if (!manager.selectionMode) manager.selectionMode = true;
+    manager.toggleSelection(target.id);
+}
+
+function selectAllVisible() {
+    if (!manager.selectionMode) manager.selectionMode = true;
+    manager.setSelection(manager.filteredMods.map((item) => item.id));
 }
 
 function runContextAction(fn: (item: IModInfo) => void) {
@@ -687,64 +716,267 @@ watch(showSortDialog, (opened) => {
 </script>
 <template>
     <div class="min-w-0">
-            <ContextMenu>
-                <ContextMenuTrigger as-child>
-                    <div class="contents">
-                        <Table v-if="!managerGridEnabled" class="min-w-[640px]">
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead v-if="manager.selectionMode" class="w-12">
-                                        选择
-                                    </TableHead>
-                                    <TableHead class="w-14">序号</TableHead>
-                                    <TableHead>名称</TableHead>
-                                    <TableHead class="w-30">版本</TableHead>
-                                    <TableHead class="w-30">类型</TableHead>
-                                    <TableHead class="w-30">状态</TableHead>
-                                    <TableHead class="w-30">预览</TableHead>
-                                    <TableHead class="w-30">操作</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                <TableRow v-for="(item, index) in pagedMods" :key="item.id" :class="getRowClass(item)"
-                                    @click="handleRowClick($event, item)" @pointerenter="handleRowPointerEnter(item.id)"
-                                    @pointermove="handleRowPointerMove($event, item.id)"
-                                    @pointerleave="handleRowPointerLeave(item.id)"
-                                    @contextmenu="handleRowContextmenu(item)">
-                                    <TableCell v-if="manager.selectionMode">
-                                        <input type="checkbox" class="h-4 w-4 accent-primary" :checked="manager.selectionIds.includes(item.id)
-                                            " @change="handleSelectionChange($event, item.id)" />
-                                    </TableCell>
-                                    <TableCell class="text-muted-foreground tabular-nums">{{ (currentPage - 1) * pageSize + index + 1 }}</TableCell>
-                                    <TableCell>
+        <!-- 顶部工具栏：搜索 + 分页（原底部翻页上移，搜索并入同一行） -->
+        <div v-if="totalItems > 0"
+            class="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b bg-card/95 px-1 py-2 text-xs text-muted-foreground backdrop-blur">
+            <div class="relative min-w-40 flex-1">
+                <Input v-model="searchInput" placeholder="搜索名称 / 作者 / 版本 / 标签" class="pr-7" @input="onSearchInput"
+                    @keyup.enter="manager.search = searchInput" />
+                <button v-if="searchInput"
+                    class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    @click="clearSearch" title="清空">
+                    <IconX class="h-4 w-4" />
+                </button>
+            </div>
+            <span class="shrink-0">共 {{ totalItems }} 个，第 {{ currentPage }} / {{ totalPages }} 页</span>
+            <div class="flex items-center gap-1.5">
+                <Button variant="outline" size="sm" :disabled="currentPage <= 1" @click="goPage(1)">首页</Button>
+                <Button variant="outline" size="sm" :disabled="currentPage <= 1"
+                    @click="goPage(currentPage - 1)">上一页</Button>
+                <Button variant="outline" size="sm" :disabled="currentPage >= totalPages"
+                    @click="goPage(currentPage + 1)">下一页</Button>
+                <Button variant="outline" size="sm" :disabled="currentPage >= totalPages"
+                    @click="goPage(totalPages)">末页</Button>
+            </div>
+        </div>
+        <ContextMenu>
+            <ContextMenuTrigger as-child>
+                <div class="contents">
+                    <Table v-if="!managerGridEnabled" class="min-w-[640px]">
+                        <TableHeader class="sticky top-[53px] z-10 bg-card shadow-[0_1px_0_var(--border)] [&_th]:bg-card">
+                            <TableRow>
+                                <TableHead v-if="manager.selectionMode" class="w-12">
+                                    选择
+                                </TableHead>
+                                <TableHead class="w-14">序号</TableHead>
+                                <TableHead>名称</TableHead>
+                                <TableHead class="w-30">版本</TableHead>
+                                <TableHead class="w-30">类型</TableHead>
+                                <TableHead class="w-30">状态</TableHead>
+                                <TableHead class="w-30">预览</TableHead>
+                                <TableHead class="w-30">操作</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            <TableRow v-for="(item, index) in pagedMods" :key="item.id" :class="getRowClass(item)"
+                                @click="handleRowClick($event, item)" @pointerenter="handleRowPointerEnter(item.id)"
+                                @pointermove="handleRowPointerMove($event, item.id)"
+                                @pointerleave="handleRowPointerLeave(item.id)"
+                                @contextmenu="handleRowContextmenu(item)">
+                                <TableCell v-if="manager.selectionMode">
+                                    <input type="checkbox" class="h-4 w-4 accent-primary" :checked="manager.selectionIds.includes(item.id)
+                                        " @change="handleSelectionChange($event, item.id)" />
+                                </TableCell>
+                                <TableCell class="text-muted-foreground tabular-nums">{{ (currentPage - 1) * pageSize +
+                                    index + 1 }}</TableCell>
+                                <TableCell>
+                                    <div class="flex items-center gap-2">
+                                        <span v-if="!manager.selectionMode"
+                                            class="inline-flex cursor-grab text-muted-foreground active:cursor-grabbing"
+                                            @pointerdown="
+                                                handleModPointerDown($event, item.id)
+                                                ">
+                                            <IconGripVertical class="w-4 h-4" />
+                                        </span>
+                                        <Badge v-for="tag in item.tags" :key="tag.name" variant="outline">
+                                            <div class="h-2.5 w-2.5 rounded-full"
+                                                :style="{ backgroundColor: tag.color }"></div>
+                                            {{ tag.name }}
+                                        </Badge>
+                                        <span class="font-medium">{{
+                                            item.modName
+                                        }}</span>
+                                        <Badge v-if="item.isUpdate" variant="outline"
+                                            class="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200">
+                                            可更新
+                                        </Badge>
+                                    </div>
+                                </TableCell>
+                                <TableCell>{{ item.modVersion }}</TableCell>
+                                <TableCell>
+                                    <Select :model-value="item.modType" :disabled="item.isInstalled || isOperating(item.id)
+                                        " @update:model-value="
+                                                updateModType(item, $event)
+                                                ">
+                                        <SelectTrigger>
+                                            <SelectValue></SelectValue>
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem v-for="type in manager.managerGame
+                                                ?.modType" :key="type.id" :value="type.id">
+                                                {{ type.name }}
+                                            </SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </TableCell>
+                                <TableCell>
+                                    <div class="flex items-center gap-2">
+                                        <Switch :id="`is-installed-${item.id}`" :model-value="item.isInstalled"
+                                            :disabled="isOperating(item.id)" @update:model-value="
+                                                updateModInstalled(item, $event)
+                                                " />
+                                        <Label :for="`is-installed-${item.id}`">
+                                            {{
+                                                isOperating(item.id)
+                                                    ? "处理中"
+                                                    : item.isInstalled
+                                                        ? "已安装"
+                                                        : "未安装"
+                                            }}
+                                        </Label>
+                                    </div>
+                                </TableCell>
+                                <TableCell>
+                                    <HoverCard>
+                                        <HoverCardTrigger as-child>
+                                            <Button variant="ghost" size="icon">
+                                                <IconEye class="w-4 h-4" />
+                                            </Button>
+                                        </HoverCardTrigger>
+                                        <HoverCardContent class="w-80">
+                                            <AsyncImage :src="getModCoverSrc(item)"
+                                                :fallback-src="MANAGER_FALLBACK_COVER" :alt="`${item.modName} 封面`"
+                                                class="h-auto w-full rounded-md object-cover" />
+                                        </HoverCardContent>
+                                    </HoverCard>
+                                </TableCell>
+                                <TableCell>
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger as-child>
+                                            <Button variant="ghost" size="icon" :disabled="deletingModId === item.id ||
+                                                isUpdateing(item.id)
+                                                ">
+                                                <IconMenu class="w-4 h-4" />
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                            <DropdownMenuItem @click="openEditDialog(item)">
+                                                编辑
+                                                <DropdownMenuShortcut>
+                                                    <IconSquarePen />
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem @click="open(item)">
+                                                打开
+                                                <DropdownMenuShortcut>
+                                                    <IconFolderOpen />
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem :disabled="manager.managerModList.length < 2
+                                                " @click="openSortDialog(item)">
+                                                调整排序
+                                                <DropdownMenuShortcut>
+                                                    <IconGripVertical />
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem v-if="
+                                                item.from === 'GlossMod' &&
+                                                item.webId
+                                            " @click="queueModUpdate(item)">
+                                                {{
+                                                    isUpdateing(item.id)
+                                                        ? "更新中..."
+                                                        : "更新"
+                                                }}
+                                                <DropdownMenuShortcut>
+                                                    <IconRefreshCw :class="isUpdateing(item.id)
+                                                        ? 'animate-spin'
+                                                        : ''
+                                                        " />
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem v-if="item.modWebsite" as-child>
+                                                <a :href="item.modWebsite" target="_blank" rel="noopener noreferrer">
+                                                    网址
+                                                    <DropdownMenuShortcut>
+                                                        <IconGlobe />
+                                                    </DropdownMenuShortcut>
+                                                </a>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem variant="destructive"
+                                                :disabled="deletingModId === item.id" @click="deleteMod(item)">
+                                                删除
+                                                <DropdownMenuShortcut>
+                                                    <IconTrash class="text-destructive" />
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                </TableCell>
+                            </TableRow>
+                        </TableBody>
+                    </Table>
+
+                    <div v-if="managerGridEnabled" class="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
+                        <article v-for="(item, index) in pagedMods" :key="item.id" :class="getItemContainerClass(item)"
+                            class="overflow-hidden rounded-xl border bg-card shadow-sm transition-colors"
+                            @click="handleRowClick($event, item)" @pointerenter="handleRowPointerEnter(item.id)"
+                            @pointermove="handleRowPointerMove($event, item.id)"
+                            @pointerleave="handleRowPointerLeave(item.id)" @contextmenu="handleRowContextmenu(item)">
+                            <div class="relative aspect-video overflow-hidden bg-muted/20">
+                                <AsyncImage :src="getModCoverSrc(item)" :fallback-src="MANAGER_FALLBACK_COVER"
+                                    :alt="`${item.modName} 封面`" class="h-full w-full object-cover" />
+                                <Badge variant="secondary" class="absolute right-3 top-3 tabular-nums backdrop-blur">{{
+                                    (currentPage - 1) * pageSize + index + 1 }}</Badge>
+                                <Badge v-if="item.isUpdate" variant="outline"
+                                    class="absolute left-3 top-3 border-emerald-500/40 bg-emerald-500/10 text-white backdrop-blur">
+                                    可更新
+                                </Badge>
+                                <div
+                                    class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/75 via-black/20 to-transparent p-3">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div class="min-w-0">
+                                            <div class="truncate font-medium text-white">
+                                                {{ item.modName }}
+                                            </div>
+                                            <div class="text-xs text-white/80">
+                                                {{ item.modVersion }}
+                                            </div>
+                                        </div>
                                         <div class="flex items-center gap-2">
+                                            <input v-if="manager.selectionMode" type="checkbox"
+                                                class="h-4 w-4 accent-primary" :checked="manager.selectionIds.includes(
+                                                    item.id,
+                                                )
+                                                    " @change="
+                                                            handleSelectionChange(
+                                                                $event,
+                                                                item.id,
+                                                            )
+                                                            " />
                                             <span v-if="!manager.selectionMode"
-                                                class="inline-flex cursor-grab text-muted-foreground active:cursor-grabbing"
+                                                class="inline-flex cursor-grab text-white/90 active:cursor-grabbing"
                                                 @pointerdown="
-                                                    handleModPointerDown($event, item.id)
+                                                    handleModPointerDown(
+                                                        $event,
+                                                        item.id,
+                                                    )
                                                     ">
                                                 <IconGripVertical class="w-4 h-4" />
                                             </span>
-                                            <Badge v-for="tag in item.tags" :key="tag.name" variant="outline">
-                                                <div class="h-2.5 w-2.5 rounded-full"
-                                                    :style="{ backgroundColor: tag.color }"></div>
-                                                {{ tag.name }}
-                                            </Badge>
-                                            <span class="font-medium">{{
-                                                item.modName
-                                                }}</span>
-                                            <Badge v-if="item.isUpdate" variant="outline"
-                                                class="border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200">
-                                                可更新
-                                            </Badge>
                                         </div>
-                                    </TableCell>
-                                    <TableCell>{{ item.modVersion }}</TableCell>
-                                    <TableCell>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="grid gap-3 p-4">
+                                <div v-if="item.tags?.length" class="flex flex-wrap gap-2">
+                                    <Badge v-for="tag in item.tags" :key="tag.name" variant="outline">
+                                        <div class="h-2.5 w-2.5 rounded-full" :style="{ backgroundColor: tag.color }">
+                                        </div>
+                                        {{ tag.name }}
+                                    </Badge>
+                                </div>
+
+                                <div class="flex items-center justify-between gap-3">
+                                    <div class="flex items-center gap-3">
+                                        <Label class="text-xs text-muted-foreground">类型</Label>
                                         <Select :model-value="item.modType" :disabled="item.isInstalled || isOperating(item.id)
                                             " @update:model-value="
-                                    updateModType(item, $event)
-                                    ">
+                                                    updateModType(item, $event)
+                                                    ">
                                             <SelectTrigger>
                                                 <SelectValue></SelectValue>
                                             </SelectTrigger>
@@ -755,340 +987,161 @@ watch(showSortDialog, (opened) => {
                                                 </SelectItem>
                                             </SelectContent>
                                         </Select>
-                                    </TableCell>
-                                    <TableCell>
-                                        <div class="flex items-center gap-2">
-                                            <Switch :id="`is-installed-${item.id}`" :model-value="item.isInstalled"
-                                                :disabled="isOperating(item.id)" @update:model-value="
-                                                    updateModInstalled(item, $event)
-                                                    " />
-                                            <Label :for="`is-installed-${item.id}`">
-                                                {{
-                                                    isOperating(item.id)
-                                                        ? "处理中"
-                                                        : item.isInstalled
-                                                            ? "已安装"
-                                                            : "未安装"
-                                                }}
-                                            </Label>
-                                        </div>
-                                    </TableCell>
-                                    <TableCell>
-                                        <HoverCard>
-                                            <HoverCardTrigger as-child>
-                                                <Button variant="ghost" size="icon">
-                                                    <IconEye class="w-4 h-4" />
-                                                </Button>
-                                            </HoverCardTrigger>
-                                            <HoverCardContent class="w-80">
-                                                <AsyncImage :src="getModCoverSrc(item)"
-                                                    :fallback-src="MANAGER_FALLBACK_COVER" :alt="`${item.modName} 封面`"
-                                                    class="h-auto w-full rounded-md object-cover" />
-                                            </HoverCardContent>
-                                        </HoverCard>
-                                    </TableCell>
-                                    <TableCell>
-                                        <DropdownMenu>
-                                            <DropdownMenuTrigger as-child>
-                                                <Button variant="ghost" size="icon" :disabled="deletingModId === item.id ||
-                                                    isUpdateing(item.id)
-                                                    ">
-                                                    <IconMenu class="w-4 h-4" />
-                                                </Button>
-                                            </DropdownMenuTrigger>
-                                            <DropdownMenuContent align="end">
-                                                <DropdownMenuItem @click="openEditDialog(item)">
-                                                    编辑
-                                                    <DropdownMenuShortcut>
-                                                        <IconSquarePen />
-                                                    </DropdownMenuShortcut>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuItem @click="open(item)">
-                                                    打开
-                                                    <DropdownMenuShortcut>
-                                                        <IconFolderOpen />
-                                                    </DropdownMenuShortcut>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuSeparator />
-                                                <DropdownMenuItem :disabled="manager.managerModList.length < 2
-                                                    " @click="openSortDialog(item)">
-                                                    调整排序
-                                                    <DropdownMenuShortcut>
-                                                        <IconGripVertical />
-                                                    </DropdownMenuShortcut>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuItem v-if="
-                                                    item.from === 'GlossMod' &&
-                                                    item.webId
-                                                " @click="queueModUpdate(item)">
-                                                    {{
-                                                        isUpdateing(item.id)
-                                                            ? "更新中..."
-                                                            : "更新"
-                                                    }}
-                                                    <DropdownMenuShortcut>
-                                                        <IconRefreshCw :class="isUpdateing(item.id)
-                                                                ? 'animate-spin'
-                                                                : ''
-                                                            " />
-                                                    </DropdownMenuShortcut>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuItem v-if="item.modWebsite" as-child>
-                                                    <a :href="item.modWebsite" target="_blank"
-                                                        rel="noopener noreferrer">
-                                                        网址
-                                                        <DropdownMenuShortcut>
-                                                            <IconGlobe />
-                                                        </DropdownMenuShortcut>
-                                                    </a>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuSeparator />
-                                                <DropdownMenuItem variant="destructive"
-                                                    :disabled="deletingModId === item.id" @click="deleteMod(item)">
-                                                    删除
-                                                    <DropdownMenuShortcut>
-                                                        <IconTrash class="text-destructive" />
-                                                    </DropdownMenuShortcut>
-                                                </DropdownMenuItem>
-                                            </DropdownMenuContent>
-                                        </DropdownMenu>
-                                    </TableCell>
-                                </TableRow>
-                            </TableBody>
-                        </Table>
-
-                            <div v-if="managerGridEnabled" class="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
-                            <article v-for="(item, index) in pagedMods" :key="item.id"
-                                :class="getItemContainerClass(item)"
-                                class="overflow-hidden rounded-xl border bg-card shadow-sm transition-colors"
-                                @click="handleRowClick($event, item)" @pointerenter="handleRowPointerEnter(item.id)"
-                                @pointermove="handleRowPointerMove($event, item.id)"
-                                @pointerleave="handleRowPointerLeave(item.id)"
-                                @contextmenu="handleRowContextmenu(item)">
-                                <div class="relative aspect-video overflow-hidden bg-muted/20">
-                                    <AsyncImage :src="getModCoverSrc(item)" :fallback-src="MANAGER_FALLBACK_COVER"
-                                        :alt="`${item.modName} 封面`" class="h-full w-full object-cover" />
-                                    <Badge variant="secondary"
-                                        class="absolute right-3 top-3 tabular-nums backdrop-blur">{{ (currentPage - 1) * pageSize + index + 1 }}</Badge>
-                                    <Badge v-if="item.isUpdate" variant="outline"
-                                        class="absolute left-3 top-3 border-emerald-500/40 bg-emerald-500/10 text-white backdrop-blur">
-                                        可更新
-                                    </Badge>
-                                    <div
-                                        class="absolute inset-x-0 bottom-0 bg-linear-to-t from-black/75 via-black/20 to-transparent p-3">
-                                        <div class="flex items-start justify-between gap-3">
-                                            <div class="min-w-0">
-                                                <div class="truncate font-medium text-white">
-                                                    {{ item.modName }}
-                                                </div>
-                                                <div class="text-xs text-white/80">
-                                                    {{ item.modVersion }}
-                                                </div>
-                                            </div>
-                                            <div class="flex items-center gap-2">
-                                                <input v-if="manager.selectionMode" type="checkbox"
-                                                    class="h-4 w-4 accent-primary" :checked="manager.selectionIds.includes(
-                                                        item.id,
-                                                    )
-                                                        " @change="
-                                            handleSelectionChange(
-                                                $event,
-                                                item.id,
-                                            )
-                                            " />
-                                                <span v-if="!manager.selectionMode"
-                                                    class="inline-flex cursor-grab text-white/90 active:cursor-grabbing"
-                                                    @pointerdown="
-                                                        handleModPointerDown(
-                                                            $event,
-                                                            item.id,
-                                                        )
-                                                        ">
-                                                    <IconGripVertical class="w-4 h-4" />
-                                                </span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="grid gap-3 p-4">
-                                    <div v-if="item.tags?.length" class="flex flex-wrap gap-2">
-                                        <Badge v-for="tag in item.tags" :key="tag.name" variant="outline">
-                                            <div class="h-2.5 w-2.5 rounded-full"
-                                                :style="{ backgroundColor: tag.color }"></div>
-                                            {{ tag.name }}
-                                        </Badge>
                                     </div>
 
                                     <div class="flex items-center justify-between gap-3">
-                                        <div class="flex items-center gap-3">
-                                            <Label class="text-xs text-muted-foreground">类型</Label>
-                                            <Select :model-value="item.modType" :disabled="item.isInstalled || isOperating(item.id)
-                                                " @update:model-value="
-                                        updateModType(item, $event)
-                                        ">
-                                                <SelectTrigger>
-                                                    <SelectValue></SelectValue>
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem v-for="type in manager.managerGame
-                                                        ?.modType" :key="type.id" :value="type.id">
-                                                        {{ type.name }}
-                                                    </SelectItem>
-                                                </SelectContent>
-                                            </Select>
+                                        <div class="text-sm text-muted-foreground">
+                                            {{
+                                                isOperating(item.id)
+                                                    ? "处理中"
+                                                    : item.isInstalled
+                                                        ? "已安装"
+                                                        : "未安装"
+                                            }}
                                         </div>
-
-                                        <div class="flex items-center justify-between gap-3">
-                                            <div class="text-sm text-muted-foreground">
-                                                {{
-                                                    isOperating(item.id)
-                                                        ? "处理中"
-                                                        : item.isInstalled
-                                                            ? "已安装"
-                                                            : "未安装"
-                                                }}
-                                            </div>
-                                            <Switch :id="`grid-installed-${item.id}`" :model-value="item.isInstalled"
-                                                :disabled="isOperating(item.id)" @update:model-value="
-                                                    updateModInstalled(item, $event)
-                                                    " />
-                                        </div>
-
-                                        <DropdownMenu>
-                                            <DropdownMenuTrigger as-child>
-                                                <Button variant="ghost" size="icon" :disabled="deletingModId === item.id ||
-                                                    isUpdateing(item.id)
-                                                    ">
-                                                    <IconMenu class="w-4 h-4" />
-                                                </Button>
-                                            </DropdownMenuTrigger>
-                                            <DropdownMenuContent align="end">
-                                                <DropdownMenuItem @click="openEditDialog(item)">
-                                                    编辑
-                                                    <DropdownMenuShortcut>
-                                                        <IconSquarePen />
-                                                    </DropdownMenuShortcut>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuItem @click="open(item)">
-                                                    打开
-                                                    <DropdownMenuShortcut>
-                                                        <IconFolderOpen />
-                                                    </DropdownMenuShortcut>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuSeparator />
-                                                <DropdownMenuItem :disabled="manager.managerModList.length < 2
-                                                    " @click="openSortDialog(item)">
-                                                    调整排序
-                                                    <DropdownMenuShortcut>
-                                                        <IconGripVertical />
-                                                    </DropdownMenuShortcut>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuItem v-if="
-                                                    item.from === 'GlossMod' &&
-                                                    item.webId
-                                                " @click="queueModUpdate(item)">
-                                                    {{
-                                                        isUpdateing(item.id)
-                                                            ? "更新中..."
-                                                            : "更新"
-                                                    }}
-                                                    <DropdownMenuShortcut>
-                                                        <IconRefreshCw :class="isUpdateing(item.id)
-                                                                ? 'animate-spin'
-                                                                : ''
-                                                            " />
-                                                    </DropdownMenuShortcut>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuItem v-if="item.modWebsite" as-child>
-                                                    <a :href="item.modWebsite" target="_blank"
-                                                        rel="noopener noreferrer">
-                                                        网址
-                                                        <DropdownMenuShortcut>
-                                                            <IconGlobe />
-                                                        </DropdownMenuShortcut>
-                                                    </a>
-                                                </DropdownMenuItem>
-                                                <DropdownMenuSeparator />
-                                                <DropdownMenuItem variant="destructive"
-                                                    :disabled="deletingModId === item.id" @click="deleteMod(item)">
-                                                    删除
-                                                    <DropdownMenuShortcut>
-                                                        <IconTrash class="text-destructive" />
-                                                    </DropdownMenuShortcut>
-                                                </DropdownMenuItem>
-                                            </DropdownMenuContent>
-                                        </DropdownMenu>
+                                        <Switch :id="`grid-installed-${item.id}`" :model-value="item.isInstalled"
+                                            :disabled="isOperating(item.id)" @update:model-value="
+                                                updateModInstalled(item, $event)
+                                                " />
                                     </div>
+
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger as-child>
+                                            <Button variant="ghost" size="icon" :disabled="deletingModId === item.id ||
+                                                isUpdateing(item.id)
+                                                ">
+                                                <IconMenu class="w-4 h-4" />
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                            <DropdownMenuItem @click="openEditDialog(item)">
+                                                编辑
+                                                <DropdownMenuShortcut>
+                                                    <IconSquarePen />
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem @click="open(item)">
+                                                打开
+                                                <DropdownMenuShortcut>
+                                                    <IconFolderOpen />
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem :disabled="manager.managerModList.length < 2
+                                                " @click="openSortDialog(item)">
+                                                调整排序
+                                                <DropdownMenuShortcut>
+                                                    <IconGripVertical />
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem v-if="
+                                                item.from === 'GlossMod' &&
+                                                item.webId
+                                            " @click="queueModUpdate(item)">
+                                                {{
+                                                    isUpdateing(item.id)
+                                                        ? "更新中..."
+                                                        : "更新"
+                                                }}
+                                                <DropdownMenuShortcut>
+                                                    <IconRefreshCw :class="isUpdateing(item.id)
+                                                        ? 'animate-spin'
+                                                        : ''
+                                                        " />
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem v-if="item.modWebsite" as-child>
+                                                <a :href="item.modWebsite" target="_blank" rel="noopener noreferrer">
+                                                    网址
+                                                    <DropdownMenuShortcut>
+                                                        <IconGlobe />
+                                                    </DropdownMenuShortcut>
+                                                </a>
+                                            </DropdownMenuItem>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem variant="destructive"
+                                                :disabled="deletingModId === item.id" @click="deleteMod(item)">
+                                                删除
+                                                <DropdownMenuShortcut>
+                                                    <IconTrash class="text-destructive" />
+                                                </DropdownMenuShortcut>
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
                                 </div>
-                            </article>
-                        </div>
-                    <!-- 分页条：列表/网格共用，大列表只渲染当前页 -->
-                    <div v-if="totalItems > 0" class="flex flex-wrap items-center justify-between gap-2 px-1 py-3 text-xs text-muted-foreground">
-                        <span>共 {{ totalItems }} 个，第 {{ currentPage }} / {{ totalPages }} 页（每页 {{ pageSize }} 个）</span>
-                        <div class="flex items-center gap-1.5">
-                            <Button variant="outline" size="sm" :disabled="currentPage <= 1" @click="goPage(1)">首页</Button>
-                            <Button variant="outline" size="sm" :disabled="currentPage <= 1" @click="goPage(currentPage - 1)">上一页</Button>
-                            <Button variant="outline" size="sm" :disabled="currentPage >= totalPages" @click="goPage(currentPage + 1)">下一页</Button>
-                            <Button variant="outline" size="sm" :disabled="currentPage >= totalPages" @click="goPage(totalPages)">末页</Button>
-                        </div>
+                            </div>
+                        </article>
                     </div>
                 </div>
-                </ContextMenuTrigger>
-                <ContextMenuContent v-if="contextTargetMod" class="w-48">
-                    <ContextMenuItem @select="runContextAction(openEditDialog)"><IconSquarePen class="mr-2 h-4 w-4" />
-                        编辑
-                    </ContextMenuItem>
-                    <ContextMenuItem @select="runContextAction(open)"><IconFolderOpen class="mr-2 h-4 w-4" />
-                        打开
-                    </ContextMenuItem>
-                    <ContextMenuSeparator />
-                    <ContextMenuItem :disabled="manager.managerModList.length < 2"
-                        @select="runContextAction(openSortDialog)"><IconGripVertical class="mr-2 h-4 w-4" />
-                        调整排序
-                    </ContextMenuItem>
-                    <ContextMenuItem v-if="
-                        contextTargetMod.from === 'GlossMod' &&
-                        contextTargetMod.webId
-                    " @select="runContextAction(queueModUpdate)"><IconRefreshCw class="mr-2 h-4 w-4" :class="isUpdateing(contextTargetMod.id)
-                                    ? 'animate-spin'
-                                    : ''
-                                " />
-                        {{
-                            isUpdateing(contextTargetMod.id)
-                                ? "更新中..."
-                                : "更新"
-                        }}
-                    </ContextMenuItem>
-                    <ContextMenuItem v-if="contextTargetMod.modWebsite" as-child>
-                        <a :href="contextTargetMod.modWebsite" target="_blank" rel="noopener noreferrer" class="flex items-center">
-                            <IconGlobe class="mr-2 h-4 w-4" />
-                            网址
-                        </a>
-                    </ContextMenuItem>
-                    <ContextMenuSeparator />
-                    <ContextMenuSub v-if="manager.tags.length">
-                        <ContextMenuSubTrigger><IconTag class="mr-2 h-4 w-4" />
+            </ContextMenuTrigger>
+            <ContextMenuContent v-if="contextTargetMod" class="w-48">
+                <ContextMenuItem @select="runContextAction(openEditDialog)">
+                    <IconSquarePen class="mr-2 h-4 w-4" />
+                    编辑
+                </ContextMenuItem>
+                <ContextMenuItem @select="runContextAction(open)">
+                    <IconFolderOpen class="mr-2 h-4 w-4" />
+                    打开
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem :disabled="manager.managerModList.length < 2"
+                    @select="runContextAction(openSortDialog)">
+                    <IconGripVertical class="mr-2 h-4 w-4" />
+                    调整排序
+                </ContextMenuItem>
+                <ContextMenuItem v-if="
+                    contextTargetMod.from === 'GlossMod' &&
+                    contextTargetMod.webId
+                " @select="runContextAction(queueModUpdate)">
+                    <IconRefreshCw class="mr-2 h-4 w-4" :class="isUpdateing(contextTargetMod.id)
+                        ? 'animate-spin'
+                        : ''
+                        " />
+                    {{
+                        isUpdateing(contextTargetMod.id)
+                            ? "更新中..."
+                            : "更新"
+                    }}
+                </ContextMenuItem>
+                <ContextMenuItem v-if="contextTargetMod.modWebsite" as-child>
+                    <a :href="contextTargetMod.modWebsite" target="_blank" rel="noopener noreferrer"
+                        class="flex items-center">
+                        <IconGlobe class="mr-2 h-4 w-4" />
+                        网址
+                    </a>
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem @select="toggleContextTargetSelection">
+                    <IconCheckSquare class="mr-2 h-4 w-4" />
+                    {{ contextTargetMod && manager.selectionIds.includes(contextTargetMod.id) ? "取消选择" : "选择" }}
+                </ContextMenuItem>
+                <ContextMenuItem @select="selectAllVisible">
+                    <IconListChecks class="mr-2 h-4 w-4" />
+                    全选当前筛选 ({{ manager.filteredMods.length }})
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuSub v-if="manager.tags.length">
+                    <ContextMenuSubTrigger>
+                        <IconTag class="mr-2 h-4 w-4" />
                         标签
                     </ContextMenuSubTrigger>
-                        <ContextMenuSubContent class="max-h-64 w-48 overflow-y-auto">
-                            <ContextMenuCheckboxItem
-                                v-for="tag in manager.tags"
-                                :key="tag.name"
-                                :checked="(contextTargetMod.tags ?? []).some((t) => t.name === tag.name)"
-                                @select="(e: Event) => { e.preventDefault(); if (contextTargetMod) toggleTagOnMod(contextTargetMod, tag.name); }">
-                                <div class="h-2 w-2 rounded-full" :style="{ backgroundColor: tag.color }"></div>
-                                {{ tag.name }}
-                            </ContextMenuCheckboxItem>
-                        </ContextMenuSubContent>
-                    </ContextMenuSub>
-                    <ContextMenuSeparator v-if="manager.tags.length" />
-                    <ContextMenuItem variant="destructive" :disabled="deletingModId === contextTargetMod.id"
-                        @select="runContextAction(deleteMod)"><IconTrash class="text-destructive mr-2 h-4 w-4" />
-                        删除
-                    </ContextMenuItem>
-                </ContextMenuContent>
-            </ContextMenu>
+                    <ContextMenuSubContent class="max-h-64 w-48 overflow-y-auto">
+                        <ContextMenuCheckboxItem v-for="tag in manager.tags" :key="tag.name"
+                            :checked="(contextTargetMod.tags ?? []).some((t) => t.name === tag.name)"
+                            @select="(e: Event) => { e.preventDefault(); if (contextTargetMod) toggleTagOnMod(contextTargetMod, tag.name); }">
+                            <div class="h-2 w-2 rounded-full" :style="{ backgroundColor: tag.color }"></div>
+                            {{ tag.name }}
+                        </ContextMenuCheckboxItem>
+                    </ContextMenuSubContent>
+                </ContextMenuSub>
+                <ContextMenuSeparator v-if="manager.tags.length" />
+                <ContextMenuItem variant="destructive" :disabled="deletingModId === contextTargetMod.id"
+                    @select="runContextAction(deleteMod)">
+                    <IconTrash class="text-destructive mr-2 h-4 w-4" />
+                    删除
+                </ContextMenuItem>
+            </ContextMenuContent>
+        </ContextMenu>
     </div>
     <Dialog v-model:open="showEditDialog" modal>
         <DialogContent class="sm:max-w-xl" @escape-key-down="resetEditDialog">

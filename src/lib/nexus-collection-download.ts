@@ -201,6 +201,7 @@ export async function queueNexusCollectionDownloadWithSelection(
             // 走详情链必死；构造最小 detail 直调 resolve（cookie 直连/免费 key 回退逻辑不变）。
             const mod = buildMinimalNexusModDetail(options.gameDomain, item.modId, item.fileId, item.name, item.version);
             // 介绍回填：只读 mods/{id}.json，失败静默（403/断网不阻塞建任务）。
+            console.debug(`[collection-hydrate] modId=${item.modId} fileId=${item.fileId} name=${item.name} stage=meta-start`);
             const meta = await fetchNexusModsModMeta(options.gameDomain, item.modId, options.nexusUser);
             if (meta) {
                 if (meta.title) mod.title = meta.title;
@@ -208,6 +209,9 @@ export async function queueNexusCollectionDownloadWithSelection(
                 if (meta.description) mod.description = meta.description;
                 if (meta.author) mod.author = meta.author;
                 if (meta.cover) mod.cover = meta.cover;
+                console.debug(`[collection-hydrate] modId=${item.modId} stage=meta-applied title=${Boolean(meta.title)} descLen=${meta.description.length} summaryLen=${meta.summary.length} cover=${Boolean(meta.cover)}`);
+            } else {
+                console.debug(`[collection-hydrate] modId=${item.modId} stage=meta-miss`);
             }
             await queueThirdPartyModDownload({
                 provider: "NexusMods",

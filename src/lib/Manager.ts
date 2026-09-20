@@ -295,20 +295,22 @@ export class Manager {
         }
 
         // 编排在 TS（目标计算），执行一次 invoke：缺失源由后端报 false，不触碰目标，与旧语义一致
+        // 路径拼接纯字符串完成：join/basename 每次都是 IPC，700 文件时数千次往返；分隔符用 /，后端 lexical 归一化
+        const sep = modStorage.includes("\\") || targetRoot.includes("\\") ? "\\" : "/";
+        const trimEnd = (p: string) => (p.endsWith("/") || p.endsWith("\\") ? p.slice(0, -1) : p);
+        const base = (p: string) => p.split(/[/\\]/).pop() ?? p;
+        const root = trimEnd(modStorage);
+        const out = trimEnd(targetRoot);
         const slots: Array<{ file: string; item: IInstallItem | null }> = [];
         for (const item of mod.modFiles) {
-            try {
-                const source = await join(modStorage, item);
-                const target = keepPath
-                    ? await join(targetRoot, item)
-                    : await join(targetRoot, await basename(item));
-                slots.push({
-                    file: item,
-                    item: { file: item, src: source, dst: target, op: "copy", backup: "gmmback" },
-                });
-            } catch {
-                slots.push({ file: item, item: null });
-            }
+            const rel = item.replace(/^[/\\]+/, "");
+            const norm = rel.replace(/\//g, sep);
+            const source = `${root}${sep}${norm}`;
+            const target = keepPath ? `${out}${sep}${norm}` : `${out}${sep}${base(item)}`;
+            slots.push({
+                file: item,
+                item: { file: item, src: source, dst: target, op: "copy", backup: "gmmback" },
+            });
         }
         const states = await Manager.runInstallBatch(
             slots.filter((slot) => slot.item !== null).map((slot) => slot.item!),
@@ -346,26 +348,22 @@ export class Manager {
         if (targetRoot === null) {
             return Manager.createFailureState(mod);
         }
-
-        // 卸载保留源存在性检查：源缺失即 false 且不碰目标（照搬旧语义）；其余一次 invoke
+        // 源检查已搬进后端 op_remove：前端不再逐文件 fileExists（700 文件=700 次 IPC 往返），只拼路径、一次 invoke
+        const usep = modStorage.includes("\\") || targetRoot.includes("\\") ? "\\" : "/";
+        const utrim = (p: string) => (p.endsWith("/") || p.endsWith("\\") ? p.slice(0, -1) : p);
+        const ubase = (p: string) => p.split(/[/\\]/).pop() ?? p;
+        const uroot = utrim(modStorage);
+        const uout = utrim(targetRoot);
         const slots: Array<{ file: string; item: IInstallItem | null }> = [];
         for (const item of mod.modFiles) {
-            try {
-                const source = await join(modStorage, item);
-                if (!(await FileHandler.fileExists(source))) {
-                    slots.push({ file: item, item: null });
-                    continue;
-                }
-                const target = keepPath
-                    ? await join(targetRoot, item)
-                    : await join(targetRoot, await basename(item));
-                slots.push({
-                    file: item,
-                    item: { file: item, src: source, dst: target, op: "remove", backup: "gmmback" },
-                });
-            } catch {
-                slots.push({ file: item, item: null });
-            }
+            const rel = item.replace(/^[/\\]+/, "");
+            const norm = rel.replace(/\//g, usep);
+            const source = `${uroot}${usep}${norm}`;
+            const target = keepPath ? `${uout}${usep}${norm}` : `${uout}${usep}${ubase(item)}`;
+            slots.push({
+                file: item,
+                item: { file: item, src: source, dst: target, op: "remove", backup: "gmmback" },
+            });
         }
         const states = await Manager.runInstallBatch(
             slots.filter((slot) => slot.item !== null).map((slot) => slot.item!),
@@ -373,6 +371,10 @@ export class Manager {
             false,
         );
         const result: IState[] = [];
+        // 空目录收尾丢后台：每个 deleteEmptyFolders 都是数次串行 invoke，
+        // 700 文件时数千次 IPC 会堵死前端事件循环，进度事件排不上（卡住→突然 100%）。
+        // 后台运行时按目录去重，失败静默（残留空目录无害，下次卸载顺手带走）。
+        const cleanupDirs = new Set<string>();
         for (const slot of slots) {
             if (slot.item === null) {
                 result.push({ file: slot.file, state: false });
@@ -380,7 +382,24 @@ export class Manager {
             }
             const entry = states.get(slot.file);
             result.push({ file: slot.file, state: entry?.ok ?? false, error: entry?.error });
-            await Manager.deleteEmptyFolders(await dirname(slot.item.dst));
+            if (entry?.ok) {
+                try {
+                    cleanupDirs.add(await dirname(slot.item.dst));
+                } catch {
+                    // 路径解析失败跳过，不影响主流程。
+                }
+            }
+        }
+        if (cleanupDirs.size > 0) {
+            void (async () => {
+                for (const dir of cleanupDirs) {
+                    try {
+                        await Manager.deleteEmptyFolders(dir);
+                    } catch {
+                        // 后台收尾失败静默。
+                    }
+                }
+            })();
         }
         return result;
     }

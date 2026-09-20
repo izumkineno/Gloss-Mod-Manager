@@ -27,27 +27,49 @@ const settings = useSettings();
 const onlineDesc = ref("");
 const onlineCover = ref("");
 const onlineLoading = ref(false);
-watch(detailMod, async (mod) => {
+// 死图/缺字段统一入口：force=true 时无视本地值强制重拉（图片 404/过期场景）。
+const deadCoverRetriedIds = new Set<number>();
+async function hydrateMod(mod: IModInfo, force = false) {
     onlineDesc.value = "";
     onlineCover.value = "";
-    if (!mod) return;
-    const needDesc = !mod.modDesc?.trim();
-    const needCover = !mod.cover?.trim();
-    if (!needDesc && !needCover) return;
-    if (mod.from !== "NexusMods") return;
+    const hydrateTag = `[hydrate] id=${mod.id} name=${mod.modName} from=${mod.from ?? ""} webId=${String(mod.webId ?? "")}`;
+    const needDesc = force || !mod.modDesc?.trim();
+    const needCover = force || !mod.cover?.trim();
+    console.debug(`${hydrateTag} stage=check force=${force} needDesc=${needDesc} needCover=${needCover} localDescLen=${mod.modDesc?.length ?? 0} cover=${mod.cover ? "yes" : "no"}`);
+    if (!needDesc && !needCover) {
+        console.debug(`${hydrateTag} stage=skip reason=complete`);
+        return;
+    }
+    if (mod.from !== "NexusMods") {
+        console.debug(`${hydrateTag} stage=skip reason=non-nexus`);
+        return;
+    }
     const webId = String(mod.webId ?? "").trim();
-    if (!webId || webId === "0") return;
+    if (!webId || webId === "0") {
+        console.debug(`${hydrateTag} stage=skip reason=no-webId`);
+        return;
+    }
     const gameDomain = manager.managerGame?.nexusMods?.game_domain_name?.trim() ?? "";
-    if (!gameDomain) return;
+    if (!gameDomain) {
+        console.debug(`${hydrateTag} stage=skip reason=no-gameDomain`);
+        return;
+    }
     onlineLoading.value = true;
+    console.debug(`${hydrateTag} stage=fetch-start domain=${gameDomain}`);
+    const fetchStart = Date.now();
     try {
         const meta = await fetchNexusModsModMeta(gameDomain, webId, settings.nexusModsUser);
-        if (!meta || selectedDetailModId.value !== mod.id) return;
+        console.debug(`${hydrateTag} stage=fetch-done costMs=${Date.now() - fetchStart} hit=${Boolean(meta)} descLen=${meta?.description?.length ?? 0} summaryLen=${meta?.summary?.length ?? 0} author=${meta?.author ?? ""} cover=${meta?.cover ? "yes" : "no"}`);
+        if (!meta) return;
+        if (selectedDetailModId.value !== mod.id) {
+            console.debug(`${hydrateTag} stage=drop reason=selection-changed`);
+            return;
+        }
         const desc = meta.description || meta.summary || "";
         if (needDesc && desc) onlineDesc.value = desc;
         if (needCover && meta.cover) onlineCover.value = meta.cover;
+        console.debug(`${hydrateTag} stage=apply onlineDesc=${Boolean(onlineDesc.value)} onlineCover=${Boolean(onlineCover.value)}`);
         if (!onlineDesc.value && !onlineCover.value) return;
-        // 写回本地持久化，下次直接读本地不再请求（cover 走 normalizeMod 直写，saveEditedMod 不带 cover 字段）。
         manager.managerModList = manager.managerModList.map((item) =>
             item.id !== mod.id ? item : manager.normalizeMod({
                 ...item,
@@ -57,12 +79,30 @@ watch(detailMod, async (mod) => {
             }),
         );
         await manager.saveManagerData();
-    } catch {
-        // 在线取不到保持本地展示，不打扰用户。
+        console.debug(`${hydrateTag} stage=persisted`);
+    } catch (error: unknown) {
+        console.warn(`${hydrateTag} stage=fetch-error error=${error instanceof Error ? error.message : String(error)}`);
     } finally {
         onlineLoading.value = false;
     }
+}
+watch(detailMod, (mod) => {
+    deadCoverRetriedIds.clear();
+    if (!mod) {
+        console.debug("[hydrate] skip reason=no-mod");
+        return;
+    }
+    void hydrateMod(mod);
 }, { immediate: true });
+
+// 原图加载失败（404/过期 CDN）：强制重拉一次，新 cover 写回本地；还拿不到就保持 fallback。
+function handleCoverFailed(failedSrc: string) {
+    const mod = detailMod.value;
+    if (!mod || deadCoverRetriedIds.has(mod.id)) return;
+    deadCoverRetriedIds.add(mod.id);
+    console.warn(`[hydrate] id=${mod.id} stage=cover-dead src=${failedSrc.slice(0, 120)} action=refetch`);
+    void hydrateMod({ ...mod, cover: "", modDesc: mod.modDesc ?? "" }, true);
+}
 
 // 本地优先，在线兜底。
 const descSource = computed(() => detailMod.value?.modDesc || onlineDesc.value);
@@ -152,6 +192,7 @@ function getCoverSrc(item: IModInfo) {
                     :fallback-src="MANAGER_FALLBACK_COVER"
                     :alt="`${detailMod.modName} 封面`"
                     class="h-auto w-full object-cover"
+                    @failed="handleCoverFailed"
                 />
             </div>
             <!-- 名称/版本/作者 -->

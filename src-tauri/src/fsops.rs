@@ -178,12 +178,12 @@ pub async fn mod_install_batch(
 }
 
 fn run_batch(app: &tauri::AppHandle, req: InstallBatch) -> Result<Vec<FileState>, String> {
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use tauri::Emitter;
 
     let roots: Vec<String> = req.allowed_roots.iter().map(|root| lexical(root)).collect();
     let total = req.items.len() as u32;
-    let mut states = Vec::with_capacity(req.items.len());
-    let mut last_emit = std::time::Instant::now();
     // 首个事件让前端及时建进度条（done=0）
     let _ = app.emit(
         "mod-install-progress",
@@ -193,22 +193,36 @@ fn run_batch(app: &tauri::AppHandle, req: InstallBatch) -> Result<Vec<FileState>
             total,
         },
     );
-    for item in &req.items {
-        let state = apply_item(item, &roots, req.link_fallback_copy);
-        states.push(state);
-        let done = states.len() as u32;
-        if done == total || done % 10 == 0 || last_emit.elapsed().as_millis() >= 200 {
-            let _ = app.emit(
-                "mod-install-progress",
-                InstallProgress {
-                    batch_id: req.batch_id.clone(),
-                    done,
-                    total,
-                },
-            );
-            last_emit = std::time::Instant::now();
-        }
-    }
+    // IO 密集并行：各 item 独立文件，par_iter 提速；done 计数只为进度展示
+    let done = AtomicU32::new(0);
+    let batch_id = req.batch_id.clone();
+    let states: Vec<FileState> = req
+        .items
+        .par_iter()
+        .map(|item| {
+            let state = apply_item(item, &roots, req.link_fallback_copy);
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == total || n % 20 == 0 {
+                let _ = app.emit(
+                    "mod-install-progress",
+                    InstallProgress {
+                        batch_id: batch_id.clone(),
+                        done: n,
+                        total,
+                    },
+                );
+            }
+            state
+        })
+        .collect();
+    let _ = app.emit(
+        "mod-install-progress",
+        InstallProgress {
+            batch_id: req.batch_id.clone(),
+            done: total,
+            total,
+        },
+    );
     Ok(states)
 }
 fn lexical(path: &str) -> String {
@@ -404,6 +418,11 @@ fn op_write_text(item: &InstallItem) -> Result<(), String> {
 /// 对齐 deleteFile/removeLink：删 dst；备份存在则迁回。
 /// backup="gmmback" 看 `dst.gmmback`，backup="linkback" 看 `dst_back`。
 fn op_remove(item: &InstallItem) -> Result<(), String> {
+    // 对齐旧语义：源缺失即失败且不碰目标。前端不再逐文件 fileExists（每次都是 IPC），
+    // 把检查搬进后端，卸载与安装一样一次 invoke 零往返。
+    if !item.src.is_empty() && !PathBuf::from(&item.src).exists() {
+        return Err(format!("源不存在：{}", item.src));
+    }
     let dst = PathBuf::from(&item.dst);
     if dst.exists() {
         remove_path(&dst).map_err(|error| format!("删除文件失败：{error}"))?;

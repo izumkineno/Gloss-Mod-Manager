@@ -18,9 +18,12 @@ const editingTagName = ref("");
 const dragTargetTagName = ref("");
 const pendingTagName = ref("");
 const pendingPointerPosition = ref<{ x: number; y: number } | null>(null);
+// 下拉开关：选完标签自动收起
+const tagPopoverOpen = ref(false);
 
 function openCreateTagDialog() {
     resetTagEditor();
+    showTagEditDialog.value = true;
 }
 
 function openEditTagDialog(tag: ITag) {
@@ -157,6 +160,12 @@ function handleWindowPointerUp() {
     clearTagDragState();
 }
 
+// 选中标签：写 store + 收起下拉
+function pickTag(name: string) {
+    manager.selectedTag = name;
+    tagPopoverOpen.value = false;
+}
+
 onMounted(() => {
     window.addEventListener("pointermove", handleWindowPointerMove);
     window.addEventListener("pointerup", handleWindowPointerUp, true);
@@ -174,36 +183,53 @@ function resetTagEditor() {
 }
 </script>
 <template>
-    <div class="flex flex-wrap items-center gap-2 text-sm">
-        <ToggleGroup type="single" v-model="manager.selectedTag">
-            <ToggleGroupItem value="全部"> 全部标签 </ToggleGroupItem>
-            <ToggleGroupItem
+    <!-- 标签下拉：筛选 + 颜色点 + 右键编辑/删除 + 拖拽排序 + 新增，全在 popover 里 -->
+    <Popover v-model:open="tagPopoverOpen">
+        <PopoverTrigger as-child>
+            <Button variant="outline" size="sm" class="shrink-0">
+                <span
+                    v-if="manager.selectedTag !== '全部'"
+                    class="h-2.5 w-2.5 rounded-full"
+                    :style="{ backgroundColor: manager.tags.find((t) => t.name === manager.selectedTag)?.color ?? 'transparent' }"
+                />
+                {{ manager.selectedTag === "全部" ? "标签" : manager.selectedTag }}
+            </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start" class="w-56 p-1">
+            <button
+                class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
+                :class="manager.selectedTag === '全部' ? 'bg-accent' : ''"
+                @click="pickTag('全部')"
+            >
+                全部标签
+            </button>
+            <div
                 v-for="tag in manager.tags"
                 :key="tag.name"
-                :value="tag.name"
             >
                 <ContextMenu>
                     <ContextMenuTrigger
-                        class="flex items-center gap-2 rounded-md px-1 py-0.5 cursor-grab active:cursor-grabbing"
-                        :class="
-                            dragTargetTagName === tag.name &&
-                            managerDraggingTagName !== tag.name
+                        class="flex w-full cursor-grab items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent active:cursor-grabbing"
+                        :class="[
+                            manager.selectedTag === tag.name ? 'bg-accent' : '',
+                            dragTargetTagName === tag.name && managerDraggingTagName !== tag.name
                                 ? 'ring-1 ring-primary/50 bg-primary/5'
-                                : ''
-                        "
+                                : '',
+                        ]"
+                        @click="pickTag(tag.name)"
                         @pointerdown="handleTagPointerDown($event, tag)"
                         @pointerenter="handleTagPointerEnter(tag)"
                         @pointerleave="handleTagPointerLeave(tag)"
                     >
                         <div
-                            class="h-2.5 w-2.5 rounded-full"
+                            class="h-2.5 w-2.5 shrink-0 rounded-full"
                             :style="{
                                 backgroundColor: tag.color,
                             }"
-                        ></div>
-                        {{ tag.name }}
+                        />
+                        <span class="min-w-0 flex-1 truncate text-left">{{ tag.name }}</span>
                     </ContextMenuTrigger>
-                    <ContextMenuContent class="w-2">
+                    <ContextMenuContent class="w-32">
                         <ContextMenuItem @select="openEditTagDialog(tag)">
                             <IconEdit class="h-4 w-4" />
                             编辑
@@ -214,41 +240,38 @@ function resetTagEditor() {
                         >
                     </ContextMenuContent>
                 </ContextMenu>
-            </ToggleGroupItem>
-        </ToggleGroup>
-        <Dialog v-model:open="showTagEditDialog" modal>
-            <DialogTrigger>
-                <Button
-                    variant="outline"
-                    size="icon"
-                    @click="openCreateTagDialog"
-                >
-                    <IconPlus />
+            </div>
+            <div class="mt-1 border-t pt-1">
+                <Button variant="ghost" size="sm" class="w-full justify-start" @click="openCreateTagDialog">
+                    <IconPlus class="h-4 w-4" />
+                    新增标签
                 </Button>
-            </DialogTrigger>
-            <DialogContent>
-                <DialogHeader>
-                    <DialogTitle>
-                        {{ editingTagName ? "编辑标签" : "添加标签" }}
-                    </DialogTitle>
-                </DialogHeader>
-                <DialogDescription class="flex flex-col gap-2">
-                    <InputGroup>
-                        <InputGroupInput
-                            v-model="tagName"
-                            placeholder="标签名称"
-                        />
-                        <InputGroupAddon align="inline-end">
-                            <input type="color" v-model="tagColor" />
-                        </InputGroupAddon>
-                    </InputGroup>
-                    <Button size="sm" class="self-end" @click="submitTag">
-                        <IconPlus class="h-4 w-4" />
-                        {{ editingTagName ? "保存" : "添加" }}
-                    </Button>
-                </DialogDescription>
-            </DialogContent>
-        </Dialog>
-    </div>
+            </div>
+        </PopoverContent>
+    </Popover>
+    <Dialog v-model:open="showTagEditDialog" modal>
+        <DialogContent>
+            <DialogHeader>
+                <DialogTitle>
+                    {{ editingTagName ? "编辑标签" : "添加标签" }}
+                </DialogTitle>
+            </DialogHeader>
+            <DialogDescription class="flex flex-col gap-2">
+                <InputGroup>
+                    <InputGroupInput
+                        v-model="tagName"
+                        placeholder="标签名称"
+                    />
+                    <InputGroupAddon align="inline-end">
+                        <input type="color" v-model="tagColor" />
+                    </InputGroupAddon>
+                </InputGroup>
+                <Button size="sm" class="self-end" @click="submitTag">
+                    <IconPlus class="h-4 w-4" />
+                    {{ editingTagName ? "保存" : "添加" }}
+                </Button>
+            </DialogDescription>
+        </DialogContent>
+    </Dialog>
 </template>
 <style scoped></style>

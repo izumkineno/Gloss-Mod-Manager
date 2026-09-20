@@ -1155,8 +1155,9 @@ defineExpose<IManagerGmmDialogExpose>({
                                     </div>
 
                                     <div class="grid gap-3">
-                                        <div class="flex flex-wrap gap-2">
+                                        <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
                                             <Button
+                                                class="w-full"
                                                 :variant="
                                                     exportTypeFilter === 0
                                                         ? 'default'
@@ -1178,6 +1179,7 @@ defineExpose<IManagerGmmDialogExpose>({
                                                         : 'outline'
                                                 "
                                                 size="sm"
+                                                class="w-full"
                                                 @click="
                                                     exportTypeFilter = item.id
                                                 "

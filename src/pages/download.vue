@@ -1990,9 +1990,7 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
     <div class="flex flex-col gap-6">
         <Card>
             <CardHeader>
-                <div
-                    class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between"
-                >
+                <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                     <div class="space-y-2">
                         <CardTitle class="flex flex-wrap items-center gap-3">
                             <h1 class="text-2xl">下载中心</h1>
@@ -2048,10 +2046,8 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                     </DropdownMenu>
                 </div>
 
-                <div
-                    v-if="tasksErrorMessage"
-                    class="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
-                >
+                <div v-if="tasksErrorMessage"
+                    class="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                     {{ tasksErrorMessage }}
                 </div>
             </CardContent>
@@ -2059,56 +2055,34 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
 
         <Card>
             <CardHeader>
-                <CardTitle
-                    class="flex flex-wrap items-center justify-between gap-3"
-                >
-                    <span
-                        >下载任务
+                <CardTitle class="flex flex-wrap items-center justify-between gap-3">
+                    <span>下载任务
                         <Badge variant="outline" class="rounded-full ml-4">
                             {{ formatSpeed(globalStat.downloadSpeed) }}
                         </Badge>
                     </span>
                     <div class="flex flex-wrap gap-2">
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            @click="pauseAllTasks"
-                        >
+                        <Button size="sm" variant="outline" @click="pauseAllTasks">
                             <IconPause />
                             暂停全部
                         </Button>
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            @click="resumeAllTasks"
-                        >
+                        <Button size="sm" variant="outline" @click="resumeAllTasks">
                             <IconPlay />
                             继续全部
                         </Button>
-                        <Button
-                            v-if="queueFilter === 'failed'"
-                            size="sm"
-                            variant="outline"
-                            @click="retryAllFailedTasks"
-                        >
+                        <Button v-if="queueFilter === 'failed'" size="sm" variant="outline"
+                            @click="retryAllFailedTasks">
                             <IconRefreshCw />
                             全部重试
                         </Button>
                         <Button
                             v-if="queueFilter === 'stopped' || queueFilter === 'unimported' || queueFilter === 'all'"
-                            size="sm"
-                            variant="outline"
-                            :disabled="!canImportToLocalManager"
-                            @click="importAllCompletedTasks"
-                        >
+                            size="sm" variant="outline" :disabled="!canImportToLocalManager"
+                            @click="importAllCompletedTasks">
                             <IconFileUp />
                             批量导入全部
                         </Button>
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            @click="purgeStoppedTasks"
-                        >
+                        <Button size="sm" variant="outline" @click="purgeStoppedTasks">
                             <IconTrash2 />
                             清理已结束
                         </Button>
@@ -2117,42 +2091,27 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
             </CardHeader>
             <CardContent class="flex flex-col gap-4">
                 <div class="flex flex-wrap gap-2">
-                    <Button
-                        v-for="item in queueFilterOptions"
-                        :key="item.value"
-                        size="sm"
-                        :variant="
-                            queueFilter === item.value ? 'default' : 'outline'
-                        "
-                        @click="queueFilter = item.value"
-                    >
+                    <Button v-for="item in queueFilterOptions" :key="item.value" size="sm" :variant="queueFilter === item.value ? 'default' : 'outline'
+                        " @click="queueFilter = item.value">
                         {{ item.label }}
                         <span class="text-xs opacity-70">{{ item.count }}</span>
                     </Button>
                 </div>
 
-                <div
-                    v-if="filteredTasks.length"
-                    class="flex flex-col gap-3 rounded-xl border px-4 py-3 lg:flex-row lg:items-center lg:justify-between"
-                >
+                <div v-if="filteredTasks.length"
+                    class="flex flex-col gap-3 rounded-xl border px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
                     <div class="text-sm text-muted-foreground">
                         {{ visibleTaskRangeLabel }}，已按添加时间倒序排列。
                     </div>
 
                     <div class="flex flex-wrap items-center gap-2">
-                        <span class="text-sm text-muted-foreground"
-                            >每页数量</span
-                        >
+                        <span class="text-sm text-muted-foreground">每页数量</span>
                         <Select v-model="taskPageSize">
                             <SelectTrigger class="w-[140px]">
                                 <SelectValue placeholder="选择每页数量" />
                             </SelectTrigger>
                             <SelectContent>
-                                <SelectItem
-                                    v-for="item in TASK_PAGE_SIZE_OPTIONS"
-                                    :key="item"
-                                    :value="item"
-                                >
+                                <SelectItem v-for="item in TASK_PAGE_SIZE_OPTIONS" :key="item" :value="item">
                                     每页 {{ item }} 条
                                 </SelectItem>
                             </SelectContent>
@@ -2160,10 +2119,7 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                     </div>
                 </div>
 
-                <div
-                    v-if="!filteredTasks.length"
-                    class="rounded-xl border border-dashed px-6 py-12 text-center"
-                >
+                <div v-if="!filteredTasks.length" class="rounded-xl border border-dashed px-6 py-12 text-center">
                     <div class="text-base font-medium">当前没有任务</div>
                     <p class="mt-2 text-sm leading-6 text-muted-foreground">
                         点顶部“新建下载”粘贴直链，或通过“添加
@@ -2172,168 +2128,136 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                 </div>
 
                 <div v-else class="space-y-3">
-<ContextMenu v-for="task in paginatedTasks" :key="task.gid">
-<ContextMenuTrigger as-child>
-<article class="cursor-pointer rounded-xl border px-4 py-4 transition-colors hover:border-primary/40" :class="selectedTaskGid === task.gid ? 'border-primary/50 bg-primary/5' : ''" @click="openTaskDetail(task)">
-                        <div
-                            class="flex gap-3 flex-row items-center justify-between"
-                        >
-                            <div class="min-w-0 flex-1 space-y-2">
-                                <div class="flex flex-wrap items-center gap-2">
-                                    <div
-                                        v-if="taskMetaMap[task.gid]?.modTitle"
-                                        class="truncate text-sm font-medium"
-                                    >
-                                        {{ taskMetaMap[task.gid]?.modTitle }}
-                                    </div>
-                                    <Badge
-                                        class="rounded-full"
-                                        :class="getTaskStatusClass(task.status)"
-                                        variant="outline"
-                                    >
-                                        {{ getTaskStatusLabel(task.status) }}
-                                    </Badge>
-                                    <Badge
-                                        class="rounded-full"
-                                        variant="outline"
-                                    >
-                                        {{ getTaskDisplayName(task) }}
-                                    </Badge>
-                                    <!-- <Badge v-if="taskMetaMap[task.gid]?.localModId" class="rounded-full"
+                    <ContextMenu v-for="task in paginatedTasks" :key="task.gid">
+                        <ContextMenuTrigger as-child>
+                            <article
+                                class="cursor-pointer rounded-xl border px-4 py-4 transition-colors hover:border-primary/40"
+                                :class="selectedTaskGid === task.gid ? 'border-primary/50 bg-primary/5' : ''"
+                                @click="openTaskDetail(task)">
+                                <div class="flex gap-3 flex-row items-center justify-between">
+                                    <div class="min-w-0 flex-1 space-y-2">
+                                        <div class="flex flex-wrap items-center gap-2">
+                                            <div v-if="taskMetaMap[task.gid]?.modTitle"
+                                                class="truncate text-sm font-medium">
+                                                {{ taskMetaMap[task.gid]?.modTitle }}
+                                            </div>
+                                            <Badge class="rounded-full" :class="getTaskStatusClass(task.status)"
+                                                variant="outline">
+                                                {{ getTaskStatusLabel(task.status) }}
+                                            </Badge>
+                                            <Badge class="rounded-full" variant="outline">
+                                                {{ getTaskDisplayName(task) }}
+                                            </Badge>
+                                            <!-- <Badge v-if="taskMetaMap[task.gid]?.localModId" class="rounded-full"
                                         variant="secondary">
                                         已导入本地
                                     </Badge> -->
-                                </div>
+                                        </div>
 
-                                <div
-                                    class="h-2 overflow-hidden rounded-full bg-muted"
-                                >
-                                    <div
-                                        class="h-full rounded-full bg-primary transition-all"
-                                        :style="{
-                                            width: `${getTaskProgress(task)}%`,
-                                        }"
-                                    ></div>
-                                </div>
+                                        <div class="h-2 overflow-hidden rounded-full bg-muted">
+                                            <div class="h-full rounded-full bg-primary transition-all" :style="{
+                                                width: `${getTaskProgress(task)}%`,
+                                            }"></div>
+                                        </div>
 
-                                <div
-                                    class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"
-                                >
-                                    <span
-                                        >{{ formatBytes(task.completedLength) }}
-                                        /
-                                        {{
-                                            formatBytes(task.totalLength)
-                                        }}</span
-                                    >
-                                    <span
-                                        >速度：{{
-                                            formatSpeed(task.downloadSpeed)
-                                        }}</span
-                                    >
-                                    <span
-                                        >分片：{{
-                                            normalizedDownloaderSettings.split
-                                        }}</span
-                                    >
-                                    <span v-if="task.errorMessage"
-                                        >错误：{{ task.errorMessage }}</span
-                                    >
-                                </div>
-                            </div>
+                                        <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                                            <span>{{ formatBytes(task.completedLength) }}
+                                                /
+                                                {{
+                                                    formatBytes(task.totalLength)
+                                                }}</span>
+                                            <span>速度：{{
+                                                formatSpeed(task.downloadSpeed)
+                                                }}</span>
+                                            <span>分片：{{
+                                                normalizedDownloaderSettings.split
+                                                }}</span>
+                                            <span v-if="task.errorMessage">错误：{{ task.errorMessage }}</span>
+                                        </div>
+                                    </div>
 
-                            <div class="flex flex-wrap gap-2" @click.stop>
-                                <Button
-                                    v-if="task.status === 'complete'"
-                                    size="sm"
-                                    variant="outline"
-                                    :disabled="
-                                        !canImportToLocalManager ||
-                                        isTaskImporting(task.gid)
-                                    "
-                                    @click="importTaskToLocalManager(task)"
-                                >
-                                    <IconFileUp />
-                                    {{
-                                        isTaskImporting(task.gid)
-                                            ? "导入中"
-                                            : taskMetaMap[task.gid]?.localModId
-                                              ? "重新导入"
-                                              : "一键导入"
-                                    }}
-                                </Button>
-                                <Button
-                                    v-if="task.status === 'complete'"
-                                    size="sm"
-                                    variant="outline"
-                                    :disabled="isTaskOperating(task.gid)"
-                                    @click="retryTask(task)"
-                                >
-                                    <IconRefreshCw />
-                                    重新下载
-                                </Button>
-                                <Button
-                                    v-if="task.status === 'error'"
-                                    size="sm"
-                                    variant="outline"
-                                    :disabled="isTaskOperating(task.gid)"
-                                    @click="retryTask(task)"
-                                >
-                                    <IconRefreshCw />
-                                    重试
-                                </Button>
-                                <Button
-                                    v-if="
-                                        task.status === 'active' ||
-                                        task.status === 'waiting'
-                                    "
-                                    size="sm"
-                                    variant="outline"
-                                    :disabled="isTaskOperating(task.gid)"
-                                    @click="pauseTask(task)"
-                                >
-                                    <IconPause />
-                                    暂停
-                                </Button>
-                                <Button
-                                    v-else-if="task.status === 'paused'"
-                                    size="sm"
-                                    variant="outline"
-                                    :disabled="isTaskOperating(task.gid)"
-                                    @click="resumeTask(task)"
-                                >
-                                    <IconPlay />
-                                    继续
-                                </Button>
-                                <Button
-                                    size="sm"
-                                    variant="outline"
-                                    :disabled="isTaskOperating(task.gid)"
-                                    @click="removeTask(task)"
-                                >
-                                    <IconTrash2 />
-                                    删除
-                                </Button>
-                            </div>
-                        </div>
-</article>
-</ContextMenuTrigger>
-<ContextMenuContent class="w-48">
-<ContextMenuItem @select="openTaskDetail(task)"><IconEye class="mr-2 h-4 w-4" />查看详情</ContextMenuItem>
-<ContextMenuItem v-if="task.status === 'active' || task.status === 'waiting'" :disabled="isTaskOperating(task.gid)" @select="pauseTask(task)"><IconPause class="mr-2 h-4 w-4" />暂停</ContextMenuItem>
-<ContextMenuItem v-else-if="task.status === 'paused'" :disabled="isTaskOperating(task.gid)" @select="resumeTask(task)"><IconPlay class="mr-2 h-4 w-4" />继续</ContextMenuItem>
-<ContextMenuItem v-if="task.status === 'complete'" :disabled="isTaskOperating(task.gid)" @select="retryTask(task)"><IconRefreshCw class="mr-2 h-4 w-4" />重新下载</ContextMenuItem>
-<ContextMenuItem v-if="task.status === 'error'" :disabled="isTaskOperating(task.gid)" @select="retryTask(task)"><IconRefreshCw class="mr-2 h-4 w-4" />重试</ContextMenuItem>
-<ContextMenuItem v-if="task.status === 'complete'" :disabled="!canImportToLocalManager || isTaskImporting(task.gid)" @select="importTaskToLocalManager(task)"><IconFileUp class="mr-2 h-4 w-4" />一键导入</ContextMenuItem>
-<ContextMenuItem @select="openTaskFileLocation(task)"><IconFolderOpen class="mr-2 h-4 w-4" />打开文件位置</ContextMenuItem>
- <ContextMenuSeparator />
-<ContextMenuItem variant="destructive" :disabled="isTaskOperating(task.gid)" @select="removeTask(task)"><IconTrash2 class="mr-2 h-4 w-4" />删除</ContextMenuItem>
-</ContextMenuContent>
-</ContextMenu>
-                    <div
-                        v-if="taskTotalPages > 1"
-                        class="flex flex-col gap-4 rounded-xl border px-4 py-4 lg:flex-row lg:items-center lg:justify-between"
-                    >
+                                    <div class="flex flex-wrap gap-2" @click.stop>
+                                        <Button v-if="task.status === 'complete'" size="sm" variant="outline" :disabled="!canImportToLocalManager ||
+                                            isTaskImporting(task.gid)
+                                            " @click="importTaskToLocalManager(task)">
+                                            <IconFileUp />
+                                            {{
+                                                isTaskImporting(task.gid)
+                                                    ? "导入中"
+                                                    : taskMetaMap[task.gid]?.localModId
+                                                        ? "重新导入"
+                                                        : "一键导入"
+                                            }}
+                                        </Button>
+                                        <Button v-if="task.status === 'complete'" size="sm" variant="outline"
+                                            :disabled="isTaskOperating(task.gid)" @click="retryTask(task)">
+                                            <IconRefreshCw />
+                                            重新下载
+                                        </Button>
+                                        <Button v-if="task.status === 'error'" size="sm" variant="outline"
+                                            :disabled="isTaskOperating(task.gid)" @click="retryTask(task)">
+                                            <IconRefreshCw />
+                                            重试
+                                        </Button>
+                                        <Button v-if="
+                                            task.status === 'active' ||
+                                            task.status === 'waiting'
+                                        " size="sm" variant="outline" :disabled="isTaskOperating(task.gid)"
+                                            @click="pauseTask(task)">
+                                            <IconPause />
+                                            暂停
+                                        </Button>
+                                        <Button v-else-if="task.status === 'paused'" size="sm" variant="outline"
+                                            :disabled="isTaskOperating(task.gid)" @click="resumeTask(task)">
+                                            <IconPlay />
+                                            继续
+                                        </Button>
+                                        <Button size="sm" variant="outline" :disabled="isTaskOperating(task.gid)"
+                                            @click="removeTask(task)">
+                                            <IconTrash2 />
+                                            删除
+                                        </Button>
+                                    </div>
+                                </div>
+                            </article>
+                        </ContextMenuTrigger>
+                        <ContextMenuContent class="w-48">
+                            <ContextMenuItem @select="openTaskDetail(task)">
+                                <IconEye class="mr-2 h-4 w-4" />查看详情
+                            </ContextMenuItem>
+                            <ContextMenuItem v-if="task.status === 'active' || task.status === 'waiting'"
+                                :disabled="isTaskOperating(task.gid)" @select="pauseTask(task)">
+                                <IconPause class="mr-2 h-4 w-4" />暂停
+                            </ContextMenuItem>
+                            <ContextMenuItem v-else-if="task.status === 'paused'" :disabled="isTaskOperating(task.gid)"
+                                @select="resumeTask(task)">
+                                <IconPlay class="mr-2 h-4 w-4" />继续
+                            </ContextMenuItem>
+                            <ContextMenuItem v-if="task.status === 'complete'" :disabled="isTaskOperating(task.gid)"
+                                @select="retryTask(task)">
+                                <IconRefreshCw class="mr-2 h-4 w-4" />重新下载
+                            </ContextMenuItem>
+                            <ContextMenuItem v-if="task.status === 'error'" :disabled="isTaskOperating(task.gid)"
+                                @select="retryTask(task)">
+                                <IconRefreshCw class="mr-2 h-4 w-4" />重试
+                            </ContextMenuItem>
+                            <ContextMenuItem v-if="task.status === 'complete'"
+                                :disabled="!canImportToLocalManager || isTaskImporting(task.gid)"
+                                @select="importTaskToLocalManager(task)">
+                                <IconFileUp class="mr-2 h-4 w-4" />一键导入
+                            </ContextMenuItem>
+                            <ContextMenuItem @select="openTaskFileLocation(task)">
+                                <IconFolderOpen class="mr-2 h-4 w-4" />打开文件位置
+                            </ContextMenuItem>
+                            <ContextMenuSeparator />
+                            <ContextMenuItem variant="destructive" :disabled="isTaskOperating(task.gid)"
+                                @select="removeTask(task)">
+                                <IconTrash2 class="mr-2 h-4 w-4" />删除
+                            </ContextMenuItem>
+                        </ContextMenuContent>
+                    </ContextMenu>
+                    <div v-if="taskTotalPages > 1"
+                        class="flex flex-col gap-4 rounded-xl border px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
                         <div class="text-sm text-muted-foreground">
                             当前第 {{ taskPage }} 页，共
                             {{ taskTotalPages }} 页， 累计
@@ -2341,46 +2265,26 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                         </div>
 
                         <div class="flex flex-wrap items-center gap-2">
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                :disabled="taskPage <= 1"
-                                @click="goToTaskPage(taskPage - 1)"
-                            >
+                            <Button size="sm" variant="outline" :disabled="taskPage <= 1"
+                                @click="goToTaskPage(taskPage - 1)">
                                 <IconChevronLeft />
                                 上一页
                             </Button>
 
-                            <template
-                                v-for="item in taskPaginationItems"
-                                :key="item.key"
-                            >
-                                <span
-                                    v-if="item.ellipsis"
-                                    class="px-2 text-sm text-muted-foreground"
-                                >
+                            <template v-for="item in taskPaginationItems" :key="item.key">
+                                <span v-if="item.ellipsis" class="px-2 text-sm text-muted-foreground">
                                     {{ item.label }}
                                 </span>
-                                <Button
-                                    v-else
-                                    size="sm"
-                                    :variant="
-                                        item.page === taskPage
-                                            ? 'default'
-                                            : 'outline'
-                                    "
-                                    @click="goToTaskPage(item.page ?? 1)"
-                                >
+                                <Button v-else size="sm" :variant="item.page === taskPage
+                                        ? 'default'
+                                        : 'outline'
+                                    " @click="goToTaskPage(item.page ?? 1)">
                                     {{ item.label }}
                                 </Button>
                             </template>
 
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                :disabled="taskPage >= taskTotalPages"
-                                @click="goToTaskPage(taskPage + 1)"
-                            >
+                            <Button size="sm" variant="outline" :disabled="taskPage >= taskTotalPages"
+                                @click="goToTaskPage(taskPage + 1)">
                                 下一页
                                 <IconChevronRight />
                             </Button>
@@ -2401,77 +2305,49 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                 </DialogHeader>
 
                 <div class="flex gap-2">
-                    <Input
-                        v-model="modLookupInput"
-                        placeholder="例如：252329 或 https://mod.3dmgame.com/mod/252329"
-                        @keydown.enter="loadModDetail()"
-                    />
-                    <Button
-                        :disabled="modLookupLoading"
-                        @click="loadModDetail()"
-                    >
+                    <Input v-model="modLookupInput" placeholder="例如：252329 或 https://mod.3dmgame.com/mod/252329"
+                        @keydown.enter="loadModDetail()" />
+                    <Button :disabled="modLookupLoading" @click="loadModDetail()">
                         <IconSearch />
                         读取详情
                     </Button>
                 </div>
 
-                <div
-                    v-if="modLookupError"
-                    class="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-3 text-sm text-destructive"
-                >
+                <div v-if="modLookupError"
+                    class="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-3 text-sm text-destructive">
                     {{ modLookupError }}
                 </div>
 
-                <div
-                    v-if="modLookupLoading"
-                    class="space-y-3 rounded-xl border p-4"
-                >
-                    <div
-                        class="aspect-video animate-pulse rounded-xl bg-muted"
-                    ></div>
+                <div v-if="modLookupLoading" class="space-y-3 rounded-xl border p-4">
+                    <div class="aspect-video animate-pulse rounded-xl bg-muted"></div>
                     <div class="h-6 w-2/3 animate-pulse rounded bg-muted"></div>
-                    <div
-                        class="h-4 w-full animate-pulse rounded bg-muted"
-                    ></div>
+                    <div class="h-4 w-full animate-pulse rounded bg-muted"></div>
                     <div class="h-4 w-5/6 animate-pulse rounded bg-muted"></div>
                 </div>
 
-                <div
-                    v-else-if="!selectedMod"
-                    class="flex min-h-80 flex-col items-center justify-center rounded-xl border border-dashed px-6 py-12 text-center"
-                >
+                <div v-else-if="!selectedMod"
+                    class="flex min-h-80 flex-col items-center justify-center rounded-xl border border-dashed px-6 py-12 text-center">
                     <IconDownload class="size-8 text-muted-foreground" />
                     <div class="mt-3 text-base font-medium">
                         等待载入 Mod 详情
                     </div>
-                    <p
-                        class="mt-2 max-w-sm text-sm leading-6 text-muted-foreground"
-                    >
+                    <p class="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
                         读取成功后，这里会显示 Mod 简介、资源列表和下载按钮。
                     </p>
                 </div>
 
-                <div
-                    v-else
-                    class="grid gap-6 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]"
-                >
+                <div v-else class="grid gap-6 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
                     <div class="space-y-4">
                         <div class="overflow-hidden rounded-xl border">
-                            <img
-                                :src="
-                                    resolveGlossAssetUrl(
-                                        selectedMod.mods_image_url,
-                                    )
-                                "
-                                :alt="selectedMod.mods_title"
-                                class="aspect-video w-full object-cover"
-                                @error="
+                            <img :src="resolveGlossAssetUrl(
+                                selectedMod.mods_image_url,
+                            )
+                                " :alt="selectedMod.mods_title" class="aspect-video w-full object-cover" @error="
                                     (event) =>
-                                        ((
-                                            event.target as HTMLImageElement
-                                        ).src = EMPTY_POSTER)
-                                "
-                            />
+                                    ((
+                                        event.target as HTMLImageElement
+                                    ).src = EMPTY_POSTER)
+                                " />
                         </div>
 
                         <div class="space-y-3 rounded-xl border px-4 py-4">
@@ -2507,18 +2383,12 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                                         formatDate(selectedMod.mods_updateTime)
                                     }}
                                 </Badge>
-                                <Badge
-                                    v-if="selectedMod.support_gmm"
-                                    class="rounded-full"
-                                    variant="secondary"
-                                >
+                                <Badge v-if="selectedMod.support_gmm" class="rounded-full" variant="secondary">
                                     支持 GMM
                                 </Badge>
                             </div>
 
-                            <div
-                                class="grid grid-cols-3 gap-2 text-center text-xs sm:gap-3"
-                            >
+                            <div class="grid grid-cols-3 gap-2 text-center text-xs sm:gap-3">
                                 <div class="rounded-xl bg-muted/40 px-3 py-3">
                                     <div class="text-muted-foreground">
                                         下载
@@ -2560,24 +2430,14 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                     </div>
 
                     <div class="space-y-4">
-                        <div
-                            class="rounded-xl border px-4 py-4 text-sm leading-7 text-muted-foreground"
-                        >
-                            <p
-                                v-if="selectedMod.mods_desc"
-                                class="whitespace-pre-wrap"
-                            >
+                        <div class="rounded-xl border px-4 py-4 text-sm leading-7 text-muted-foreground">
+                            <p v-if="selectedMod.mods_desc" class="whitespace-pre-wrap">
                                 {{ selectedMod.mods_desc }}
                             </p>
-                            <div
-                                v-if="detailParagraphs.length"
-                                class="mt-3 space-y-2"
-                            >
-                                <p
-                                    v-for="(item, index) in detailParagraphs"
+                            <div v-if="detailParagraphs.length" class="mt-3 space-y-2">
+                                <p v-for="(item, index) in detailParagraphs"
                                     :key="`${selectedMod.id}-paragraph-${index}`"
-                                    class="rounded-lg bg-muted/35 px-3 py-2 text-foreground"
-                                >
+                                    class="rounded-lg bg-muted/35 px-3 py-2 text-foreground">
                                     {{ item }}
                                 </p>
                             </div>
@@ -2593,141 +2453,105 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                                 </div>
                             </div>
 
-                            <div
-                                class="max-h-[48vh] space-y-3 overflow-y-auto pr-1"
-                            >
-<div v-for="resource in selectedMod.mods_resource" :key="`${selectedMod.id}-${resource.id}`">
-<ContextMenu>
-<ContextMenuTrigger as-child>
-<div class="rounded-xl border px-4 py-4">
-                                    <div
-                                        class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between"
-                                    >
-                                        <div class="space-y-2">
-                                            <div
-                                                class="flex flex-wrap items-center gap-2"
-                                            >
+                            <div class="max-h-[48vh] space-y-3 overflow-y-auto pr-1">
+                                <div v-for="resource in selectedMod.mods_resource"
+                                    :key="`${selectedMod.id}-${resource.id}`">
+                                    <ContextMenu>
+                                        <ContextMenuTrigger as-child>
+                                            <div class="rounded-xl border px-4 py-4">
                                                 <div
-                                                    class="text-sm font-medium"
-                                                >
-                                                    {{
-                                                        resource.mods_resource_name
-                                                    }}
-                                                </div>
-                                                <Badge
-                                                    v-if="
-                                                        resource.mods_resource_latest_version
-                                                    "
-                                                    class="rounded-full"
-                                                    variant="secondary"
-                                                >
-                                                    最新
-                                                </Badge>
-                                            </div>
-                                            <div
-                                                class="flex flex-wrap gap-2 text-xs text-muted-foreground"
-                                            >
-                                                <span
-                                                    >大小：{{
-                                                        resource.mods_resource_size ||
-                                                        "未知"
-                                                    }}</span
-                                                >
-                                                <span>·</span>
-                                                <span
-                                                    >版本：{{
-                                                        resource.mods_resource_version ||
-                                                        selectedMod.mods_version ||
-                                                        "未知"
-                                                    }}</span
-                                                >
-                                                <span
-                                                    v-if="
+                                                    class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                                    <div class="space-y-2">
+                                                        <div class="flex flex-wrap items-center gap-2">
+                                                            <div class="text-sm font-medium">
+                                                                {{
+                                                                    resource.mods_resource_name
+                                                                }}
+                                                            </div>
+                                                            <Badge v-if="
+                                                                resource.mods_resource_latest_version
+                                                            " class="rounded-full" variant="secondary">
+                                                                最新
+                                                            </Badge>
+                                                        </div>
+                                                        <div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                                                            <span>大小：{{
+                                                                resource.mods_resource_size ||
+                                                                "未知"
+                                                                }}</span>
+                                                            <span>·</span>
+                                                            <span>版本：{{
+                                                                resource.mods_resource_version ||
+                                                                selectedMod.mods_version ||
+                                                                "未知"
+                                                                }}</span>
+                                                            <span v-if="
+                                                                resource.mods_resource_formart
+                                                            ">·</span>
+                                                            <span v-if="
+                                                                resource.mods_resource_formart
+                                                            ">格式：{{
                                                         resource.mods_resource_formart
-                                                    "
-                                                    >·</span
-                                                >
-                                                <span
-                                                    v-if="
-                                                        resource.mods_resource_formart
-                                                    "
-                                                    >格式：{{
-                                                        resource.mods_resource_formart
-                                                    }}</span
-                                                >
-                                            </div>
-                                            <div
-                                                v-if="
-                                                    getResourcePresence(
-                                                        resource,
-                                                    ).state !== 'none'
-                                                "
-                                                class="flex flex-wrap gap-2 text-xs"
-                                            >
-                                                <Badge
-                                                    class="rounded-full"
-                                                    variant="outline"
-                                                >
-                                                    {{
-                                                        getResourcePresence(
-                                                            resource,
-                                                        ).label
-                                                    }}
-                                                </Badge>
-                                                <Badge
-                                                    v-if="
-                                                        getResourcePresence(
-                                                            resource,
-                                                        ).localCount > 0
-                                                    "
-                                                    class="rounded-full"
-                                                    variant="secondary"
-                                                >
-                                                    已在本地管理器
-                                                </Badge>
-                                            </div>
-                                            <p
-                                                v-if="
-                                                    resource.mods_resource_desc
-                                                "
-                                                class="text-sm text-muted-foreground"
-                                            >
-                                                {{
-                                                    resource.mods_resource_desc
-                                                }}
-                                            </p>
-                                        </div>
+                                                                }}</span>
+                                                        </div>
+                                                        <div v-if="
+                                                            getResourcePresence(
+                                                                resource,
+                                                            ).state !== 'none'
+                                                        " class="flex flex-wrap gap-2 text-xs">
+                                                            <Badge class="rounded-full" variant="outline">
+                                                                {{
+                                                                    getResourcePresence(
+                                                                        resource,
+                                                                    ).label
+                                                                }}
+                                                            </Badge>
+                                                            <Badge v-if="
+                                                                getResourcePresence(
+                                                                    resource,
+                                                                ).localCount > 0
+                                                            " class="rounded-full" variant="secondary">
+                                                                已在本地管理器
+                                                            </Badge>
+                                                        </div>
+                                                        <p v-if="
+                                                            resource.mods_resource_desc
+                                                        " class="text-sm text-muted-foreground">
+                                                            {{
+                                                                resource.mods_resource_desc
+                                                            }}
+                                                        </p>
+                                                    </div>
 
-                                        <Button
-                                            size="sm"
-                                            :disabled="
-                                                addingResourceKey ===
-                                                `${selectedMod.id}-${resource.id ?? resource.mods_resource_name}`
-                                            "
-                                            @click="addResourceTask(resource)"
-                                        >
-                                            <IconPlus />
-                                            {{
-                                                addingResourceKey ===
-                                                `${selectedMod.id}-${
-                                                    resource.id ??
-                                                    resource.mods_resource_name
-                                                }`
-                                                    ? "添加中"
-                                                    : getResourceActionLabel(
-                                                          resource,
-                                                      )
-                                            }}
-                                        </Button>
-                                    </div>
+                                                    <Button size="sm" :disabled="addingResourceKey ===
+                                                        `${selectedMod.id}-${resource.id ?? resource.mods_resource_name}`
+                                                        " @click="addResourceTask(resource)">
+                                                        <IconPlus />
+                                                        {{
+                                                            addingResourceKey ===
+                                                                `${selectedMod.id}-${resource.id ??
+                                                                resource.mods_resource_name
+                                                                }`
+                                                                ? "添加中"
+                                                                : getResourceActionLabel(
+                                                                    resource,
+                                                                )
+                                                        }}
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        </ContextMenuTrigger>
+                                        <ContextMenuContent class="w-48">
+                                            <ContextMenuItem :disabled="isResourceAdding(resource)"
+                                                @select="addResourceTask(resource)">
+                                                <IconDownload class="mr-2 h-4 w-4" />下载该资源
+                                            </ContextMenuItem>
+                                            <ContextMenuItem @select="openModResourcePage(selectedMod.id)">
+                                                <IconExternalLink class="mr-2 h-4 w-4" />在网页打开 Mod
+                                            </ContextMenuItem>
+                                        </ContextMenuContent>
+                                    </ContextMenu>
                                 </div>
-</ContextMenuTrigger>
-<ContextMenuContent class="w-48">
-<ContextMenuItem :disabled="isResourceAdding(resource)" @select="addResourceTask(resource)"><IconDownload class="mr-2 h-4 w-4" />下载该资源</ContextMenuItem>
-<ContextMenuItem @select="openModResourcePage(selectedMod.id)"><IconExternalLink class="mr-2 h-4 w-4" />在网页打开 Mod</ContextMenuItem>
-</ContextMenuContent>
-</ContextMenu>
-</div>
                             </div>
                         </div>
                     </div>
@@ -2747,33 +2571,19 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                 <div class="grid gap-4">
                     <div class="grid gap-2">
                         <Label for="manual-download-url">下载链接</Label>
-                        <Input
-                            id="manual-download-url"
-                            v-model="manualDownloadUrl"
-                            placeholder="https://…"
-                        />
+                        <Input id="manual-download-url" v-model="manualDownloadUrl" placeholder="https://…" />
                     </div>
                     <div class="grid gap-2">
                         <Label for="manual-download-name">文件名（可选）</Label>
-                        <Input
-                            id="manual-download-name"
-                            v-model="manualDownloadFileName"
-                            placeholder="留空则从服务器探测"
-                        />
+                        <Input id="manual-download-name" v-model="manualDownloadFileName" placeholder="留空则从服务器探测" />
                     </div>
                 </div>
 
                 <DialogFooter>
-                    <Button
-                        variant="outline"
-                        @click="showManualDownloadDialog = false"
-                    >
+                    <Button variant="outline" @click="showManualDownloadDialog = false">
                         取消
                     </Button>
-                    <Button
-                        :disabled="manualDownloadCreating"
-                        @click="createManualDownloadTask"
-                    >
+                    <Button :disabled="manualDownloadCreating" @click="createManualDownloadTask">
                         {{ manualDownloadCreating ? "添加中" : "开始下载" }}
                     </Button>
                 </DialogFooter>
@@ -2793,50 +2603,31 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                 <div class="grid gap-4 sm:grid-cols-2">
                     <div class="grid gap-2">
                         <Label for="download-split">单任务分片数</Label>
-                        <Input
-                            id="download-split"
-                            v-model.number="downloaderSettingsDraft.split"
-                            type="number"
-                            min="1"
-                        />
+                        <Input id="download-split" v-model.number="downloaderSettingsDraft.split" type="number"
+                            min="1" />
                     </div>
 
                     <div class="grid gap-2">
                         <Label for="download-max-connection">单服务器连接数</Label>
-                        <Input
-                            id="download-max-connection"
-                            v-model.number="
-                                downloaderSettingsDraft.maxConnectionPerServer
-                            "
-                            type="number"
-                            min="1"
-                        />
+                        <Input id="download-max-connection" v-model.number="downloaderSettingsDraft.maxConnectionPerServer
+                            " type="number" min="1" />
                     </div>
 
                     <div class="grid gap-2">
                         <Label for="download-min-split-size">最小分片大小</Label>
-                        <Input
-                            id="download-min-split-size"
-                            v-model="downloaderSettingsDraft.minSplitSize"
-                            placeholder="例如 1M"
-                        />
+                        <Input id="download-min-split-size" v-model="downloaderSettingsDraft.minSplitSize"
+                            placeholder="例如 1M" />
                     </div>
 
                     <div class="grid gap-2 sm:col-span-2">
                         <Label for="download-download-proxy">下载代理</Label>
-                        <Input
-                            id="download-download-proxy"
-                            v-model="downloadProxyDraft"
-                            placeholder="例如 http://127.0.0.1:7890，可留空"
-                        />
+                        <Input id="download-download-proxy" v-model="downloadProxyDraft"
+                            placeholder="例如 http://127.0.0.1:7890，可留空" />
                     </div>
                 </div>
 
                 <DialogFooter>
-                    <Button
-                        variant="outline"
-                        @click="showDownloaderSettingsDialog = false"
-                    >
+                    <Button variant="outline" @click="showDownloaderSettingsDialog = false">
                         取消
                     </Button>
                     <Button @click="saveDownloaderSettings"> 保存 </Button>
@@ -2854,48 +2645,34 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                 </DialogHeader>
 
                 <div class="space-y-4">
-                    <div
-                        v-if="duplicateDialog.note"
-                        class="rounded-xl border border-border/70 bg-muted/30 px-4 py-3 text-sm text-muted-foreground"
-                    >
+                    <div v-if="duplicateDialog.note"
+                        class="rounded-xl border border-border/70 bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
                         {{ duplicateDialog.note }}
                     </div>
 
                     <div class="max-h-[40vh] space-y-3 overflow-y-auto pr-1">
-                        <div
-                            v-for="(item, index) in duplicateDialog.items"
-                            :key="`${duplicateDialog.title}-${index}`"
-                            class="rounded-xl border px-4 py-3"
-                        >
+                        <div v-for="(item, index) in duplicateDialog.items" :key="`${duplicateDialog.title}-${index}`"
+                            class="rounded-xl border px-4 py-3">
                             <div class="flex flex-wrap items-center gap-2">
                                 <div class="text-sm font-medium">
                                     {{ item.title }}
                                 </div>
-                                <Badge
-                                    v-for="badge in item.badges"
-                                    :key="`${item.title}-${badge}`"
-                                    class="rounded-full"
-                                    variant="outline"
-                                >
+                                <Badge v-for="badge in item.badges" :key="`${item.title}-${badge}`" class="rounded-full"
+                                    variant="outline">
                                     {{ badge }}
                                 </Badge>
                             </div>
-                            <p
-                                class="mt-2 text-sm leading-6 text-muted-foreground"
-                            >
+                            <p class="mt-2 text-sm leading-6 text-muted-foreground">
                                 {{ item.description }}
                             </p>
                         </div>
                     </div>
 
                     <div class="grid gap-2 sm:grid-cols-2">
-                        <Button
-                            v-for="option in duplicateDialog.options"
-                            :key="option.value"
+                        <Button v-for="option in duplicateDialog.options" :key="option.value"
                             :variant="option.variant ?? 'default'"
                             class="h-auto items-start justify-start px-4 py-3 text-left"
-                            @click="resolveDuplicateDialog(option.value)"
-                        >
+                            @click="resolveDuplicateDialog(option.value)">
                             <div>
                                 <div class="text-sm font-medium">
                                     {{ option.label }}
@@ -2919,40 +2696,25 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                     </DialogDescription>
                 </DialogHeader>
 
-                <div
-                    v-if="selectedTask"
-                    class="grid gap-6 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]"
-                >
+                <div v-if="selectedTask" class="grid gap-6 lg:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
                     <div class="space-y-4">
-                        <div
-                            class="overflow-hidden rounded-xl border bg-muted/30"
-                        >
-                            <img
-                                :src="selectedTaskMeta?.cover || EMPTY_POSTER"
-                                :alt="getTaskDisplayName(selectedTask)"
-                                class="aspect-video w-full object-cover"
-                                @error="
+                        <div class="overflow-hidden rounded-xl border bg-muted/30">
+                            <img :src="selectedTaskMeta?.cover || EMPTY_POSTER" :alt="getTaskDisplayName(selectedTask)"
+                                class="aspect-video w-full object-cover" @error="
                                     (event) =>
-                                        ((
-                                            event.target as HTMLImageElement
-                                        ).src = EMPTY_POSTER)
-                                "
-                            />
+                                    ((
+                                        event.target as HTMLImageElement
+                                    ).src = EMPTY_POSTER)
+                                " />
                         </div>
 
                         <div class="space-y-3 rounded-xl border px-4 py-4">
-                            <div
-                                class="flex flex-wrap items-start justify-between gap-3"
-                            >
+                            <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div>
-                                    <div
-                                        class="text-lg font-semibold leading-7"
-                                    >
+                                    <div class="text-lg font-semibold leading-7">
                                         {{ getTaskDisplayName(selectedTask) }}
                                     </div>
-                                    <div
-                                        class="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground"
-                                    >
+                                    <div class="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
                                         <span>GID：{{ selectedTask.gid }}</span>
                                         <span>·</span>
                                         <span>{{
@@ -2962,22 +2724,15 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                                         }}</span>
                                     </div>
                                 </div>
-                                <Badge
-                                    class="rounded-full"
-                                    :class="
-                                        getTaskStatusClass(selectedTask.status)
-                                    "
-                                    variant="outline"
-                                >
+                                <Badge class="rounded-full" :class="getTaskStatusClass(selectedTask.status)
+                                    " variant="outline">
                                     {{
                                         getTaskStatusLabel(selectedTask.status)
                                     }}
                                 </Badge>
                             </div>
 
-                            <div
-                                class="grid grid-cols-2 gap-3 text-center text-xs"
-                            >
+                            <div class="grid grid-cols-2 gap-3 text-center text-xs">
                                 <div class="rounded-xl bg-muted/40 px-3 py-3">
                                     <div class="text-muted-foreground">
                                         进度
@@ -3025,89 +2780,52 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                             </div>
 
                             <div class="flex flex-wrap gap-2">
-                                <Button
-                                    size="sm"
-                                    variant="outline"
-                                    @click="openTaskFolder(selectedTask)"
-                                >
+                                <Button size="sm" variant="outline" @click="openTaskFolder(selectedTask)">
                                     <IconFolderOpen />
                                     打开目录
                                 </Button>
-                                <Button
-                                    v-if="selectedTask.status === 'complete'"
-                                    size="sm"
-                                    variant="outline"
-                                    :disabled="
-                                        isTaskOperating(selectedTask.gid)
-                                    "
-                                    @click="retryTask(selectedTask)"
-                                >
+                                <Button v-if="selectedTask.status === 'complete'" size="sm" variant="outline" :disabled="isTaskOperating(selectedTask.gid)
+                                    " @click="retryTask(selectedTask)">
                                     <IconRefreshCw />
                                     重新下载
                                 </Button>
-                                <Button
-                                    v-if="selectedTask.status === 'error'"
-                                    size="sm"
-                                    variant="outline"
-                                    :disabled="
-                                        isTaskOperating(selectedTask.gid)
-                                    "
-                                    @click="retryTask(selectedTask)"
-                                >
+                                <Button v-if="selectedTask.status === 'error'" size="sm" variant="outline" :disabled="isTaskOperating(selectedTask.gid)
+                                    " @click="retryTask(selectedTask)">
                                     <IconRefreshCw />
                                     重试下载
                                 </Button>
-                                <Button
-                                    size="sm"
-                                    variant="outline"
-                                    :disabled="
-                                        selectedTask.status !== 'complete'
-                                    "
-                                    @click="openTaskFile(selectedTask)"
-                                >
+                                <Button size="sm" variant="outline" :disabled="selectedTask.status !== 'complete'
+                                    " @click="openTaskFile(selectedTask)">
                                     <IconFileUp />
                                     打开文件
                                 </Button>
-                                <Button
-                                    size="sm"
-                                    variant="outline"
-                                    :disabled="
-                                        selectedTask.status !== 'complete' ||
-                                        !canImportToLocalManager ||
-                                        isTaskImporting(selectedTask.gid)
-                                    "
-                                    @click="
+                                <Button size="sm" variant="outline" :disabled="selectedTask.status !== 'complete' ||
+                                    !canImportToLocalManager ||
+                                    isTaskImporting(selectedTask.gid)
+                                    " @click="
                                         importTaskToLocalManager(selectedTask)
-                                    "
-                                >
+                                        ">
                                     <IconFileUp />
                                     {{
                                         isTaskImporting(selectedTask.gid)
                                             ? "导入中"
                                             : selectedTaskMeta?.localModId
-                                              ? "重新导入本地"
-                                              : "导入到本地管理器"
+                                                ? "重新导入本地"
+                                                : "导入到本地管理器"
                                     }}
                                 </Button>
-                                <Button
-                                    v-if="
-                                        selectedTaskMeta?.sourceType ===
-                                            'GlossMod' &&
-                                        selectedTaskMeta?.modId
-                                    "
-                                    size="sm"
-                                    variant="outline"
-                                    @click="loadRelatedModDetail(selectedTask)"
-                                >
+                                <Button v-if="
+                                    selectedTaskMeta?.sourceType ===
+                                    'GlossMod' &&
+                                    selectedTaskMeta?.modId
+                                " size="sm" variant="outline" @click="loadRelatedModDetail(selectedTask)">
                                     <IconPanelRightOpen />
                                     查看关联 Mod
                                 </Button>
                             </div>
 
-                            <div
-                                v-if="selectedTask.errorMessage"
-                                class="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
-                            >
+                            <div v-if="selectedTask.errorMessage"
+                                class="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                                 {{ selectedTask.errorMessage }}
                             </div>
                         </div>
@@ -3123,62 +2841,41 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                             </div>
                         </div>
 
-                        <div
-                            v-if="selectedTaskMeta"
-                            class="rounded-xl border px-4 py-3 text-sm"
-                        >
+                        <div v-if="selectedTaskMeta" class="rounded-xl border px-4 py-3 text-sm">
                             <div class="text-xs text-muted-foreground">
                                 关联 Mod
                             </div>
                             <div class="mt-1 font-medium">
                                 {{ selectedTaskMeta.modTitle || "未知 Mod" }}
                             </div>
-                            <div
-                                class="mt-1 text-xs text-muted-foreground leading-6"
-                            >
+                            <div class="mt-1 text-xs text-muted-foreground leading-6">
                                 {{ selectedTaskMeta.gameName || "未记录游戏" }}
-                                <span v-if="selectedTaskMeta.version"
-                                    >· 版本 {{ selectedTaskMeta.version }}</span
-                                >
-                                <span v-if="selectedTaskMeta.localModId"
-                                    >· 已导入本地 #{{
-                                        selectedTaskMeta.localModId
-                                    }}</span
-                                >
+                                <span v-if="selectedTaskMeta.version">· 版本 {{ selectedTaskMeta.version }}</span>
+                                <span v-if="selectedTaskMeta.localModId">· 已导入本地 #{{
+                                    selectedTaskMeta.localModId
+                                }}</span>
                             </div>
-                            <p
-                                v-if="selectedTaskMeta.content"
-                                class="mt-3 line-clamp-6 text-sm text-muted-foreground"
-                            >
+                            <p v-if="selectedTaskMeta.content" class="mt-3 line-clamp-6 text-sm text-muted-foreground">
                                 {{ selectedTaskMeta.content }}
                             </p>
                         </div>
 
                         <div class="space-y-3">
                             <div class="text-sm font-medium">文件列表</div>
-                            <div
-                                class="max-h-[48vh] space-y-2 overflow-y-auto pr-1"
-                            >
-                                <div
-                                    v-for="(file, index) in selectedTask.files"
-                                    :key="`${selectedTask.gid}-${index}`"
-                                    class="rounded-xl border px-3 py-3 text-sm"
-                                >
+                            <div class="max-h-[48vh] space-y-2 overflow-y-auto pr-1">
+                                <div v-for="(file, index) in selectedTask.files" :key="`${selectedTask.gid}-${index}`"
+                                    class="rounded-xl border px-3 py-3 text-sm">
                                     <div class="font-medium">
                                         {{
                                             getBaseName(file.path) ||
                                             `文件 ${index + 1}`
                                         }}
                                     </div>
-                                    <div
-                                        class="mt-1 text-xs text-muted-foreground"
-                                    >
+                                    <div class="mt-1 text-xs text-muted-foreground">
                                         {{ formatBytes(file.completedLength) }}
                                         / {{ formatBytes(file.length) }}
                                     </div>
-                                    <div
-                                        class="mt-2 break-all text-xs text-muted-foreground"
-                                    >
+                                    <div class="mt-2 break-all text-xs text-muted-foreground">
                                         {{ file.path || "暂无文件路径" }}
                                     </div>
                                 </div>
@@ -3187,15 +2884,11 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                     </div>
                 </div>
 
-                <div
-                    v-else
-                    class="flex min-h-80 flex-col items-center justify-center rounded-xl border border-dashed px-6 py-12 text-center"
-                >
+                <div v-else
+                    class="flex min-h-80 flex-col items-center justify-center rounded-xl border border-dashed px-6 py-12 text-center">
                     <IconListChecks class="size-8 text-muted-foreground" />
                     <div class="mt-3 text-base font-medium">先选择一个任务</div>
-                    <p
-                        class="mt-2 max-w-sm text-sm leading-6 text-muted-foreground"
-                    >
+                    <p class="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
                         关闭弹窗后从下载列表重新点开任务即可查看详情。
                     </p>
                 </div>

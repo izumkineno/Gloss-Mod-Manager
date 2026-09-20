@@ -186,6 +186,10 @@ export const useManager = defineStore("Manager", () => {
 
     const selectedType = ref<number | string | 0>(0);
     const selectedTag = ref("全部");
+    // 安装状态筛选：all / installed / uninstalled（顶栏统一筛选入口）
+    const installStatus = ref<"all" | "installed" | "uninstalled">("all");
+    // 每页条数：列表/网格分页共用
+    const pageSize = ref(50);
     const tags = ref<ITag[]>([]);
     const managerRoot = ref("");
     const selectionMode = ref(false);
@@ -343,7 +347,6 @@ export const useManager = defineStore("Manager", () => {
 
     const filteredMods = computed<IModInfo[]>(() => {
         const keyword = search.value.trim().toLowerCase();
-
         return sortModsByWeight(managerModList.value)
             .filter((mod) => {
                 if (selectedType.value === 0) {
@@ -360,6 +363,11 @@ export const useManager = defineStore("Manager", () => {
                 return (mod.tags ?? []).some((tag) => {
                     return tag.name === selectedTag.value;
                 });
+            })
+            .filter((mod) => {
+                if (installStatus.value === "installed") return mod.isInstalled;
+                if (installStatus.value === "uninstalled") return !mod.isInstalled;
+                return true;
             })
             .filter((mod) => {
                 if (!keyword) {
@@ -1112,6 +1120,8 @@ export const useManager = defineStore("Manager", () => {
         search,
         selectedType,
         selectedTag,
+        installStatus,
+        pageSize,
         tags,
         textCollator,
         availableTypes,

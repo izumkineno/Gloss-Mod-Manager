@@ -137,6 +137,7 @@ declare module 'vue' {
     IconTag: typeof import('lucide-vue-next')['Tag']
     IconTrash: typeof import('lucide-vue-next')['Trash']
     IconTrash2: typeof import('lucide-vue-next')['Trash2']
+    IconX: typeof import('lucide-vue-next')['X']
     Input: typeof import('./components/ui/input/Input.vue')['default']
     InputGroup: typeof import('./components/ui/input-group/InputGroup.vue')['default']
     InputGroupAddon: typeof import('./components/ui/input-group/InputGroupAddon.vue')['default']
