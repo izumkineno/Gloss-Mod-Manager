@@ -857,6 +857,7 @@ watch(showSortDialog, (opened) => {
                             </TableBody>
                         </Table>
 
+                            <div v-if="managerGridEnabled" class="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
                             <article v-for="(item, index) in pagedMods" :key="item.id"
                                 :class="getItemContainerClass(item)"
                                 class="overflow-hidden rounded-xl border bg-card shadow-sm transition-colors"
@@ -1032,6 +1033,7 @@ watch(showSortDialog, (opened) => {
                             <Button variant="outline" size="sm" :disabled="currentPage >= totalPages" @click="goPage(totalPages)">末页</Button>
                         </div>
                     </div>
+                </div>
                 </ContextMenuTrigger>
                 <ContextMenuContent v-if="contextTargetMod" class="w-48">
                     <ContextMenuItem @select="runContextAction(openEditDialog)"><IconSquarePen class="mr-2 h-4 w-4" />

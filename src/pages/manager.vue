@@ -4,6 +4,8 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage } from "element-plus-message";
 import { queueGlossModDownloadWithSelection } from "@/lib/download-file-selection";
+import { Manager } from "@/lib/Manager";
+import { FileHandler } from "@/lib/FileHandler";
 import { installGmmPackage } from "@/lib/gmm-package";
 import { checkGlossModUpdates } from "@/lib/gloss-mod-api";
 import { useLaunchStore } from "@/stores/launch";
@@ -66,6 +68,18 @@ const updateChecking = ref(false);
 const fileDropActive = ref(false);
 const dragImportRootRef = ref<HTMLElement | null>(null);
 const managerGmmDialogRef = ref<IManagerGmmDialogExpose | null>(null);
+// 批量进度：当前 mod 名 + batch 内 done/total + 已完成 mod 数。
+const batchRunning = ref(false);
+const batchTitle = ref("");
+const batchCurrent = ref("");
+const batchFileDone = ref(0);
+const batchFileTotal = ref(0);
+const batchModDone = ref(0);
+const batchModTotal = ref(0);
+// 批量结果弹窗。
+const showBatchResultDialog = ref(false);
+const batchResultTitle = ref("");
+const batchResultItems = ref<Array<{ name: string; ok: boolean; error?: string }>>([]);
 
 const showBatchEditDialog = ref(false);
 const batchEditForm = reactive<IBatchEditForm>({
@@ -305,66 +319,6 @@ function finishAction(modId: number) {
     actioningIds.value = actioningIds.value.filter((item) => item !== modId);
 }
 
-async function toggleInstall(mod: IModInfo, install: boolean) {
-    const type = getTypeDefinition(mod);
-
-    if (!type) {
-        ElMessage.warning("当前 Mod 没有可用的类型定义，请先检查类型设置。");
-        return;
-    }
-
-    const handler = install ? type.install : type.uninstall;
-    startAction(mod.id);
-
-    try {
-        const result =
-            typeof handler === "function"
-                ? await handler.call(type, mod)
-                : await executeTypeInstall(type, handler, mod, install);
-
-        if (!isOperationSuccessful(result)) {
-            // 报出首个失败文件 + 后端原话，替代通用兜底文案
-            const firstFailure =
-                typeof result === "boolean"
-                    ? undefined
-                    : result.find((item) => !item.state);
-            const detail = firstFailure?.error?.trim();
-            const failedCount =
-                typeof result === "boolean" ? 0 : result.filter((item) => !item.state).length;
-            const suffix =
-                typeof result === "boolean" || failedCount <= 1
-                    ? ""
-                    : `（等 ${failedCount} 个文件）`;
-            const failedFile = firstFailure?.file ?? "未知文件";
-            const reason = detail ? `：${detail}` : "";
-            const fallback = install
-                ? "（无后端错误信息，请看控制台日志）"
-                : "（目标文件可能被占用）";
-            ElMessage.error(
-                install
-                    ? `安装 ${mod.modName} 失败：${failedFile}${suffix}${reason || fallback}`
-                    : `卸载 ${mod.modName} 失败：${failedFile}${suffix}${reason || fallback}`,
-            );
-            return;
-        }
-
-        mod.isInstalled = install;
-        await manager.saveManagerData();
-        ElMessage.success(
-            install ? `已安装 ${mod.modName}` : `已卸载 ${mod.modName}`,
-        );
-    } catch (error: unknown) {
-        console.error("执行 Mod 操作失败");
-        console.error(error);
-        ElMessage.error(
-            install
-                ? `安装 ${mod.modName} 失败，请查看控制台日志。`
-                : `卸载 ${mod.modName} 失败，请查看控制台日志。`,
-        );
-    } finally {
-        finishAction(mod.id);
-    }
-}
 
 async function importGmmFile() {
     await managerGmmDialogRef.value?.openImportDialog();
@@ -471,32 +425,110 @@ async function batchInstall(install: boolean) {
     const targets = manager.managerModList.filter((m) =>
         selectionIds.value.includes(m.id),
     );
+    if (targets.length === 0) return;
+    batchRunning.value = true;
+    batchTitle.value = install ? "批量安装" : "批量卸载";
+    batchModDone.value = 0;
+    batchModTotal.value = targets.length;
+    batchResultItems.value = [];
+    const offProgress = Manager.onInstallProgress((progress) => {
+        batchFileDone.value = progress.done;
+        batchFileTotal.value = progress.total;
+    });
+    try {
+        for (const mod of targets) {
+            batchCurrent.value = mod.modName;
+            batchFileDone.value = 0;
+            batchFileTotal.value = Math.max(1, mod.modFiles.length);
+            startAction(mod.id);
+            try {
+                await toggleInstallSilent(mod, install);
+                mod.isInstalled = install;
+                batchResultItems.value.push({ name: mod.modName, ok: true });
+            } catch (error: unknown) {
+                batchResultItems.value.push({
+                    name: mod.modName,
+                    ok: false,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            } finally {
+                finishAction(mod.id);
+            }
+            batchModDone.value += 1;
+        }
+        await manager.saveManagerData();
+    } finally {
+        offProgress();
+        batchRunning.value = false;
+    }
+    selectionIds.value = [];
+    manager.selectionMode = false;
+    const okCount = batchResultItems.value.filter((i) => i.ok).length;
+    batchResultTitle.value = `${batchTitle.value}完成：成功 ${okCount} / ${targets.length}`;
+    showBatchResultDialog.value = true;
+}
 
-    for (const mod of targets) {
-        await toggleInstall(mod, install);
+// 静默版单条安装/卸载：不弹 toast、不落盘（批量结束统一处理），失败抛错由调用方收集。
+async function toggleInstallSilent(mod: IModInfo, install: boolean) {
+    const type = getTypeDefinition(mod);
+    if (!type) throw new Error("没有可用的类型定义，请先检查类型设置。");
+    const handler = install ? type.install : type.uninstall;
+    const result =
+        typeof handler === "function"
+            ? await handler.call(type, mod)
+            : await executeTypeInstall(type, handler, mod, install);
+    if (!isOperationSuccessful(result)) {
+        const firstFailure = typeof result === "boolean" ? undefined : result.find((item) => !item.state);
+        const detail = firstFailure?.error?.trim();
+        throw new Error(detail ? `${firstFailure?.file ?? "未知文件"}：${detail}` : "无后端错误信息，请看控制台日志。");
     }
 }
 
 async function batchRemove() {
-    // 批量移除：复用 removeModRecord，逐个删除磁盘缓存目录 + 列表记录（与单条删除同语义，避免留孤儿目录）。
     const ids = [...selectionIds.value];
-    const failures: string[] = [];
-    for (const id of ids) {
-        try {
-            await manager.removeModRecord(id);
-        } catch {
-            // 单个失败不中断：记录名称继续删其余，最后统一提示。
-            failures.push(manager.managerModList.find((m) => m.id === id)?.modName ?? String(id));
+    if (ids.length === 0) return;
+    batchRunning.value = true;
+    batchTitle.value = "批量移除";
+    batchModDone.value = 0;
+    batchModTotal.value = ids.length;
+    batchResultItems.value = [];
+    const removedIds: number[] = [];
+    try {
+        for (const id of ids) {
+            const mod = manager.managerModList.find((m) => m.id === id);
+            batchCurrent.value = mod?.modName ?? String(id);
+            batchFileDone.value = batchModDone.value;
+            batchFileTotal.value = ids.length;
+            try {
+                const modPath = await manager.getModStoragePath(id);
+                if (modPath) {
+                    const deleted = await FileHandler.deleteFolder(modPath);
+                    if (!deleted) throw new Error("删除 Mod 目录失败，请检查文件占用或权限。");
+                }
+                removedIds.push(id);
+                batchResultItems.value.push({ name: mod?.modName ?? String(id), ok: true });
+            } catch (error: unknown) {
+                batchResultItems.value.push({
+                    name: mod?.modName ?? String(id),
+                    ok: false,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+            batchModDone.value += 1;
         }
+        if (removedIds.length > 0) {
+            const removedSet = new Set(removedIds);
+            manager.managerModList = manager.managerModList.filter((m) => !removedSet.has(m.id));
+            await manager.saveManagerData();
+        }
+    } finally {
+        batchRunning.value = false;
     }
     selectionIds.value = [];
     manager.selectionMode = false;
-    const removed = ids.length - failures.length;
-    if (failures.length === 0) {
-        ElMessage.success(`已移除 ${removed} 个 Mod（含本地缓存目录）。`);
-    } else {
-        ElMessage.error(`已移除 ${removed} 个，${failures.length} 个删除失败：${failures.join("、")}。`);
-    }
+    const okCount = batchResultItems.value.filter((i) => i.ok).length;
+    batchResultTitle.value = `批量移除完成：成功 ${okCount} / ${ids.length}`;
+    showBatchResultDialog.value = true;
 }
 
 async function openModRootFolder() {
@@ -1021,6 +1053,51 @@ function openGamesPage() {
                             >取消</Button
                         >
                         <Button @click="applyBatchEdit">确定</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+            <!-- 批量进度 Dialog（不可关闭，跑完自动关转结果弹窗） -->
+            <Dialog :open="batchRunning">
+                <DialogContent :closable="false">
+                    <DialogHeader>
+                        <DialogTitle>{{ batchTitle }}（{{ batchModDone }} / {{ batchModTotal }}）</DialogTitle>
+                        <DialogDescription class="truncate">
+                            当前：{{ batchCurrent }} · 文件 {{ batchFileDone }} / {{ batchFileTotal }}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div class="h-2 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                            class="h-full rounded-full bg-primary transition-all"
+                            :style="{ width: `${batchFileTotal > 0 ? (batchFileDone / batchFileTotal) * 100 : 0}%` }"
+                        />
+                    </div>
+                </DialogContent>
+            </Dialog>
+            <!-- 批量结果 Dialog -->
+            <Dialog v-model:open="showBatchResultDialog">
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>{{ batchResultTitle }}</DialogTitle>
+                        <DialogDescription>
+                            失败项附带首个错误原因，成功项不再打扰。
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div class="max-h-80 space-y-1.5 overflow-y-auto py-2">
+                        <div
+                            v-for="(item, index) in batchResultItems"
+                            :key="`${index}-${item.name}`"
+                            class="flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-sm"
+                            :class="item.ok ? 'border-border/60' : 'border-destructive/50'"
+                        >
+                            <span class="mt-0.5 shrink-0">{{ item.ok ? "✅" : "❌" }}</span>
+                            <div class="min-w-0">
+                                <div class="truncate font-medium">{{ item.name }}</div>
+                                <div v-if="item.error" class="break-all text-xs text-muted-foreground">{{ item.error }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button @click="showBatchResultDialog = false">关闭</Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
