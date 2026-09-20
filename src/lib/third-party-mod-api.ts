@@ -931,6 +931,29 @@ export function buildMinimalNexusModDetail(
         files: [file],
     };
 }
+// Collection 补介绍：只读 mods/{id}.json（不碰 files.json，避免 403 连坐）。
+// 失败返回 null，调用方继续用最小 detail 建任务，不阻塞下载。
+export async function fetchNexusModsModMeta(
+    gameDomain: string,
+    modId: string,
+    nexusUser?: INexusModsUser | null,
+): Promise<Pick<IThirdPartyModDetail, "summary" | "description" | "author" | "cover" | "title"> | null> {
+    try {
+        const payload = await fetchNexusModsApiJson<INexusModsV1Mod>(
+            `/v1/games/${gameDomain}/mods/${modId}.json`,
+            nexusUser,
+        );
+        return {
+            title: normalizeText(payload.name || ""),
+            summary: normalizeText(payload.summary || ""),
+            description: normalizeText(payload.description || ""),
+            author: normalizeNexusModsAuthor(payload),
+            cover: normalizeText(payload.picture_url || ""),
+        };
+    } catch {
+        return null;
+    }
+}
 
 async function fetchNexusModsDetailById(
     gameDomain: string,

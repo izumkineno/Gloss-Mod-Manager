@@ -19,6 +19,8 @@ const {
     defaultStartPage,
     language,
     closeSoftLinks,
+    collectionPushBatch,
+    collectionPushInterval,
     collectionQueueLimit,
     modifiableDuringGame,
     nexusModsAuthorized,
@@ -34,7 +36,6 @@ const {
     apiKey,
     glossModKey,
 } = storeToRefs(settings);
-
 const themeModel = computed<ThemeMode>({
     get: () => theme.value,
     set: (value) => settings.setTheme(value),
@@ -515,6 +516,43 @@ watch(
                                         :max="100"
                                         class="w-full lg:w-40"
                                         v-model.number="collectionQueueLimit"
+                                    />
+                                </div>
+                            </div>
+                            <div class="mt-4 space-y-3 border-t border-border/60 pt-4">
+                                <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                                    <div class="space-y-1">
+                                        <div class="text-sm font-medium">
+                                            Collection 单次并发推送个数
+                                        </div>
+                                        <p class="text-xs text-muted-foreground">
+                                            每批同时建任务的数量，默认 1（串行逐个推送）；调大加快推送，Nexus API 限流时调小。
+                                        </p>
+                                    </div>
+                                    <Input
+                                        type="number"
+                                        :min="1"
+                                        :max="20"
+                                        class="w-full lg:w-40"
+                                        v-model.number="collectionPushBatch"
+                                    />
+                                </div>
+                                <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                                    <div class="space-y-1">
+                                        <div class="text-sm font-medium">
+                                            Collection 推送间隔（毫秒）
+                                        </div>
+                                        <p class="text-xs text-muted-foreground">
+                                            每批推送后的等待间隔，默认 1000；0 为无间隔连续推送。
+                                        </p>
+                                    </div>
+                                    <Input
+                                        type="number"
+                                        :min="0"
+                                        :max="60000"
+                                        :step="100"
+                                        class="w-full lg:w-40"
+                                        v-model.number="collectionPushInterval"
                                     />
                                 </div>
                             </div>

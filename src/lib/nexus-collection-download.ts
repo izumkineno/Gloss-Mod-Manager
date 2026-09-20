@@ -3,6 +3,7 @@
 // 因此每个文件都会走已有的去重/直链/回退逻辑。
 import {
     buildMinimalNexusModDetail,
+    fetchNexusModsModMeta,
     type INexusModsDirectOptions,
 } from "@/lib/third-party-mod-api";
 import { queueThirdPartyModDownload } from "@/lib/third-party-download-queue";
@@ -199,6 +200,15 @@ export async function queueNexusCollectionDownloadWithSelection(
             // files.json 对部分 mod 返回 403 Mod not available（API 不可见但网页可下），
             // 走详情链必死；构造最小 detail 直调 resolve（cookie 直连/免费 key 回退逻辑不变）。
             const mod = buildMinimalNexusModDetail(options.gameDomain, item.modId, item.fileId, item.name, item.version);
+            // 介绍回填：只读 mods/{id}.json，失败静默（403/断网不阻塞建任务）。
+            const meta = await fetchNexusModsModMeta(options.gameDomain, item.modId, options.nexusUser);
+            if (meta) {
+                if (meta.title) mod.title = meta.title;
+                if (meta.summary) mod.summary = meta.summary;
+                if (meta.description) mod.description = meta.description;
+                if (meta.author) mod.author = meta.author;
+                if (meta.cover) mod.cover = meta.cover;
+            }
             await queueThirdPartyModDownload({
                 provider: "NexusMods",
                 mod,

@@ -1544,6 +1544,84 @@ function isTaskImporting(gid: string) {
     return taskImportingIds.value.includes(gid);
 }
 
+// 无弹窗导入内核：命中本地重复（score>=100 身份重复）即自动跳过并回填 localModId；返回 skipped/imported 供批量汇总。
+async function importSingleTaskHeadless(targetTask: IDownloaderTask): Promise<"skipped" | "imported"> {
+    await manager.refreshRuntimeData({
+        storagePath: storagePath.value,
+        closeSoftLinks: disableSymlinkInstall.value,
+    });
+    if (!manager.managerGame || !manager.managerRoot) {
+        throw new Error("请先选择游戏并配置储存路径。");
+    }
+    const primaryFile = getTaskPrimaryFile(targetTask);
+    if (!primaryFile?.path) {
+        throw new Error("当前任务没有可导入的文件。");
+    }
+    if (!(await FileHandler.fileExists(primaryFile.path))) {
+        throw new Error("下载文件不存在，请先检查输出目录。");
+    }
+    const metadata = taskMetaMap.value[targetTask.gid] ?? null;
+    const importMetadata = {
+        modName:
+            metadata?.modTitle ||
+            metadata?.resourceName ||
+            getTaskDisplayName(targetTask),
+        fileName: metadata?.fileName || getBaseName(primaryFile.path),
+        modVersion: metadata?.version || "1.0.0",
+        modAuthor: metadata?.author || "",
+        modWebsite: metadata?.sourceUrl || "",
+        modDesc: metadata?.content || "",
+        cover: metadata?.cover,
+        from: getTaskSourceType(metadata),
+        webId: getTaskExternalId(metadata),
+        gameID: manager.managerGame.GlossGameId,
+        other: {
+            downloadTaskGid: targetTask.gid,
+            sourceUrl: metadata?.sourceUrl || "",
+        },
+    };
+    // 自动跳过：身份级重复（webId/外部 id 命中）直接沿用本地条目，不弹窗。
+    const duplicateLocalMods = findGlossDuplicateLocalMods(
+        manager.managerModList,
+        {
+            sourceType: getTaskSourceType(metadata),
+            externalId: getTaskExternalId(metadata),
+            modId: metadata?.modId,
+            fileName: importMetadata.fileName,
+            modTitle: importMetadata.modName,
+        },
+    );
+    const identityDuplicate = duplicateLocalMods.find((item) => item.score >= 100) ?? null;
+    if (identityDuplicate) {
+        setTaskMeta(targetTask.gid, {
+            ...(metadata ?? {}),
+            localModId: identityDuplicate.mod.id,
+            importedAt: new Date().toISOString(),
+        });
+        return "skipped";
+    }
+    const importSource: ILocalModImportSource = {
+        path: primaryFile.path,
+        sourceType: await resolveGlossDownloadImportSourceType(
+            primaryFile.path,
+            metadata,
+        ),
+        metadata: importMetadata,
+        // FOMOD 压缩包走安装向导选分支。
+        fomodSelection: (config) => useFomodWizardStore().startWizard(config),
+    };
+    const result = await importLocalModSources([importSource]);
+    const importedMod = result.importedMods[0];
+    if (!importedMod) {
+        throw new Error("没有导入任何 Mod，请检查下载文件内容。");
+    }
+    setTaskMeta(targetTask.gid, {
+        ...(metadata ?? {}),
+        localModId: importedMod.id,
+        importedAt: new Date().toISOString(),
+    });
+    return "imported";
+}
 async function importTaskToLocalManager(task?: IDownloaderTask | null) {
     const targetTask = task ?? selectedTask.value;
 
@@ -1605,6 +1683,8 @@ async function importTaskToLocalManager(task?: IDownloaderTask | null) {
                 metadata,
             ),
             metadata: importMetadata,
+            // FOMOD 压缩包走安装向导选分支。
+            fomodSelection: (config) => useFomodWizardStore().startWizard(config),
         };
         const duplicateLocalMods = findGlossDuplicateLocalMods(
             manager.managerModList,
@@ -1719,6 +1799,36 @@ async function importTaskToLocalManager(task?: IDownloaderTask | null) {
     } finally {
         finishTaskImport(targetTask.gid);
     }
+}
+// 批量导入全部：仅 complete 且未导入（无 localModId）的任务；身份重复自动跳过（回填 localModId），最后汇总。
+async function importAllCompletedTasks() {
+    if (!canImportToLocalManager.value) {
+        ElMessage.warning("请先选择游戏并配置储存路径。");
+        return;
+    }
+    const todo = allTasks.value.filter((task) => task.status === "complete" && taskMetaMap.value[task.gid]?.localModId == null);
+    if (todo.length === 0) {
+        ElMessage.info("没有可导入的已完成任务（其余已导入或未完成）。");
+        return;
+    }
+    let imported = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const task of todo) {
+        if (isTaskImporting(task.gid)) continue;
+        startTaskImport(task.gid);
+        try {
+            const result = await importSingleTaskHeadless(task);
+            if (result === "skipped") skipped += 1;
+            else imported += 1;
+        } catch (error: unknown) {
+            failed += 1;
+            console.error(`批量导入失败 ${getTaskDisplayName(task)}：`, error);
+        } finally {
+            finishTaskImport(task.gid);
+        }
+    }
+    ElMessage.success(`批量导入完成：新增 ${imported} 个，跳过重复 ${skipped} 个，失败 ${failed} 个。`);
 }
 
 async function pauseTask(task: IDownloaderTask) {
@@ -1983,6 +2093,16 @@ async function loadRelatedModDetail(task?: IDownloaderTask | null) {
                         >
                             <IconRefreshCw />
                             全部重试
+                        </Button>
+                        <Button
+                            v-if="queueFilter === 'stopped' || queueFilter === 'unimported' || queueFilter === 'all'"
+                            size="sm"
+                            variant="outline"
+                            :disabled="!canImportToLocalManager"
+                            @click="importAllCompletedTasks"
+                        >
+                            <IconFileUp />
+                            批量导入全部
                         </Button>
                         <Button
                             size="sm"

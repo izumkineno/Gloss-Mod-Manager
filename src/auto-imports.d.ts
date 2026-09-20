@@ -105,9 +105,11 @@ declare global {
   const defineStore: typeof import('pinia').defineStore
   const deleteLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').deleteLegacyCustomGameDefinition
   const deleteLegacyCustomTypeDefinition: typeof import('./lib/legacy-custom-data').deleteLegacyCustomTypeDefinition
+  const detectFomodConfig: typeof import('./lib/fomod-parser').detectFomodConfig
   const eagerComputed: typeof import('@vueuse/core').eagerComputed
   const effectScope: typeof import('vue').effectScope
   const escapeHtmlText: typeof import('./lib/html-sanitizer').escapeHtmlText
+  const evaluateDependency: typeof import('./lib/fomod-parser').evaluateDependency
   const executeSevenZipSidecar: typeof import('./lib/sidecar').executeSevenZipSidecar
   const executeSidecar: typeof import('./lib/sidecar').executeSidecar
   const extendRef: typeof import('@vueuse/core').extendRef
@@ -120,6 +122,7 @@ declare global {
   const fetchModIoGameTags: typeof import('./lib/third-party-mod-api').fetchModIoGameTags
   const fetchNexusCollectionFiles: typeof import('./lib/nexus-collection-api').fetchNexusCollectionFiles
   const fetchNexusCollectionInfo: typeof import('./lib/nexus-collection-api').fetchNexusCollectionInfo
+  const fetchNexusModsModMeta: typeof import('./lib/third-party-mod-api').fetchNexusModsModMeta
   const fetchNexusModsSingleFileName: typeof import('./lib/third-party-mod-api').fetchNexusModsSingleFileName
   const fetchThirdPartyModDetail: typeof import('./lib/third-party-mod-api').fetchThirdPartyModDetail
   const fetchThirdPartyMods: typeof import('./lib/third-party-mod-api').fetchThirdPartyMods
@@ -224,11 +227,13 @@ declare global {
   const onUnmounted: typeof import('vue').onUnmounted
   const onUpdated: typeof import('vue').onUpdated
   const onWatcherCleanup: typeof import('vue').onWatcherCleanup
+  const parseFomodConfig: typeof import('./lib/fomod-parser').parseFomodConfig
   const parseGmmShareCode: typeof import('./lib/gmm-share-code').parseGmmShareCode
   const parseKeywordText: typeof import('./lib/custom-definition-utils').parseKeywordText
   const pausableWatch: typeof import('@vueuse/core').pausableWatch
   const provide: typeof import('vue').provide
   const provideLocal: typeof import('@vueuse/core').provideLocal
+  const pruneStagingToFomodSelection: typeof import('./lib/fomod-parser').pruneStagingToFomodSelection
   const queueCustomDownload: typeof import('./lib/custom-download-queue').queueCustomDownload
   const queueGlossModDownload: typeof import('./lib/gloss-download-queue').queueGlossModDownload
   const queueGlossModDownloadWithSelection: typeof import('./lib/download-file-selection').queueGlossModDownloadWithSelection
@@ -259,6 +264,7 @@ declare global {
   const requestWithRetry: typeof import('./lib/http-client').requestWithRetry
   const resolveAiChatAttachmentMediaType: typeof import('./lib/ai-chat-attachments').resolveAiChatAttachmentMediaType
   const resolveComponent: typeof import('vue').resolveComponent
+  const resolveFomodInstallFiles: typeof import('./lib/fomod-parser').resolveFomodInstallFiles
   const resolveGlossAssetUrl: typeof import('./lib/gloss-mod-api').resolveGlossAssetUrl
   const resolveGlossDownloadImportSourceType: typeof import('./lib/gloss-download-queue').resolveGlossDownloadImportSourceType
   const resolveGlossModKey: typeof import('./lib/gloss-mod-api').resolveGlossModKey
@@ -379,6 +385,7 @@ declare global {
   const useFileSystemAccess: typeof import('@vueuse/core').useFileSystemAccess
   const useFocus: typeof import('@vueuse/core').useFocus
   const useFocusWithin: typeof import('@vueuse/core').useFocusWithin
+  const useFomodWizardStore: typeof import('./stores/fomod-wizard').useFomodWizardStore
   const useFps: typeof import('@vueuse/core').useFps
   const useFullscreen: typeof import('@vueuse/core').useFullscreen
   const useGamepad: typeof import('@vueuse/core').useGamepad
@@ -564,6 +571,9 @@ declare global {
   // @ts-ignore
   export type { IExploreTranslationSourceItem, IExploreTranslationEntry, IExploreTranslationRequest } from './lib/explore-ai-translation'
   import('./lib/explore-ai-translation')
+  // @ts-ignore
+  export type { FomodFileMapping, FomodConditionFlag, FomodPluginType, FomodPlugin, FomodGroupType, FomodGroup, FomodDependencyOperator, FomodDependency, FomodStep, FomodConditionalInstall, FomodConfig, FomodSelectionResolver } from './lib/fomod-parser'
+  import('./lib/fomod-parser')
   // @ts-ignore
   export type { GlossDownloadMonitor } from './lib/gloss-download-monitor'
   import('./lib/gloss-download-monitor')

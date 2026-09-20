@@ -219,6 +219,8 @@ interface IGameInfo {
 interface IState {
     file: string;
     state: boolean;
+    // 后端 mod_install_batch 回的失败原话，透传到 UI 展示用
+    error?: string;
 }
 
 interface IAdvancedItem {

@@ -323,10 +323,27 @@ async function toggleInstall(mod: IModInfo, install: boolean) {
                 : await executeTypeInstall(type, handler, mod, install);
 
         if (!isOperationSuccessful(result)) {
+            // 报出首个失败文件 + 后端原话，替代通用兜底文案
+            const firstFailure =
+                typeof result === "boolean"
+                    ? undefined
+                    : result.find((item) => !item.state);
+            const detail = firstFailure?.error?.trim();
+            const failedCount =
+                typeof result === "boolean" ? 0 : result.filter((item) => !item.state).length;
+            const suffix =
+                typeof result === "boolean" || failedCount <= 1
+                    ? ""
+                    : `（等 ${failedCount} 个文件）`;
+            const failedFile = firstFailure?.file ?? "未知文件";
+            const reason = detail ? `：${detail}` : "";
+            const fallback = install
+                ? "（无后端错误信息，请看控制台日志）"
+                : "（目标文件可能被占用）";
             ElMessage.error(
                 install
-                    ? `安装 ${mod.modName} 失败，请检查游戏路径和文件权限。`
-                    : `卸载 ${mod.modName} 失败，请检查目标文件是否被占用。`,
+                    ? `安装 ${mod.modName} 失败：${failedFile}${suffix}${reason || fallback}`
+                    : `卸载 ${mod.modName} 失败：${failedFile}${suffix}${reason || fallback}`,
             );
             return;
         }
@@ -561,6 +578,8 @@ async function importSources(
             sources.map((source) => ({
                 path: source,
                 sourceType,
+                // FOMOD 包走安装向导：无 ModuleConfig.xml 时回调不触发，走整包。
+                fomodSelection: (config) => useFomodWizardStore().startWizard(config),
             })),
         );
 

@@ -84,8 +84,8 @@ export class Manager {
         items: IInstallItem[],
         allowedRoots: string[],
         linkFallbackCopy: boolean,
-    ): Promise<Map<string, boolean>> {
-        const states = new Map<string, boolean>();
+    ): Promise<Map<string, { ok: boolean; error?: string }>> {
+        const states = new Map<string, { ok: boolean; error?: string }>();
         if (items.length === 0) {
             return states;
         }
@@ -93,18 +93,23 @@ export class Manager {
             const result = await invoke<IInstallFileState[]>(
                 "mod_install_batch",
                 {
-                    batchId: Manager.createBatchId(),
-                    allowedRoots,
-                    items,
-                    linkFallbackCopy,
+                    // 后端签名 mod_install_batch(req: InstallBatch)，整包必须包在 req 下
+                    req: {
+                        batchId: Manager.createBatchId(),
+                        allowedRoots,
+                        items,
+                        linkFallbackCopy,
+                    },
                 },
             );
             for (const item of result) {
-                states.set(item.file, item.ok);
+                states.set(item.file, { ok: item.ok, error: item.error });
             }
-        } catch {
+        } catch (error) {
+            // 后端不可达等整批异常：每项记 false，并带上整批异常原话
+            const message = error instanceof Error ? error.message : String(error);
             for (const item of items) {
-                states.set(item.file, false);
+                states.set(item.file, { ok: false, error: message });
             }
         }
         return states;
@@ -310,10 +315,14 @@ export class Manager {
             [modStorage, targetRoot],
             false,
         );
-        return slots.map((slot) => ({
-            file: slot.file,
-            state: slot.item === null ? false : (states.get(slot.file) ?? false),
-        }));
+        return slots.map((slot) => {
+            const entry = states.get(slot.file);
+            return {
+                file: slot.file,
+                state: slot.item === null ? false : (entry?.ok ?? false),
+                error: entry?.error,
+            };
+        });
     }
 
     // 一般卸载
@@ -369,7 +378,8 @@ export class Manager {
                 result.push({ file: slot.file, state: false });
                 continue;
             }
-            result.push({ file: slot.file, state: states.get(slot.file) ?? false });
+            const entry = states.get(slot.file);
+            result.push({ file: slot.file, state: entry?.ok ?? false, error: entry?.error });
             await Manager.deleteEmptyFolders(await dirname(slot.item.dst));
         }
         return result;
@@ -483,8 +493,8 @@ export class Manager {
             false,
         );
         for (const slot of slots) {
-            const state = states.get(slot.file) ?? false;
-            result.push({ file: slot.file, state });
+            const entry = states.get(slot.file);
+            result.push({ file: slot.file, state: entry?.ok ?? false, error: entry?.error });
             if (!isInstall) {
                 await Manager.deleteEmptyFolders(await dirname(slot.target));
             }

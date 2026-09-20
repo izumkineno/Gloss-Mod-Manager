@@ -116,7 +116,14 @@ watch(
     () => manager.managerGame,
     () => void fetchTrending(),
 );
-onMounted(() => void fetchTrending());
+onMounted(() => {
+    // 主页挂载即预热水合：Nexus API key + Cookie，collection/探索页首次建任务不再撞空读。
+    void import("@/lib/secret-store").then(({ SecretStore }) => {
+        SecretStore.prewarm();
+        void SecretStore.ready("nexusModsToken", "nexusModsCookie");
+    });
+    void fetchTrending();
+});
 </script>
 <template>
     <div class="mx-auto w-full max-w-[1560px] space-y-6">

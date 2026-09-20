@@ -1169,10 +1169,19 @@ async function toggleModInstall(mod: IModInfo, install: boolean) {
             : await executeTypeInstall(type, handler, mod, install);
 
     if (!isOperationSuccessful(result)) {
+        const failedFile =
+            typeof result === "boolean"
+                ? "未知文件"
+                : (result.find((item) => !item.state)?.file ?? "未知文件");
+        const detail =
+            typeof result === "boolean"
+                ? ""
+                : (result.find((item) => !item.state)?.error?.trim() ?? "");
+        const reason = detail ? `：${detail}` : "";
         throw new Error(
             install
-                ? `安装 ${mod.modName} 失败，请检查游戏路径和文件权限。`
-                : `卸载 ${mod.modName} 失败，请检查目标文件是否被占用。`,
+                ? `安装 ${mod.modName} 失败：${failedFile}${reason}`
+                : `卸载 ${mod.modName} 失败：${failedFile}${reason}`,
         );
     }
 

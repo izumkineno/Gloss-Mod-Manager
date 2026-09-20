@@ -199,9 +199,10 @@ function getPendingTaskStatus(item: INexusCollectionPendingItem): string | null 
     }
     return null;
 }
-// 实时任务是否存在：以下载列表为准，持久化 status 可能是幽灵标记（任务已删但标记残留）。
+// 实时任务是否存在：仅 active/waiting/paused 算存活；complete/error 已终局，不算 live，否则失败行按钮被藏、批量重试跳过它们。
 function hasLiveTask(item: INexusCollectionPendingItem): boolean {
-    return getPendingTask(item) !== null;
+    const task = getPendingTask(item);
+    return task !== null && ["active", "waiting", "paused"].includes(task.status);
 }
 
 // Mod 列表识别：本地已装（webId 匹配外部 modId）。
@@ -287,6 +288,44 @@ function ensureEntryDefaults(entry: INexusCollectionPending) {
         [entry.id]: entry.items.filter((item) => !item.optional && isItemSelectable(item)).map(getItemKey),
     };
 }
+// 条目全选：仅当前过滤+分页可见且可勾选的行。
+function getSelectablePageItems(entry: INexusCollectionPending): INexusCollectionPendingItem[] {
+    return getPaginatedItems(entry).filter(isItemSelectable);
+}
+function isPageAllSelected(entry: INexusCollectionPending): boolean {
+    const keys = getSelectablePageItems(entry).map(getItemKey);
+    if (keys.length === 0) return false;
+    const selected = new Set(getSelectedKeys(entry.id));
+    return keys.every((key) => selected.has(key));
+}
+function togglePageSelectAll(entry: INexusCollectionPending, checked: boolean) {
+    ensureEntryDefaults(entry);
+    const current = new Set(getSelectedKeys(entry.id));
+    for (const item of getSelectablePageItems(entry)) {
+        if (checked) current.add(getItemKey(item));
+        else current.delete(getItemKey(item));
+    }
+    selectedPendingItems.value = { ...selectedPendingItems.value, [entry.id]: [...current] };
+}
+// 整个 collection 全选：当前过滤下全部可勾选的行（跨分页）。
+function getSelectableEntryItems(entry: INexusCollectionPending): INexusCollectionPendingItem[] {
+    return filteredItemsOf(entry).filter(isItemSelectable);
+}
+function isEntryAllSelected(entry: INexusCollectionPending): boolean {
+    const keys = getSelectableEntryItems(entry).map(getItemKey);
+    if (keys.length === 0) return false;
+    const selected = new Set(getSelectedKeys(entry.id));
+    return keys.every((key) => selected.has(key));
+}
+function toggleEntrySelectAll(entry: INexusCollectionPending, checked: boolean) {
+    ensureEntryDefaults(entry);
+    const current = new Set(getSelectedKeys(entry.id));
+    for (const item of getSelectableEntryItems(entry)) {
+        if (checked) current.add(getItemKey(item));
+        else current.delete(getItemKey(item));
+    }
+    selectedPendingItems.value = { ...selectedPendingItems.value, [entry.id]: [...current] };
+}
 // 条目 mod 计数：共 X · 必装 Y · 可选 Z · 已导入 W。
 function getEntryCounts(entry: INexusCollectionPending): { total: number; required: number; optional: number; done: number } {
     const total = entry.items.length;
@@ -310,8 +349,12 @@ function getErrorMessage(error: unknown): string {
     if (typeof error === "string" && error.trim()) return error;
     return "操作失败。";
 }
-
+// 建任务 in-flight 锁：同 modId:fileId 同时只允许一个建任务流程（并发 batch + 用户连点重试都会撞上），否则同资源建出重复任务。
+const queueInflightKeys = new Set<string>();
 async function queueSinglePendingItem(entry: INexusCollectionPending, item: INexusCollectionPendingItem) {
+    const queueKey = `${item.modId}:${item.fileId}`;
+    if (queueInflightKeys.has(queueKey)) return;
+    queueInflightKeys.add(queueKey);
     const { updateCollectionPendingItem } = await import("@/lib/nexus-collection-pending");
     console.debug(`[auth] queueSingle modId=${item.modId} userNull=${settings.nexusModsUser == null} keyLen=${settings.nexusModsUser?.key?.trim().length ?? 0} mode=${settings.nexusModsDownloadMode}`);
     const singleTag = `[single] modId=${item.modId} fileId=${item.fileId}`;
@@ -371,6 +414,8 @@ async function queueSinglePendingItem(entry: INexusCollectionPending, item: INex
         await updateCollectionPendingItem(entry.id, item.modId, item.fileId, "failed", rawReason);
         await refreshCollectionPending();
         ElMessage.error(rawReason);
+    } finally {
+        queueInflightKeys.delete(queueKey);
     }
 }
 
@@ -412,14 +457,21 @@ async function retryPendingEntry(entry: INexusCollectionPending) {
         // 关闸失败不中断，继续建任务。
     }
     retryProgressMap.value = { ...retryProgressMap.value, [entry.id]: { done: 0, total: todo.length, cancelled: false } };
-    for (const item of todo) {
+    const batchSize = Math.max(1, Math.floor(Number(settings.collectionPushBatch) || 1));
+    const batchInterval = Math.max(0, Number(settings.collectionPushInterval) || 0);
+    for (let i = 0; i < todo.length; i += batchSize) {
         if (retryProgressMap.value[entry.id]?.cancelled) break;
         // 背压：等待中任务达上限即暂停塞入，setTimeout 隔 5s 检查一次，直到有空位或取消。
         await waitForQueueSlot(entry.id);
         if (retryProgressMap.value[entry.id]?.cancelled) break;
-        await queueSinglePendingItem(entry, item);
+        const batch = todo.slice(i, i + batchSize);
+        await Promise.all(batch.map((item) => queueSinglePendingItem(entry, item)));
         const prog = retryProgressMap.value[entry.id];
-        if (prog) retryProgressMap.value = { ...retryProgressMap.value, [entry.id]: { ...prog, done: prog.done + 1 } };
+        if (prog) retryProgressMap.value = { ...retryProgressMap.value, [entry.id]: { ...prog, done: Math.min(todo.length, prog.done + batch.length) } };
+        // 批次间隔：给 Nexus API 限流留气口，下批前等待。
+        if (batchInterval > 0 && i + batchSize < todo.length) {
+            await new Promise((resolve) => setTimeout(resolve, batchInterval));
+        }
     }
     const wasCancelled = retryProgressMap.value[entry.id]?.cancelled ?? false;
     const { [entry.id]: _dropped, ...rest } = retryProgressMap.value;
@@ -569,6 +621,10 @@ onUnmounted(() => {
                         </div>
                     </div>
                     <div v-if="expandedPendingIds.includes(entry.id)" class="mt-3 max-h-[48vh] space-y-2 overflow-y-auto pr-1">
+                        <div class="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm">
+                            <input type="checkbox" class="h-4 w-4 shrink-0 accent-primary" :checked="isPageAllSelected(entry)" :disabled="getSelectablePageItems(entry).length === 0" title="全选本页" @click.stop @change="togglePageSelectAll(entry, ($event.target as HTMLInputElement).checked)" />
+                            <span class="text-xs text-muted-foreground">全选本页（{{ getSelectablePageItems(entry).length }} 个可勾选）</span>
+                        </div>
                         <ContextMenu v-for="item in getPaginatedItems(entry)" :key="`${item.modId}:${item.fileId}`">
 <ContextMenuTrigger as-child>
 <div class="flex flex-col gap-2 rounded-xl border px-3 py-2 text-sm sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
@@ -618,6 +674,8 @@ onUnmounted(() => {
 </article>
 </ContextMenuTrigger>
 <ContextMenuContent class="w-48">
+<ContextMenuItem @select="toggleEntrySelectAll(entry, !isEntryAllSelected(entry))"><IconListChecks class="mr-2 h-4 w-4" />{{ isEntryAllSelected(entry) ? "取消选择所有" : "选择所有" }}</ContextMenuItem>
+<ContextMenuItem @select="togglePageSelectAll(entry, !isPageAllSelected(entry))"><IconCheckSquare class="mr-2 h-4 w-4" />{{ isPageAllSelected(entry) ? "取消全选" : "全选本页" }}</ContextMenuItem>
 <ContextMenuItem @select="togglePendingExpanded(entry.id)"><IconEye class="mr-2 h-4 w-4" />{{ expandedPendingIds.includes(entry.id) ? "收起" : "展开" }}</ContextMenuItem>
 <ContextMenuItem @select="retryPendingEntry(entry)"><IconRefreshCw class="mr-2 h-4 w-4" />重试未完成</ContextMenuItem>
 <ContextMenuItem @select="pauseCollectionEntry(entry)"><IconPause class="mr-2 h-4 w-4" />暂停下载</ContextMenuItem>

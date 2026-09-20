@@ -162,6 +162,16 @@ export const useSettings = defineStore("Settings", () => {
         "collectionQueueLimit",
         10,
     );
+    // Collection 推送：单次并发推送个数（默认 1，即串行逐个建任务）。
+    const collectionPushBatch = PersistentStore.useValue<number>(
+        "collectionPushBatch",
+        1,
+    );
+    // Collection 推送频率：每批建任务后的等待间隔毫秒数（默认 1000）。
+    const collectionPushInterval = PersistentStore.useValue<number>(
+        "collectionPushInterval",
+        1000,
+    );
     const baseUrl = PersistentStore.useValue<string>("agentbaseUrl", "");
     // AI API Key 与 GlossMod Key 属于凭据，从明文配置迁移到加密存储。
     const apiKey = SecretStore.useValue("agentApiKey", "agentApiKey");
@@ -389,6 +399,8 @@ export const useSettings = defineStore("Settings", () => {
         nexusModsCookie,
         nexusModsDownloadMode,
         collectionQueueLimit,
+        collectionPushBatch,
+        collectionPushInterval,
         nexusModsAuthorized,
         nexusModsLoginLoading,
         debugInfo,

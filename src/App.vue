@@ -5,7 +5,7 @@ import "@/lib/global";
     <Layout>
         <RouterView />
         <DownloadFilePickerDialog />
-        <GlobalLoadingOverlay />
+        <FomodWizardDialog />
     </Layout>
 </template>
 <style scoped></style>

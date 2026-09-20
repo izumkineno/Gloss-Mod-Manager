@@ -76,14 +76,15 @@ describe("Manager 批量安装编排", () => {
         expect(invokeMock).toHaveBeenCalledTimes(1);
         const [command, args] = invokeMock.mock.calls[0] as [string, Record<string, unknown>];
         expect(command).toBe("mod_install_batch");
-        expect(args.allowedRoots).toEqual(["/storage/mods/G/1", "/game/Data"]);
-        expect(args.items).toEqual([
+        const req = args.req as Record<string, unknown>;
+        expect(req.allowedRoots).toEqual(["/storage/mods/G/1", "/game/Data"]);
+        expect(req.items).toEqual([
             { file: "a.txt", src: "/storage/mods/G/1/a.txt", dst: "/game/Data/a.txt", op: "copy", backup: "gmmback" },
             { file: "sub/b.txt", src: "/storage/mods/G/1/sub/b.txt", dst: "/game/Data/b.txt", op: "copy", backup: "gmmback" },
         ]);
         expect(result).toEqual([
-            { file: "a.txt", state: true },
-            { file: "sub/b.txt", state: false },
+            { file: "a.txt", state: true, error: undefined },
+            { file: "sub/b.txt", state: false, error: "文件不存在" },
         ]);
     });
 
@@ -93,7 +94,8 @@ describe("Manager 批量安装编排", () => {
         await Manager.generalInstall(mod(["sub/b.txt"]), "Data", true);
 
         const [, args] = invokeMock.mock.calls[0] as [string, Record<string, unknown>];
-        expect((args.items as Array<Record<string, string>>)[0].dst).toBe("/game/Data/sub/b.txt");
+        const req = args.req as { items: Array<Record<string, string>> };
+        expect(req.items[0].dst).toBe("/game/Data/sub/b.txt");
     });
 
     it("后端整批异常时逐项记 false（照搬旧逐项 catch）", async () => {
@@ -101,7 +103,7 @@ describe("Manager 批量安装编排", () => {
 
         const result = await Manager.generalInstall(mod(["a.txt"]), "Data", false);
 
-        expect(result).toEqual([{ file: "a.txt", state: false }]);
+        expect(result).toEqual([{ file: "a.txt", state: false, error: "backend down" }]);
     });
 
     it("generalUninstall 发 remove 项（源存在时一次 invoke）", async () => {
@@ -112,9 +114,10 @@ describe("Manager 批量安装编排", () => {
 
         const [command, args] = invokeMock.mock.calls[0] as [string, Record<string, unknown>];
         expect(command).toBe("mod_install_batch");
-        expect(args.items).toEqual([
+        const req = args.req as { items: unknown };
+        expect(req.items).toEqual([
             { file: "a.txt", src: "/storage/mods/G/1/a.txt", dst: "/game/Data/a.txt", op: "remove", backup: "gmmback" },
         ]);
-        expect(result).toEqual([{ file: "a.txt", state: true }]);
+        expect(result).toEqual([{ file: "a.txt", state: true, error: undefined }]);
     });
 });

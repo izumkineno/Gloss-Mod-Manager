@@ -1,9 +1,43 @@
-import { basename, join } from "@tauri-apps/api/path";
+import { basename, join, sep } from "@tauri-apps/api/path";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 import { FileHandler } from "@/lib/FileHandler";
 import { Manager } from "@/lib/Manager";
+import { parseFomodConfig, resolveFomodInstallFiles } from "@/lib/fomod-parser";
+import type { FomodConfig, FomodFileMapping, FomodSelectionResolver } from "@/lib/fomod-parser";
 import { SevenZip } from "@/lib/sevenZip";
 import { SidecarExecutionError } from "@/lib/sidecar";
 import { useManager } from "@/stores/manager";
+
+// 中文注释：在解压目录中探测 fomod/ModuleConfig.xml（大小写不敏感），命中返回解析后的配置
+async function detectFomodConfig(stagingDir: string): Promise<{ baseDir: string; config: FomodConfig } | null> {
+    for (const dirName of ["fomod", "FOMOD", "Fomod"]) {
+        const xmlPath = await join(stagingDir, dirName, "ModuleConfig.xml");
+        if (!(await FileHandler.fileExists(xmlPath))) continue;
+        const xml = await readTextFile(xmlPath);
+        return { baseDir: stagingDir, config: parseFomodConfig(xml) };
+    }
+    return null;
+}
+
+// 中文注释：按选中文件映射裁剪解压目录：只保留命中的 source 树 + 删除 fomod 目录
+async function pruneStagingToFomodSelection(stagingDir: string, files: FomodFileMapping[]): Promise<void> {
+    const separator = sep();
+    // 保留前缀集合（source 可能是文件或目录，统一按路径前缀匹配）
+    const keepPrefixes = files.map((f) => f.source.split(/[\\/]/).join(separator).toLowerCase());
+    const allFiles = await FileHandler.getAllFilesInFolder(stagingDir, true, true);
+    for (const absPath of allFiles) {
+        const rel = await FileHandler.relativePath(stagingDir, absPath);
+        const norm = rel.split(/[\\/]/).join(separator).toLowerCase();
+        // fomod 目录自身永远删除
+        if (norm === "fomod" || norm.startsWith(`fomod${separator}`)) continue;
+        const kept = keepPrefixes.some((prefix) => norm === prefix || norm.startsWith(`${prefix}${separator}`));
+        if (!kept) await FileHandler.deleteFile(absPath);
+    }
+    // 删 fomod 目录（只收文件，空目录自然忽略）
+    for (const dirName of ["fomod", "FOMOD", "Fomod"]) {
+        await FileHandler.deleteFolder(await join(stagingDir, dirName));
+    }
+}
 
 export const ARCHIVE_EXTENSIONS = [
     "zip",
@@ -17,13 +51,13 @@ export const ARCHIVE_EXTENSIONS = [
 
 export type LocalModImportSourceType = "archive" | "folder" | "file";
 export type LocalModImportDuplicateStrategy = "create" | "overwrite";
-
 export interface ILocalModImportSource {
     path: string;
     sourceType: LocalModImportSourceType;
     metadata?: Partial<IModInfo>;
     duplicateStrategy?: LocalModImportDuplicateStrategy;
     targetMod?: IModInfo;
+    fomodSelection?: FomodSelectionResolver;
 }
 
 interface ILocalModImportResult {
@@ -214,6 +248,18 @@ async function materializeImportSource(
             archivePath: source.path,
             outputDirectory: targetFolder,
         });
+        // FOMOD 安装器：命中 ModuleConfig.xml 且调用方给了向导回调时，按用户选择裁剪；取消则抛错中止本次导入。
+        if (source.fomodSelection) {
+            const detected = await detectFomodConfig(targetFolder);
+            if (detected) {
+                const selected = await source.fomodSelection(detected.config);
+                if (selected === null) {
+                    throw new Error("已取消 FOMOD 安装。");
+                }
+                const files = resolveFomodInstallFiles(detected.config, selected, {});
+                await pruneStagingToFomodSelection(targetFolder, files);
+            }
+        }
         return true;
     }
 

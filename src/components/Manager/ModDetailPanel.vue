@@ -1,12 +1,16 @@
 <script setup lang="ts">
+import { computed, ref, watch } from "vue";
+import { storeToRefs } from "pinia";
 import { PanelRightClose } from "lucide-vue-next";
 import RichModDesc from "@/components/common/RichModDesc.vue";
+import { fetchNexusModsModMeta } from "@/lib/third-party-mod-api";
+import { useSettings } from "@/stores/settings";
+import { useManager } from "@/stores/manager";
 
 const MANAGER_FALLBACK_COVER = "/imgs/logo.png";
 
 const manager = useManager();
 const { selectedDetailModId, detailPanelOpen } = storeToRefs(manager);
-
 // 当前选中的 mod（本地字段兜底展示）
 const detailMod = computed(() => {
     if (selectedDetailModId.value == null) return null;
@@ -16,6 +20,52 @@ const detailMod = computed(() => {
         ) ?? null
     );
 });
+
+// 在线懒加载：老数据本地介绍/封面为空时，现取线上并写回本地。
+// 触发条件：Nexus 来源 + 有 webId + 介绍或封面缺失；失败静默，保持本地展示。
+const settings = useSettings();
+const onlineDesc = ref("");
+const onlineCover = ref("");
+const onlineLoading = ref(false);
+watch(detailMod, async (mod) => {
+    onlineDesc.value = "";
+    onlineCover.value = "";
+    if (!mod) return;
+    const needDesc = !mod.modDesc?.trim();
+    const needCover = !mod.cover?.trim();
+    if (!needDesc && !needCover) return;
+    if (mod.from !== "NexusMods") return;
+    const webId = String(mod.webId ?? "").trim();
+    if (!webId || webId === "0") return;
+    const gameDomain = manager.managerGame?.nexusMods?.game_domain_name?.trim() ?? "";
+    if (!gameDomain) return;
+    onlineLoading.value = true;
+    try {
+        const meta = await fetchNexusModsModMeta(gameDomain, webId, settings.nexusModsUser);
+        if (!meta || selectedDetailModId.value !== mod.id) return;
+        const desc = meta.description || meta.summary || "";
+        if (needDesc && desc) onlineDesc.value = desc;
+        if (needCover && meta.cover) onlineCover.value = meta.cover;
+        if (!onlineDesc.value && !onlineCover.value) return;
+        // 写回本地持久化，下次直接读本地不再请求（cover 走 normalizeMod 直写，saveEditedMod 不带 cover 字段）。
+        manager.managerModList = manager.managerModList.map((item) =>
+            item.id !== mod.id ? item : manager.normalizeMod({
+                ...item,
+                modAuthor: meta.author || item.modAuthor,
+                modDesc: needDesc && desc ? desc : item.modDesc,
+                cover: needCover && meta.cover ? meta.cover : item.cover,
+            }),
+        );
+        await manager.saveManagerData();
+    } catch {
+        // 在线取不到保持本地展示，不打扰用户。
+    } finally {
+        onlineLoading.value = false;
+    }
+}, { immediate: true });
+
+// 本地优先，在线兜底。
+const descSource = computed(() => detailMod.value?.modDesc || onlineDesc.value);
 
 interface IFileTreeNode {
     name: string;
@@ -77,7 +127,9 @@ function closePanel() {
 }
 
 function getCoverSrc(item: IModInfo) {
-    return item.cover || MANAGER_FALLBACK_COVER;
+    if (item.cover?.trim()) return item.cover;
+    if (detailMod.value && item.id === detailMod.value.id && onlineCover.value) return onlineCover.value;
+    return MANAGER_FALLBACK_COVER;
 }
 // 介绍渲染已抽到公共组件 RichModDesc
 </script>
@@ -136,7 +188,8 @@ function getCoverSrc(item: IModInfo) {
                 <div class="text-xs font-medium text-muted-foreground">
                     介绍
                 </div>
-                <RichModDesc :source="detailMod.modDesc" compact />
+                <RichModDesc :source="descSource" compact />
+                <p v-if="onlineLoading" class="text-xs text-muted-foreground">正在加载在线介绍…</p>
             </div>
             <!-- 官网 -->
             <Button
