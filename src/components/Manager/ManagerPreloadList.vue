@@ -712,7 +712,7 @@ async function queuePreload(item: IGamePlugins) {
 
 <template>
     <Card v-if="shouldShowCard">
-        <CardHeader class="gap-3">
+        <CardHeader class="gap-1">
             <CardTitle
                 class="flex flex-wrap items-center justify-between gap-3"
             >
@@ -749,7 +749,7 @@ async function queuePreload(item: IGamePlugins) {
                 </Button>
             </CardTitle>
         </CardHeader>
-        <CardContent class="space-y-3">
+        <CardContent class="space-y-1">
             <div v-if="loading" class="space-y-3">
                 <div
                     v-for="index in 2"

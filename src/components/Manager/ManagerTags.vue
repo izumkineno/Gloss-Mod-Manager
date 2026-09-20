@@ -20,6 +20,13 @@ const pendingTagName = ref("");
 const pendingPointerPosition = ref<{ x: number; y: number } | null>(null);
 // 下拉开关：选完标签自动收起
 const tagPopoverOpen = ref(false);
+const props = defineProps<{
+    headless?: boolean;
+}>();
+function openCreate() {
+    openCreateTagDialog();
+}
+defineExpose({ openCreate });
 
 function openCreateTagDialog() {
     resetTagEditor();
@@ -184,29 +191,29 @@ function resetTagEditor() {
 </script>
 <template>
     <!-- 标签下拉：筛选 + 颜色点 + 右键编辑/删除 + 拖拽排序 + 新增，全在 popover 里 -->
-    <Popover v-model:open="tagPopoverOpen">
+    <Popover v-if="!props.headless" v-model:open="tagPopoverOpen">
         <PopoverTrigger as-child>
             <Button variant="outline" size="sm" class="shrink-0">
-                <span
-                    v-if="manager.selectedTag !== '全部'"
+                <span v-if="manager.selectedTag !== '全部' && manager.selectedTag !== manager.UNTAGGED_FILTER"
                     class="h-2.5 w-2.5 rounded-full"
-                    :style="{ backgroundColor: manager.tags.find((t) => t.name === manager.selectedTag)?.color ?? 'transparent' }"
-                />
+                    :style="{ backgroundColor: manager.tags.find((t) => t.name === manager.selectedTag)?.color ?? 'transparent' }" />
+                <span v-else-if="manager.selectedTag === manager.UNTAGGED_FILTER"
+                    class="h-2.5 w-2.5 rounded-full border border-dashed border-muted-foreground" />
                 {{ manager.selectedTag === "全部" ? "标签" : manager.selectedTag }}
             </Button>
         </PopoverTrigger>
         <PopoverContent align="start" class="w-56 p-1">
-            <button
-                class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
-                :class="manager.selectedTag === '全部' ? 'bg-accent' : ''"
-                @click="pickTag('全部')"
-            >
+            <button class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
+                :class="manager.selectedTag === '全部' ? 'bg-accent' : ''" @click="pickTag('全部')">
                 全部标签
             </button>
-            <div
-                v-for="tag in manager.tags"
-                :key="tag.name"
-            >
+            <button class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent"
+                :class="manager.selectedTag === manager.UNTAGGED_FILTER ? 'bg-accent' : ''"
+                @click="pickTag(manager.UNTAGGED_FILTER)">
+                <span class="h-2.5 w-2.5 rounded-full border border-dashed border-muted-foreground" />
+                未打标签
+            </button>
+            <div v-for="tag in manager.tags" :key="tag.name">
                 <ContextMenu>
                     <ContextMenuTrigger
                         class="flex w-full cursor-grab items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent active:cursor-grabbing"
@@ -215,18 +222,11 @@ function resetTagEditor() {
                             dragTargetTagName === tag.name && managerDraggingTagName !== tag.name
                                 ? 'ring-1 ring-primary/50 bg-primary/5'
                                 : '',
-                        ]"
-                        @click="pickTag(tag.name)"
-                        @pointerdown="handleTagPointerDown($event, tag)"
-                        @pointerenter="handleTagPointerEnter(tag)"
-                        @pointerleave="handleTagPointerLeave(tag)"
-                    >
-                        <div
-                            class="h-2.5 w-2.5 shrink-0 rounded-full"
-                            :style="{
-                                backgroundColor: tag.color,
-                            }"
-                        />
+                        ]" @click="pickTag(tag.name)" @pointerdown="handleTagPointerDown($event, tag)"
+                        @pointerenter="handleTagPointerEnter(tag)" @pointerleave="handleTagPointerLeave(tag)">
+                        <div class="h-2.5 w-2.5 shrink-0 rounded-full" :style="{
+                            backgroundColor: tag.color,
+                        }" />
                         <span class="min-w-0 flex-1 truncate text-left">{{ tag.name }}</span>
                     </ContextMenuTrigger>
                     <ContextMenuContent class="w-32">
@@ -236,8 +236,8 @@ function resetTagEditor() {
                         </ContextMenuItem>
                         <ContextMenuItem @select="deleteTag(tag)">
                             <IconTrash class="h-4 w-4" />
-                            删除</ContextMenuItem
-                        >
+                            删除
+                        </ContextMenuItem>
                     </ContextMenuContent>
                 </ContextMenu>
             </div>
@@ -258,10 +258,7 @@ function resetTagEditor() {
             </DialogHeader>
             <DialogDescription class="flex flex-col gap-2">
                 <InputGroup>
-                    <InputGroupInput
-                        v-model="tagName"
-                        placeholder="标签名称"
-                    />
+                    <InputGroupInput v-model="tagName" placeholder="标签名称" />
                     <InputGroupAddon align="inline-end">
                         <input type="color" v-model="tagColor" />
                     </InputGroupAddon>

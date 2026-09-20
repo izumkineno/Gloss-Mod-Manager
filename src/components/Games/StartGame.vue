@@ -4,6 +4,7 @@ import { ElMessage } from "element-plus-message";
 
 const props = defineProps<{
     game: ISupportedGames;
+    compact?: boolean;
 }>();
 
 async function launchGame(startItem?: string | IStartExe) {
@@ -57,14 +58,14 @@ async function launchGame(startItem?: string | IStartExe) {
 <template>
     <Button
         v-if="typeof game.startExe === 'string'"
-        variant="outline"
+        variant="outline" size="sm" v-bind:class="props.compact ? 'h-7 text-xs gap-1 px-2' : ''"
         @click="launchGame(game.startExe)">
         <IconPlay class="h-4 w-4" />
         启动游戏
     </Button>
     <DropdownMenu v-else-if="Array.isArray(game.startExe)">
         <DropdownMenuTrigger>
-            <Button variant="outline">
+            <Button variant="outline" size="sm" v-bind:class="props.compact ? 'h-7 text-xs gap-1 px-2' : ''">
                 <IconPlay class="h-4 w-4" />
                 启动游戏
             </Button>

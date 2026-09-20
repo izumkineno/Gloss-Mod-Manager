@@ -65,6 +65,8 @@ const updateChecking = ref(false);
 const fileDropActive = ref(false);
 const dragImportRootRef = ref<HTMLElement | null>(null);
 const managerGmmDialogRef = ref<IManagerGmmDialogExpose | null>(null);
+const customTypeDialogRef = ref<{ open: () => void } | null>(null);
+const tagManagerRef = ref<{ openCreate: () => void } | null>(null);
 // 批量进度：当前 mod 名 + batch 内 done/total + 已完成 mod 数。
 const batchRunning = ref(false);
 const batchTitle = ref("");
@@ -81,7 +83,7 @@ const batchResultItems = ref<Array<{ name: string; ok: boolean; error?: string }
 const showBatchEditDialog = ref(false);
 const batchEditForm = reactive<IBatchEditForm>({
     modAuthor: "",
-    modType: "",
+    modType: "__keep__",
     modVersion: "",
     modWebsite: "",
     tagsText: "",
@@ -215,11 +217,19 @@ function resetFileDragState() {
     fileDropActive.value = false;
 }
 
+function toggleBatchTag(name: string) {
+    const parts = batchEditForm.tagsText.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    const idx = parts.indexOf(name);
+    if (idx >= 0) parts.splice(idx, 1);
+    else parts.push(name);
+    batchEditForm.tagsText = parts.join(", ");
+}
+
 async function applyBatchEdit() {
     await manager.applyBatchEdit({
         modIds: selectionIds.value,
         modAuthor: batchEditForm.modAuthor,
-        modType: batchEditForm.modType,
+        modType: batchEditForm.modType === "__keep__" ? "" : batchEditForm.modType,
         modVersion: batchEditForm.modVersion,
         modWebsite: batchEditForm.modWebsite,
         tagsText: batchEditForm.tagsText,
@@ -796,133 +806,161 @@ function openGamesPage() {
             <div class="flex min-h-0 flex-1 items-stretch gap-4 overflow-hidden">
                 <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden">
                     <div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
-                    <!-- 工具栏 + 列表同一容器：操作 / 搜索 / 筛选一行，标签一行，列表紧跟 -->
-                    <div class="flex shrink-0 flex-col gap-2 border-b px-3 py-2">
-                    <div class="flex flex-wrap items-center gap-2">
-                    <DropdownMenu>
-                        <DropdownMenuTrigger>
-                            <Button variant="secondary" size="sm">
-                                <FolderPlus class="h-4 w-4" />导入
-                            </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start">
-                            <DropdownMenuItem @click="importModFolder">
-                                <FolderPlus class="h-4 w-4" />
-                                导入文件夹
-                            </DropdownMenuItem>
-                            <DropdownMenuItem @click="importModArchive">
-                                <FolderPlus class="h-4 w-4" />
-                                导入压缩包
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem @click="importGmmFile">
-                                <Package class="h-4 w-4" />
-                                导入 GMM 包
-                            </DropdownMenuItem>
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-                    <StartGame :game="manager.managerGame" />
-                    <DropdownMenu>
-                        <DropdownMenuTrigger>
-                            <Button variant="outline" size="sm">
-                                <IconMenu class="h-4 w-4" />
-                                更多
-                            </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" class="w-56">
-                            <DropdownMenuItem @click="manager.loadManagerData()">
-                                <RefreshCw class="h-4 w-4" />
-                                刷新
-                            </DropdownMenuItem>
-                            <DropdownMenuItem :disabled="updateChecking" @click="checkForUpdates">
-                                <Download class="h-4 w-4" />
-                                {{ updateChecking ? "检查中…" : "检查更新" }}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem @click="manager.selectionMode = !manager.selectionMode">
-                                <CheckSquare class="h-4 w-4" />
-                                多选
-                            </DropdownMenuItem>
-                            <DropdownMenuItem @click="managerGridEnabled = !managerGridEnabled">
-                                <component :is="managerGridEnabled ? ListIcon : LayoutGrid" class="h-4 w-4" />
-                                {{ managerGridEnabled ? "列表" : "网格" }}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem @click="manager.detailPanelOpen = !manager.detailPanelOpen">
-                                <SquarePen class="h-4 w-4" />
-                                {{ manager.detailPanelOpen ? "关闭详情栏" : "打开详情栏" }}
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem @click="openModRootFolder">
-                                <FolderOpen class="h-4 w-4" />
-                                打开 Mod 目录
-                            </DropdownMenuItem>
-                            <DropdownMenuItem @click="openGameFolder">
-                                <FolderOpen class="h-4 w-4" />
-                                打开游戏目录
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem :disabled="!manager.managerModList.length" @click="openGmmExportDialog">
-                                <Upload class="h-4 w-4" />
-                                导出 GMM 包
-                            </DropdownMenuItem>
-                        </DropdownMenuContent>
-                    </DropdownMenu>
-                    <Select v-model="manager.selectedType">
-                        <SelectTrigger class="w-36 shrink-0">
-                            <SelectValue placeholder="类型" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem :value="0">全部类型 ({{ getTypeCount(0) }})</SelectItem>
-                            <SelectItem v-for="item in manager.availableTypes" :key="item.id" :value="item.id">{{ item.name }} ({{ getTypeCount(item.id) }})</SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <ManagerTags />
-                    <Select v-model="manager.installStatus">
-                        <SelectTrigger class="w-28 shrink-0">
-                            <SelectValue placeholder="状态" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">全部状态</SelectItem>
-                            <SelectItem value="installed">已安装</SelectItem>
-                            <SelectItem value="uninstalled">未安装</SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <Select v-model="manager.pageSize">
-                        <SelectTrigger class="w-20 shrink-0">
-                            <SelectValue placeholder="每页" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem :value="50">50 / 页</SelectItem>
-                            <SelectItem :value="100">100 / 页</SelectItem>
-                            <SelectItem :value="200">200 / 页</SelectItem>
-                        </SelectContent>
-                    </Select>
-                    <CustomTypeDialog />
+                        <!-- 工具栏 + 列表同一容器：操作 / 搜索 / 筛选一行，标签一行，列表紧跟 -->
+                        <div class="flex shrink-0 flex-col gap-2 border-b px-3 py-2">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger>
+                                        <Button variant="secondary" size="sm">
+                                            <FolderPlus class="h-4 w-4" />导入
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="start">
+                                        <DropdownMenuItem @click="importModFolder">
+                                            <FolderPlus class="h-4 w-4" />
+                                            导入文件夹
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem @click="importModArchive">
+                                            <FolderPlus class="h-4 w-4" />
+                                            导入压缩包
+                                        </DropdownMenuItem>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem @click="importGmmFile">
+                                            <Package class="h-4 w-4" />
+                                            导入 GMM 包
+                                        </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger>
+                                        <Button variant="outline" size="sm">
+                                            <IconMenu class="h-4 w-4" />
+                                            更多
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" class="w-56">
+                                        <DropdownMenuItem @click="manager.loadManagerData()">
+                                            <RefreshCw class="h-4 w-4" />
+                                            刷新
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem :disabled="updateChecking" @click="checkForUpdates">
+                                            <Download class="h-4 w-4" />
+                                            {{ updateChecking ? "检查中…" : "检查更新" }}
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem @click="manager.selectionMode = !manager.selectionMode">
+                                            <CheckSquare class="h-4 w-4" />
+                                            多选
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem @click="managerGridEnabled = !managerGridEnabled">
+                                            <component :is="managerGridEnabled ? ListIcon : LayoutGrid"
+                                                class="h-4 w-4" />
+                                            {{ managerGridEnabled ? "列表" : "网格" }}
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem @click="manager.detailPanelOpen = !manager.detailPanelOpen">
+                                            <SquarePen class="h-4 w-4" />
+                                            {{ manager.detailPanelOpen ? "关闭详情栏" : "打开详情栏" }}
+                                        </DropdownMenuItem>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem @click="openModRootFolder">
+                                            <FolderOpen class="h-4 w-4" />
+                                            打开 Mod 目录
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem @click="openGameFolder">
+                                            <FolderOpen class="h-4 w-4" />
+                                            打开游戏目录
+                                        </DropdownMenuItem>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuItem :disabled="!manager.managerModList.length"
+                                            @click="openGmmExportDialog">
+                                            <Upload class="h-4 w-4" />
+                                            导出 GMM 包
+                                        </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                                <Select v-model="manager.selectedType">
+                                    <SelectTrigger class="w-36 shrink-0">
+                                        <SelectValue placeholder="类型" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem :value="0">全部类型 ({{ getTypeCount(0) }})</SelectItem>
+                                        <SelectItem v-for="item in manager.availableTypes" :key="item.id"
+                                            :value="item.id">{{ item.name }} ({{ getTypeCount(item.id) }})</SelectItem>
+                                        <div class="border-t mt-1 pt-1">
+                                            <Button variant="ghost" size="sm" class="w-full justify-start"
+                                                @click="customTypeDialogRef?.open()">
+                                                <IconPlus class="h-4 w-4" />
+                                                新建类型
+                                            </Button>
+                                        </div>
+                                    </SelectContent>
+                                </Select>
+                                <Select v-model="manager.selectedTag">
+                                    <SelectTrigger class="w-36 shrink-0">
+                                        <SelectValue placeholder="标签" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="全部">全部标签</SelectItem>
+                                        <SelectItem :value="manager.UNTAGGED_FILTER">
+                                            <span
+                                                class="h-2.5 w-2.5 rounded-full border border-dashed border-muted-foreground" />
+                                            未打标签
+                                        </SelectItem>
+                                        <SelectItem v-for="tag in manager.tags" :key="tag.name" :value="tag.name">
+                                            <span class="h-2.5 w-2.5 rounded-full"
+                                                :style="{ backgroundColor: tag.color }" />
+                                            {{ tag.name }}
+                                        </SelectItem>
+                                        <div class="border-t mt-1 pt-1">
+                                            <Button variant="ghost" size="sm" class="w-full justify-start"
+                                                @click="tagManagerRef?.openCreate()">
+                                                <IconPlus class="h-4 w-4" />
+                                                新增标签
+                                            </Button>
+                                        </div>
+                                    </SelectContent>
+                                </Select>
+                                <ManagerTags ref="tagManagerRef" headless />
+                                <Select v-model="manager.installStatus">
+                                    <SelectTrigger class="w-28 shrink-0">
+                                        <SelectValue placeholder="状态" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">全部状态</SelectItem>
+                                        <SelectItem value="installed">已安装</SelectItem>
+                                        <SelectItem value="uninstalled">未安装</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <Select v-model="manager.pageSize">
+                                    <SelectTrigger class="w-20 shrink-0">
+                                        <SelectValue placeholder="每页" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem :value="50">50 / 页</SelectItem>
+                                        <SelectItem :value="100">100 / 页</SelectItem>
+                                        <SelectItem :value="200">200 / 页</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                                <CustomTypeDialog ref="customTypeDialogRef" />
+                            </div>
+                        </div>
+                        <div class="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+                            <ManagerPreloadList />
+                            <ManagerList />
+                        </div>
                     </div>
-                    </div>
-                    <div class="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-                    <ManagerPreloadList />
-                    <ManagerList />
-                    </div>
-                </div>
                 </div>
                 <ModDetailPanel />
             </div>
             <Card v-if="manager.loadError">
-                <CardContent
-                    class="flex items-center justify-between gap-4 py-6"
-                >
+                <CardContent class="flex items-center justify-between gap-4 py-6">
                     <p class="text-sm text-destructive">
                         {{ manager.loadError }}
                     </p>
-                    <Button variant="outline" @click="manager.loadManagerData()"
-                        >重试</Button
-                    >
+                    <Button variant="outline" @click="manager.loadManagerData()">重试</Button>
                 </CardContent>
             </Card>
-            <div
-                v-else-if="manager.filteredMods.length === 0"
-                class="rounded-lg border border-dashed px-6 py-16 text-center text-sm text-muted-foreground"
-            >
+            <div v-else-if="manager.filteredMods.length === 0"
+                class="rounded-lg border border-dashed px-6 py-16 text-center text-sm text-muted-foreground">
                 <p>当前没有匹配的 Mod。</p>
                 <p class="mt-2">
                     你可以调整筛选条件，或从上方导入文件夹/压缩包来创建本地 Mod
@@ -930,61 +968,32 @@ function openGamesPage() {
                 </p>
             </div>
             <!-- 多选操作工具栏 -->
-            <div
-                v-if="selectionMode"
-                class="sticky bottom-4 z-10 flex flex-wrap items-center gap-2 rounded-lg border bg-background/90 px-4 py-2 shadow-md backdrop-blur"
-            >
+            <div v-if="selectionMode"
+                class="sticky bottom-4 z-10 flex flex-wrap items-center gap-2 rounded-lg border bg-background/90 px-4 py-2 shadow-md backdrop-blur">
                 <span class="text-sm text-muted-foreground">
                     已选 {{ selectionIds.length }} /
                     {{ manager.filteredMods.length }}
                 </span>
-                <Button
-                    size="sm"
-                    variant="ghost"
-                    @click="manager.selectAllVisible()"
-                >
+                <Button size="sm" variant="ghost" @click="manager.selectAllVisible()">
                     <CheckCheck class="h-4 w-4" />
                     全选
                 </Button>
-                <Button
-                    size="sm"
-                    variant="ghost"
-                    @click="manager.clearSelection()"
-                >
+                <Button size="sm" variant="ghost" @click="manager.clearSelection()">
                     取消
                 </Button>
-                <Button
-                    size="sm"
-                    variant="outline"
-                    :disabled="!selectionIds.length"
-                    @click="batchInstall(true)"
-                >
+                <Button size="sm" variant="outline" :disabled="!selectionIds.length" @click="batchInstall(true)">
                     <Shuffle class="h-4 w-4" />
                     批量安装
                 </Button>
-                <Button
-                    size="sm"
-                    variant="outline"
-                    :disabled="!selectionIds.length"
-                    @click="batchInstall(false)"
-                >
+                <Button size="sm" variant="outline" :disabled="!selectionIds.length" @click="batchInstall(false)">
                     批量卸载
                 </Button>
-                <Button
-                    size="sm"
-                    variant="outline"
-                    :disabled="!selectionIds.length"
-                    @click="showBatchEditDialog = true"
-                >
+                <Button size="sm" variant="outline" :disabled="!selectionIds.length"
+                    @click="showBatchEditDialog = true">
                     <SquarePen class="h-4 w-4" />
                     批量编辑
                 </Button>
-                <Button
-                    size="sm"
-                    variant="destructive"
-                    :disabled="!selectionIds.length"
-                    @click="batchRemove"
-                >
+                <Button size="sm" variant="destructive" :disabled="!selectionIds.length" @click="batchRemove">
                     <Trash2 class="h-4 w-4" />
                     批量移除
                 </Button>
@@ -1002,43 +1011,46 @@ function openGamesPage() {
                     <div class="grid gap-3 py-2">
                         <div class="grid grid-cols-1 items-center gap-3 sm:grid-cols-4">
                             <Label class="text-left sm:text-right">作者</Label>
-                            <Input
-                                v-model="batchEditForm.modAuthor"
-                                class="sm:col-span-3"
-                                placeholder="留空表示不修改"
-                            />
+                            <Input v-model="batchEditForm.modAuthor" class="sm:col-span-3" placeholder="留空表示不修改" />
                         </div>
                         <div class="grid grid-cols-1 items-center gap-3 sm:grid-cols-4">
                             <Label class="text-left sm:text-right">版本</Label>
-                            <Input
-                                v-model="batchEditForm.modVersion"
-                                class="sm:col-span-3"
-                                placeholder="留空表示不修改"
-                            />
+                            <Input v-model="batchEditForm.modVersion" class="sm:col-span-3" placeholder="留空表示不修改" />
                         </div>
                         <div class="grid grid-cols-1 items-center gap-3 sm:grid-cols-4">
                             <Label class="text-left sm:text-right">网站</Label>
-                            <Input
-                                v-model="batchEditForm.modWebsite"
-                                class="sm:col-span-3"
-                                placeholder="留空表示不修改"
-                            />
+                            <Input v-model="batchEditForm.modWebsite" class="sm:col-span-3" placeholder="留空表示不修改" />
+                        </div>
+                        <div class="grid grid-cols-1 items-center gap-3 sm:grid-cols-4">
+                            <Label class="text-left sm:text-right">类型</Label>
+                            <Select v-model="batchEditForm.modType" class="sm:col-span-3">
+                                <SelectTrigger>
+                                    <SelectValue placeholder="留空表示不修改" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="__keep__">不修改</SelectItem>
+                                    <SelectItem v-for="item in manager.availableTypes" :key="item.id" :value="item.id">
+                                        {{ item.name }}</SelectItem>
+                                </SelectContent>
+                            </Select>
                         </div>
                         <div class="grid grid-cols-1 items-center gap-3 sm:grid-cols-4">
                             <Label class="text-left sm:text-right">标签</Label>
-                            <Input
-                                v-model="batchEditForm.tagsText"
-                                class="sm:col-span-3"
-                                placeholder="逗号分隔，留空表示不修改"
-                            />
+                            <Input v-model="batchEditForm.tagsText" class="sm:col-span-3" placeholder="逗号分隔，留空表示不修改" />
+                        </div>
+                        <div v-if="manager.tags.length" class="grid grid-cols-1 gap-3 sm:grid-cols-4">
+                            <Label class="text-left sm:text-right">快选</Label>
+                            <div class="flex flex-wrap gap-1.5 sm:col-span-3">
+                                <Button v-for="tag in manager.tags" :key="tag.name" size="sm" variant="outline"
+                                    class="h-6 px-2 text-xs" @click="toggleBatchTag(tag.name)">
+                                    <span class="h-2 w-2 rounded-full" :style="{ backgroundColor: tag.color }" />
+                                    {{ tag.name }}
+                                </Button>
+                            </div>
                         </div>
                     </div>
                     <DialogFooter>
-                        <Button
-                            variant="outline"
-                            @click="showBatchEditDialog = false"
-                            >取消</Button
-                        >
+                        <Button variant="outline" @click="showBatchEditDialog = false">取消</Button>
                         <Button @click="applyBatchEdit">确定</Button>
                     </DialogFooter>
                 </DialogContent>
@@ -1053,10 +1065,8 @@ function openGamesPage() {
                         </DialogDescription>
                     </DialogHeader>
                     <div class="h-2 w-full overflow-hidden rounded-full bg-muted">
-                        <div
-                            class="h-full rounded-full bg-primary transition-all"
-                            :style="{ width: `${batchFileTotal > 0 ? (batchFileDone / batchFileTotal) * 100 : 0}%` }"
-                        />
+                        <div class="h-full rounded-full bg-primary transition-all"
+                            :style="{ width: `${batchFileTotal > 0 ? (batchFileDone / batchFileTotal) * 100 : 0}%` }" />
                     </div>
                 </DialogContent>
             </Dialog>
@@ -1070,16 +1080,14 @@ function openGamesPage() {
                         </DialogDescription>
                     </DialogHeader>
                     <div class="max-h-80 space-y-1.5 overflow-y-auto py-2">
-                        <div
-                            v-for="(item, index) in batchResultItems"
-                            :key="`${index}-${item.name}`"
+                        <div v-for="(item, index) in batchResultItems" :key="`${index}-${item.name}`"
                             class="flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-sm"
-                            :class="item.ok ? 'border-border/60' : 'border-destructive/50'"
-                        >
+                            :class="item.ok ? 'border-border/60' : 'border-destructive/50'">
                             <span class="mt-0.5 shrink-0">{{ item.ok ? "✅" : "❌" }}</span>
                             <div class="min-w-0">
                                 <div class="truncate font-medium">{{ item.name }}</div>
-                                <div v-if="item.error" class="break-all text-xs text-muted-foreground">{{ item.error }}</div>
+                                <div v-if="item.error" class="break-all text-xs text-muted-foreground">{{ item.error }}
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1091,22 +1099,15 @@ function openGamesPage() {
             <ManagerGmmDialog ref="managerGmmDialogRef" />
 
             <Transition name="import-overlay">
-                <div
-                    v-if="fileDropActive"
-                    class="pointer-events-none fixed inset-4 z-40 rounded-3xl border border-primary/30 bg-primary/6 shadow-[0_0_0_1px_hsl(var(--primary)/0.08),0_24px_80px_-32px_hsl(var(--primary)/0.45)]"
-                />
+                <div v-if="fileDropActive"
+                    class="pointer-events-none fixed inset-4 z-40 rounded-3xl border border-primary/30 bg-primary/6 shadow-[0_0_0_1px_hsl(var(--primary)/0.08),0_24px_80px_-32px_hsl(var(--primary)/0.45)]" />
             </Transition>
             <Transition name="import-hint">
-                <div
-                    v-if="fileDropActive"
-                    class="pointer-events-none fixed left-6 bottom-6 z-50"
-                >
+                <div v-if="fileDropActive" class="pointer-events-none fixed left-6 bottom-6 z-50">
                     <div
-                        class="flex items-center gap-3 rounded-2xl border border-primary/25 bg-background/95 px-4 py-3 shadow-2xl backdrop-blur-md"
-                    >
+                        class="flex items-center gap-3 rounded-2xl border border-primary/25 bg-background/95 px-4 py-3 shadow-2xl backdrop-blur-md">
                         <div
-                            class="manager-import-hint-icon flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground"
-                        >
+                            class="manager-import-hint-icon flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground">
                             <Upload class="h-5 w-5" />
                         </div>
                         <div class="flex flex-col">
@@ -1150,6 +1151,7 @@ function openGamesPage() {
 }
 
 @keyframes manager-import-pulse {
+
     0%,
     100% {
         transform: scale(1);

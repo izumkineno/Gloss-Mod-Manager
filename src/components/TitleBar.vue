@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
+const manager = useManager();
 import { Copy, Minus, Square, X } from "lucide-vue-next";
 import logoSrc from "@/assets/logo.png";
 // 是否处于 Tauri 环境（vite preview 下无窗口 API，需降级隐藏控制按钮）
@@ -103,6 +104,10 @@ async function closeWindow() {
             <!-- 全局游戏选择:pin 图标左侧,唯一入口 -->
             <div class="flex items-center" data-tauri-drag-region-exclude @mousedown.stop>
                 <SelectGame />
+            </div>
+            <!-- 启动游戏:跟随当前管理游戏,紧凑按钮 -->
+            <div v-if="manager.managerGame" class="flex items-center" data-tauri-drag-region-exclude @mousedown.stop>
+                <StartGame :game="manager.managerGame" compact />
             </div>
             <!-- 顶部快捷入口：置顶 tab + 浮窗选择器（需排除拖拽，避免按钮点不动） -->
             <div class="ml-2 flex items-center" data-tauri-drag-region-exclude @mousedown.stop>

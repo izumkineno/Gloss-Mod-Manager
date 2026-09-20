@@ -61,6 +61,12 @@ async function saveType() {
     }
 }
 
+function open() {
+    dialogOpen.value = true;
+}
+
+defineExpose({ open });
+
 watch(dialogOpen, (opened) => {
     if (!opened) {
         resetForm();
@@ -70,15 +76,6 @@ watch(dialogOpen, (opened) => {
 
 <template>
     <Dialog v-model:open="dialogOpen">
-        <DialogTrigger as-child>
-            <Button
-                variant="outline"
-                size="sm"
-                :disabled="!manager.managerGame"
-            >
-                <IconPlus class="h-4 w-4" />
-            </Button>
-        </DialogTrigger>
         <DialogContent class="sm:max-w-3xl">
             <DialogHeader>
                 <DialogTitle>创建自定义类型</DialogTitle>

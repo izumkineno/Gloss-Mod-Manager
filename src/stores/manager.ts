@@ -186,6 +186,8 @@ export const useManager = defineStore("Manager", () => {
 
     const selectedType = ref<number | string | 0>(0);
     const selectedTag = ref("全部");
+    // 未打标签筛选哑值:tags 为空的 mod
+    const UNTAGGED_FILTER = "未打标签";
     // 安装状态筛选：all / installed / uninstalled（顶栏统一筛选入口）
     const installStatus = ref<"all" | "installed" | "uninstalled">("all");
     // 每页条数：列表/网格分页共用
@@ -358,6 +360,10 @@ export const useManager = defineStore("Manager", () => {
             .filter((mod) => {
                 if (selectedTag.value === "全部") {
                     return true;
+                }
+
+                if (selectedTag.value === UNTAGGED_FILTER) {
+                    return (mod.tags ?? []).length === 0;
                 }
 
                 return (mod.tags ?? []).some((tag) => {
@@ -581,6 +587,7 @@ export const useManager = defineStore("Manager", () => {
 
         if (
             selectedTag.value !== "全部" &&
+            selectedTag.value !== UNTAGGED_FILTER &&
             !tags.value.some((tag) => tag.name === selectedTag.value)
         ) {
             selectedTag.value = "全部";
@@ -964,6 +971,7 @@ export const useManager = defineStore("Manager", () => {
 
         if (
             selectedTag.value !== "全部" &&
+            selectedTag.value !== UNTAGGED_FILTER &&
             !managerModList.value.some((mod) => {
                 return (mod.tags ?? []).some((tag) => {
                     return tag.name === selectedTag.value;
@@ -1120,6 +1128,7 @@ export const useManager = defineStore("Manager", () => {
         search,
         selectedType,
         selectedTag,
+        UNTAGGED_FILTER,
         installStatus,
         pageSize,
         tags,
