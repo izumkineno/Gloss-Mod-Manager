@@ -1,12 +1,12 @@
 <script setup lang="ts">
 // Collection 待下载清单独立页：从下载页搬移，只做清单管理（全局暂停/继续仍在下载页）。
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { getTaskProgress, getTaskSpeedText } from "@/lib/download-task-ui";
+import { getTaskProgress, getTaskSpeedText } from "@/features/download/view/format";
 import { storeToRefs } from "pinia";
 import { useDownloadTasksStore } from "@/stores/download-tasks";
 import { ElMessage } from "element-plus-message";
-import { Downloader } from "@/lib/native-downloader";
-import type { IDownloaderTask } from "@/lib/download-task-types";
+import { getDownloadFacade } from "@/features/download/facade";
+import type { IDownloaderTask } from "@/features/download/types";
 import {
     clearFinishedCollectionPending,
     listCollectionPending,
@@ -14,7 +14,7 @@ import {
     type INexusCollectionPending,
     type INexusCollectionPendingItem,
 } from "@/lib/nexus-collection-pending";
-import { queueThirdPartyModDownload } from "@/lib/third-party-download-queue";
+import { queueThirdPartyModDownload } from "@/features/download/queue/third-party-queue";
 import { buildMinimalNexusModDetail } from "@/lib/third-party-mod-api";
 import { useManager } from "@/stores/manager";
 import { useSettings } from "@/stores/settings";
@@ -452,7 +452,7 @@ async function retryPendingEntry(entry: INexusCollectionPending) {
     }
     // 先关暂停闸：后建的任务以 Paused 落库不启动，重试全程可暂停/继续。
     try {
-        await Downloader.pauseCollection(entry.id);
+        await getDownloadFacade().pauseCollection(entry.id);
     } catch {
         // 关闸失败不中断，继续建任务。
     }
@@ -495,7 +495,9 @@ async function clearFinishedPending() {
 // 暂停/继续指定 collection。
 async function pauseCollectionEntry(entry: INexusCollectionPending) {
     try {
-        const count = await Downloader.pauseCollection(entry.id);
+        const facade = getDownloadFacade();
+        await facade.pauseCollection(entry.id);
+        const count = facade.snapshot().filter((t) => t.collectionId === entry.id && t.status === "paused").length;
         ElMessage.success(count > 0 ? `已暂停该 Collection：${count} 个任务。` : "该 Collection 暂无可暂停的任务。");
         await refreshTaskSnapshot();
     } catch (error: unknown) {
@@ -505,8 +507,8 @@ async function pauseCollectionEntry(entry: INexusCollectionPending) {
 
 async function resumeCollectionEntry(entry: INexusCollectionPending) {
     try {
-        const count = await Downloader.resumeCollection(entry.id);
-        ElMessage.success(count > 0 ? `已继续该 Collection：${count} 个任务。` : "该 Collection 暂无可继续的任务。");
+        await getDownloadFacade().resumeCollection(entry.id);
+        ElMessage.success("已继续该 Collection。");
         await refreshTaskSnapshot();
     } catch (error: unknown) {
         ElMessage.error(getErrorMessage(error));

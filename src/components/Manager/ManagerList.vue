@@ -2,7 +2,7 @@
 import { onMounted, onUnmounted } from "vue";
 import { storeToRefs } from "pinia";
 import { ElMessage } from "element-plus-message";
-import { queueGlossModDownloadWithSelection } from "@/lib/download-file-selection";
+import { queueGlossModDownloadWithSelection } from "@/features/download/view/file-selection";
 import {
     clearManagerInternalDrag,
     INTERNAL_DRAG_THRESHOLD,

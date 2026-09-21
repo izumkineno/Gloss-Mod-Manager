@@ -1,4 +1,5 @@
-import { Downloader } from "@/lib/native-downloader";
+import { ensureFileName, ensureServer, getStoredSettings, resolveDownloadDirectory } from "../meta/engine";
+import type { IDownloaderSettings } from "../types";
 import { FileHandler } from "@/lib/FileHandler";
 import { getUrlFileName, sanitizeFileName } from "@/lib/file-name-utils";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -17,11 +18,8 @@ import {
     resolveLocalModImportSourceType,
     type LocalModImportSourceType,
 } from "@/lib/local-mod-import";
-import {
-    mergeDownloadTaskSnapshots,
-    removeDownloadTaskSnapshot,
-} from "@/lib/download-task-cache";
 import { PersistentStore } from "@/lib/persistent-store";
+import type { IDownloaderTask, IDownloaderTaskFile } from "../types";
 
 export type GlossQueueDownloadStatus =
     | "created"
@@ -281,11 +279,11 @@ function getDuplicateCriteria(
 }
 
 async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
-    const outputDirectory = await Downloader.resolveDownloadDirectory();
+    const outputDirectory = await resolveDownloadDirectory();
     await FileHandler.createDirectory(outputDirectory);
-    await Downloader.ensureServer({ outputDirectory });
+    await ensureServer({ outputDirectory });
 
-    const settings = await Downloader.getStoredSettings();
+    const settings = await getStoredSettings();
     const proxy = (
         (await PersistentStore.get<string>("downloadProxy", "")) ?? ""
     ).trim();
@@ -294,18 +292,19 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
             DOWNLOAD_TASK_META_KEY,
             {},
         )) ?? {};
-    const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-        Downloader.tellActive(),
-        Downloader.tellWaiting(0, 100),
-        Downloader.tellStopped(0, 100),
-    ]);
-
+    // Wave 2：去重读 facade 快照（单例）。
+    const { getDownloadFacade } = await import("@/features/download/facade");
+    const allTasks: IDownloaderTask[] = getDownloadFacade().snapshot().map((task) => ({
+        gid: task.gid,
+        status: task.status,
+        files: [],
+    }));
     return {
         outputDirectory,
         proxy,
         settings,
         taskMetaMap,
-        allTasks: [...activeTasks, ...waitingTasks, ...stoppedTasks],
+        allTasks,
     };
 }
 
@@ -315,31 +314,6 @@ async function saveTaskMetaMap(
     await PersistentStore.set(DOWNLOAD_TASK_META_KEY, taskMetaMap);
 }
 
-function buildDownloadOptions(
-    runtime: IQueueRuntimeContext,
-    mod: IMod,
-    outputFileName: string,
-) {
-    const options: Record<string, string> = {
-        dir: runtime.outputDirectory,
-        out: outputFileName,
-        continue: "true",
-        "allow-overwrite": "true",
-        split: String(runtime.settings.split),
-        "max-connection-per-server": String(
-            runtime.settings.maxConnectionPerServer,
-        ),
-        "min-split-size": runtime.settings.minSplitSize,
-        referer: `${GLOSS_MOD_WEB_BASE_URL}/mod/${mod.id}`,
-        "user-agent": GLOSS_DOWNLOAD_USER_AGENT,
-    };
-
-    if (runtime.proxy) {
-        options["all-proxy"] = runtime.proxy;
-    }
-
-    return options;
-}
 
 async function createGlossDownloadTask(
     runtime: IQueueRuntimeContext,
@@ -348,10 +322,17 @@ async function createGlossDownloadTask(
     outputFileName: string,
     replaceLocalModId?: number,
 ) {
-    const gid = await Downloader.addUri(
-        [resource.mods_resource_url],
-        buildDownloadOptions(runtime, mod as IMod, outputFileName),
-    );
+    // Wave 2：建任务走 facade.enqueue，meta 落盘保留供导入链路，快照由 facade 接管。
+    const { getDownloadFacade } = await import("@/features/download/facade");
+    const gid = await getDownloadFacade().enqueue({
+        url: resource.mods_resource_url,
+        dir: runtime.outputDirectory,
+        fileName: outputFileName,
+        headers: [
+            ["Referer", `${GLOSS_MOD_WEB_BASE_URL}/mod/${mod.id}`],
+            ["User-Agent", GLOSS_DOWNLOAD_USER_AGENT],
+        ],
+    });
     const now = new Date().toISOString();
 
     const taskMeta: IGlossDownloadTaskMeta = {
@@ -384,14 +365,7 @@ async function createGlossDownloadTask(
     };
 
     await saveTaskMetaMap(nextTaskMetaMap);
-    const createdTask = await Downloader.tellStatus(gid);
-    await mergeDownloadTaskSnapshots(
-        [...runtime.allTasks, createdTask],
-        nextTaskMetaMap,
-        runtime.outputDirectory,
-    );
     runtime.taskMetaMap = nextTaskMetaMap;
-    runtime.allTasks = [...runtime.allTasks, createdTask];
 
     return gid;
 }
@@ -405,29 +379,30 @@ function getExistingTaskMessage(task: IDownloaderTask, resource: IResource) {
 }
 
 function getTaskPrimaryFile(task: IDownloaderTask) {
-    return task.files.find((item) => item.path) ?? task.files[0] ?? null;
+    return task.files.find((item: IDownloaderTaskFile) => item.path) ?? task.files[0] ?? null;
 }
 
 async function removeCompletedDuplicateTask(
     runtime: IQueueRuntimeContext,
     task: IDownloaderTask,
 ) {
+    // Wave 2：complete 重下 = 新任务入机；旧终局经 facade.forget 出机（只出机不删文件），落盘文件删除保留。
+    const { getDownloadFacade } = await import("@/features/download/facade");
+    try {
+        await getDownloadFacade().forget(task.gid);
+    } catch {
+        // 旧任务已被清理属于正常竞态，忽略。
+    }
     const primaryFile = getTaskPrimaryFile(task);
-
-    await Downloader.removeDownloadResult(task.gid);
-
     if (primaryFile?.path) {
         const deleted = await FileHandler.deleteFile(primaryFile.path);
-
         if (!deleted) {
             throw new Error("删除旧下载文件失败，请稍后重试。");
         }
     }
-
     const nextTaskMetaMap = { ...runtime.taskMetaMap };
     delete nextTaskMetaMap[task.gid];
     await saveTaskMetaMap(nextTaskMetaMap);
-    await removeDownloadTaskSnapshot(task.gid);
     runtime.taskMetaMap = nextTaskMetaMap;
     runtime.allTasks = runtime.allTasks.filter((item) => item.gid !== task.gid);
 }
@@ -462,7 +437,7 @@ export async function queueGlossModDownload(
     let outputFileName = buildGlossOutputFileName(resource);
     const runtime = await getQueueRuntimeContext();
     // 本地名缺后缀时从服务器探测补全，失败回退本地名。
-    outputFileName = await Downloader.ensureFileName(
+    outputFileName = await ensureFileName(
         resource.mods_resource_url,
         outputFileName,
         {
@@ -532,7 +507,7 @@ export async function queueGlossModDownload(
             };
         }
 
-        const nextTaskMetaMap = {
+        const nextTaskMetaMap: Record<string, IGlossDownloadTaskMeta> = {
             ...runtime.taskMetaMap,
             [currentTask.gid]: {
                 ...runtime.taskMetaMap[currentTask.gid],
@@ -545,10 +520,11 @@ export async function queueGlossModDownload(
         };
 
         if (currentTask.status === "paused") {
-            await Downloader.unpause(currentTask.gid);
+            // Wave 2：恢复走 facade.resume（后端 dl_resume）。
+            const { getDownloadFacade } = await import("@/features/download/facade");
+            await getDownloadFacade().resume(currentTask.gid);
             nextTaskMetaMap[currentTask.gid].taskStatus = "waiting";
             await saveTaskMetaMap(nextTaskMetaMap);
-
             return {
                 status: "resumed",
                 gid: currentTask.gid,
@@ -557,19 +533,13 @@ export async function queueGlossModDownload(
                 message: `已继续下载任务：${resource.mods_resource_name}`,
             };
         }
-
         if (currentTask.status === "error") {
-            const gid = await createGlossDownloadTask(
-                runtime,
-                mod,
-                resource,
-                outputFileName,
-                options.replaceLocalModId,
-            );
-
+            // Wave 2：同一 gid retry（保留断点），禁止删建新 gid。
+            const { getDownloadFacade } = await import("@/features/download/facade");
+            await getDownloadFacade().retry(currentTask.gid);
             return {
                 status: "retried",
-                gid,
+                gid: currentTask.gid,
                 mod,
                 resource,
                 message: `已重新加入下载队列：${resource.mods_resource_name}`,

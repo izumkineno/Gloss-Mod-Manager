@@ -2,9 +2,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ElMessage } from "element-plus-message";
 import { useI18n } from "vue-i18n";
-import { Downloader } from "@/lib/native-downloader";
-import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
-import type { IDownloaderTask } from "@/lib/download-task-types";
 import {
     findGlossDuplicateTasks,
     type GlossDownloadPresence,
@@ -13,11 +10,11 @@ import {
 import {
     buildGlossOutputFileName,
     isGlossCloudDriveResource,
-} from "@/lib/gloss-download-queue";
+} from "@/features/download/queue/helpers";
 import {
     hasGlossMultipleResources,
     queueGlossModDownloadWithSelection,
-} from "@/lib/download-file-selection";
+} from "@/features/download/view/file-selection";
 import {
     fetchAllGlossGames,
     GLOSS_MOD_WEB_BASE_URL,
@@ -189,7 +186,7 @@ const translationErrorMessage = ref("");
 const translationMap = ref<Record<string, IExploreTranslationEntry>>({});
 const manualTranslationVisible = ref(false);
 const queueingModId = ref("");
-const taskSnapshots = ref<Record<string, IDownloaderTask>>({});
+const taskSnapshots = ref<Record<string, { gid: string; status: string }>>({});
 const glossGameModTypeMap = ref<Record<string, IGlossGameModType[]>>({});
 const glossGameTypeLoading = ref(false);
 const glossGameTypeError = ref("");
@@ -572,14 +569,14 @@ watch(
     shouldPollTaskSnapshots,
     (shouldPoll) => {
         if (shouldPoll) {
-            // 事件驱动：dl-progress（0.5s 节流）推进度，dl-task-changed 推终态/入队。
+            // Wave 3：事件驱动走 facade.subscribe，快照推送即刷新。
             void refreshTaskSnapshots();
             if (releaseTaskSnapshotEvents === null) {
-                void subscribeDownloadTaskEvents(handleTaskSnapshotEvent).then(
-                    (release) => {
-                        releaseTaskSnapshotEvents = release;
-                    },
-                );
+                void import("@/features/download/facade").then(({ getDownloadFacade }) => {
+                    releaseTaskSnapshotEvents = getDownloadFacade().subscribe(() => {
+                        void refreshTaskSnapshots();
+                    });
+                });
             }
             return;
         }
@@ -589,11 +586,6 @@ watch(
     },
     { immediate: true },
 );
-
-// 事件回调只做触发器：快照仍从 tell* 拉取，丢事件时终态由 watch 关闭轮转自然收敛。
-function handleTaskSnapshotEvent() {
-    void refreshTaskSnapshots();
-}
 
 onMounted(() => {
     void fetchGlossGameModTypes();
@@ -1016,7 +1008,7 @@ function getMatchedTask(item: IGlossExploreMod) {
     return null;
 }
 
-function getTaskProgress(task?: IDownloaderTask | null) {
+function getTaskProgress(task?: { gid: string; status: string; totalLength?: string | number; completedLength?: string | number } | null) {
     if (!task) {
         return 0;
     }
@@ -1188,21 +1180,12 @@ async function refreshTaskSnapshots() {
     if (!shouldPollTaskSnapshots.value || refreshTaskSnapshotPending) {
         return;
     }
-
     refreshTaskSnapshotPending = true;
-
     try {
-        const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-            Downloader.tellActive(),
-            Downloader.tellWaiting(0, 100),
-            Downloader.tellStopped(0, 100),
-        ]);
-
+        // Wave 3：快照读 facade 单例投影（5 态），不再 tell*。
+        const { getDownloadFacade } = await import("@/features/download/facade");
         taskSnapshots.value = Object.fromEntries(
-            [...activeTasks, ...waitingTasks, ...stoppedTasks].map((task) => [
-                task.gid,
-                task,
-            ]),
+            getDownloadFacade().snapshot().map((task) => [task.gid, task]),
         );
     } catch (error) {
         console.error("刷新游览页下载状态失败");

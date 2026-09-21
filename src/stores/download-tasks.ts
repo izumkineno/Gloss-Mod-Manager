@@ -1,18 +1,13 @@
-// 下载任务共享 Pinia store：下载页 + collection 页统一任务快照/订阅/meta。
-// 之前是 composable，各页 ref 独立、互不相通；现收口一处，事件订阅引用计数，回调注册制。
+// 下载任务共享 Pinia store（Wave 3 薄包装）：状态一律走 facade 单例，禁止自有状态机。
+// 数据经 facade.snapshot()/subscribe 读取；操作经 facade 方法透传；meta 仍走 PersistentStore 落盘供导入链路。
 import { computed, ref } from "vue";
 import { ElMessage } from "element-plus-message";
-import { Downloader } from "@/lib/native-downloader";
-import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
-import {
-    isRestoredDownloadTask,
-    mergeDownloadTaskSnapshots,
-    removeDownloadTaskSnapshot,
-} from "@/lib/download-task-cache";
-import { getTaskPrimaryFile } from "@/lib/download-task-ui";
+import { getDownloadFacade } from "@/features/download/facade";
+import type { TaskProjection } from "@/features/download/types";
 import { FileHandler } from "@/lib/FileHandler";
 import { PersistentStore } from "@/lib/persistent-store";
-import type { IDownloaderGlobalStat, IDownloaderTask } from "@/lib/download-task-types";
+import { getTaskPrimaryFile } from "@/features/download/view/format";
+import type { IDownloaderGlobalStat, IDownloaderTask } from "@/features/download/types";
 import type { IGlossDownloadTaskMeta } from "@/lib/gloss-download";
 
 export const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
@@ -21,237 +16,148 @@ function defaultGlobalStat(): IDownloaderGlobalStat {
     return { downloadSpeed: "0", numActive: "0", numWaiting: "0", numStopped: "0" };
 }
 
-type NewlyCompletedHandler = (gids: string[], tasks: IDownloaderTask[]) => void;
+type NewlyCompletedHandler = (gids: string[], tasks: TaskProjection[]) => void;
+
+// facade 快照（新 5 态）→ 页内旧 IDownloaderTask 形状适配：files 为空，进度字段缺省。
+function toLegacyTask(task: TaskProjection): IDownloaderTask {
+    return {
+        gid: task.gid,
+        status: task.status,
+        files: [],
+        dir: "",
+        totalLength: String(task.total ?? 0),
+        completedLength: String(task.downloaded ?? 0),
+        downloadSpeed: String(task.speed ?? 0),
+        errorMessage: task.error ?? "",
+    };
+}
 
 export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
+    const facade = getDownloadFacade();
     const tasksLoading = ref(false);
     const tasksErrorMessage = ref("");
     const refreshingTasks = ref(false);
     const globalStat = ref<IDownloaderGlobalStat>(defaultGlobalStat());
-    const activeTasks = ref<IDownloaderTask[]>([]);
-    const waitingTasks = ref<IDownloaderTask[]>([]);
-    const stoppedTasks = ref<IDownloaderTask[]>([]);
+    const taskList = ref<TaskProjection[]>([]);
     const taskOperatingIds = ref<string[]>([]);
     const taskMetaMap = PersistentStore.useValue<Record<string, IGlossDownloadTaskMeta>>(DOWNLOAD_TASK_META_KEY, {});
 
-    let refreshSequence = 0;
-    let hasCompletedInitialTaskSync = false;
-    let releaseTaskEvents: (() => void) | null = null;
-    let subscriberCount = 0;
-    let focusListenerCount = 0;
     const completedHandlers = new Set<NewlyCompletedHandler>();
+    let releaseSubscribe: (() => void) | null = null;
+    let subscriberCount = 0;
 
-    const allTasks = computed(() => [...activeTasks.value, ...waitingTasks.value, ...stoppedTasks.value]);
-    const failedTasks = computed(() => stoppedTasks.value.filter((task) => task.status === "error"));
-    const finishedTasks = computed(() => stoppedTasks.value.filter((task) => task.status !== "error"));
+    // 页内仍消费 active/waiting/stopped 三桶：waiting 桶含 paused（模板 v-if 区分）。
+    const activeTasks = computed(() => taskList.value.filter((t) => t.status === "active").map(toLegacyTask));
+    const waitingTasks = computed(() => taskList.value.filter((t) => t.status === "waiting" || t.status === "paused").map(toLegacyTask));
+    const stoppedTasks = computed(() => taskList.value.filter((t) => t.status === "error" || t.status === "retrying").map(toLegacyTask));
+    const allTasks = computed(() => taskList.value.map(toLegacyTask));
+    const failedTasks = computed(() => taskList.value.filter((t) => t.status === "error").map(toLegacyTask));
+    const finishedTasks = computed(() => taskList.value.filter((t) => t.status === "error").map(toLegacyTask));
 
-    // 快照对齐 meta：返回新完成 gid 供自动导入。
-    function syncTaskMetaStatuses(tasks: IDownloaderTask[]) {
-        const nextMap = { ...taskMetaMap.value };
-        let changed = false;
-        const newlyCompletedTaskGids: string[] = [];
-        for (const task of tasks) {
-            const currentMeta = nextMap[task.gid];
-            if (!currentMeta) continue;
-            const nextMeta: IGlossDownloadTaskMeta = {
-                ...currentMeta,
-                createdAt: currentMeta.createdAt || currentMeta.downloadedAt || currentMeta.importedAt || currentMeta.updatedAt || new Date().toISOString(),
-                taskStatus: task.status as TaskStatus,
-                updatedAt: new Date().toISOString(),
-            };
-            if (task.status === "complete" && currentMeta.taskStatus !== "complete") {
-                newlyCompletedTaskGids.push(task.gid);
-            }
-            if (task.status === "complete" && !currentMeta.downloadedAt) {
-                nextMeta.downloadedAt = new Date().toISOString();
-            }
-            if (nextMeta.createdAt !== currentMeta.createdAt || nextMeta.taskStatus !== currentMeta.taskStatus || nextMeta.downloadedAt !== currentMeta.downloadedAt) {
-                nextMap[task.gid] = nextMeta;
-                changed = true;
-            }
-        }
-        if (changed) taskMetaMap.value = nextMap;
-        return newlyCompletedTaskGids;
+    function pullSnapshot(): void {
+        taskList.value = facade.snapshot();
     }
 
-    async function refreshTaskLists(silent = false) {
-        const currentSequence = ++refreshSequence;
-        if (!silent) refreshingTasks.value = true;
+    async function refreshTaskLists(silent = false): Promise<void> {
+        if (!silent) {
+            refreshingTasks.value = true;
+        }
         try {
-            const outputDirectory = await Downloader.resolveDownloadDirectory();
-            await FileHandler.createDirectory(outputDirectory);
-            const [stat, active, waiting, stopped] = await Promise.all([
-                Downloader.getGlobalStat(),
-                Downloader.tellActive(),
-                Downloader.tellWaiting(0, 100),
-                Downloader.tellStopped(0, 100),
-            ]);
-            if (currentSequence !== refreshSequence) return;
-            const liveTasks = [...active, ...waiting, ...stopped];
-            const mergedTasks = await mergeDownloadTaskSnapshots(liveTasks, taskMetaMap.value, outputDirectory);
-            const liveGids = new Set(liveTasks.map((task) => task.gid));
-            const restoredTasks = mergedTasks.filter((task) => !liveGids.has(task.gid));
-            const displayedStoppedTasks = [
-                ...stopped,
-                ...restoredTasks.filter((task) => !["active", "waiting", "paused"].includes(task.status)),
-            ];
-            const allDisplayedTasks = [...active, ...waiting, ...displayedStoppedTasks];
-            const newlyCompletedTaskGids = syncTaskMetaStatuses(allDisplayedTasks);
-            globalStat.value = stat;
-            activeTasks.value = active;
-            waitingTasks.value = waiting;
-            stoppedTasks.value = displayedStoppedTasks;
+            pullSnapshot();
             tasksErrorMessage.value = "";
-            if (!hasCompletedInitialTaskSync) {
-                hasCompletedInitialTaskSync = true;
-                return;
-            }
-            if (newlyCompletedTaskGids.length > 0) {
-                for (const handler of completedHandlers) handler(newlyCompletedTaskGids, allDisplayedTasks);
-            }
         } catch (error: unknown) {
-            if (currentSequence !== refreshSequence) return;
             tasksErrorMessage.value = error instanceof Error ? error.message : "操作失败，请稍后重试。";
         } finally {
-            if (!silent && currentSequence === refreshSequence) refreshingTasks.value = false;
+            if (!silent) {
+                refreshingTasks.value = false;
+            }
         }
     }
 
-    // 轻量快照：同样走 merge + meta 对齐（之前 snapshotOnly 偷工减料，重启任务/已导入全看不到）。
-    async function refreshTaskSnapshot() {
+    async function refreshTaskSnapshot(): Promise<void> {
         await refreshTaskLists(true);
     }
 
-    function setTaskMeta(gid: string, metadata: IGlossDownloadTaskMeta) {
+    function setTaskMeta(gid: string, metadata: IGlossDownloadTaskMeta): void {
         const nextMeta: IGlossDownloadTaskMeta = { ...taskMetaMap.value[gid], ...metadata };
-        if (!nextMeta.createdAt) nextMeta.createdAt = new Date().toISOString();
-        if (!nextMeta.modTitle?.trim()) {
-            nextMeta.modTitle = nextMeta.resourceName?.trim() || nextMeta.fileName?.trim() || nextMeta.modTitle;
+        if (!nextMeta.createdAt) {
+            nextMeta.createdAt = new Date().toISOString();
         }
         taskMetaMap.value = { ...taskMetaMap.value, [gid]: nextMeta };
     }
 
-    function removeTaskMeta(gid: string) {
-        if (!taskMetaMap.value[gid]) return;
+    function removeTaskMeta(gid: string): void {
+        if (!taskMetaMap.value[gid]) {
+            return;
+        }
         const nextMap = { ...taskMetaMap.value };
         delete nextMap[gid];
         taskMetaMap.value = nextMap;
     }
 
-    async function saveTaskMetaMap(nextMap: Record<string, IGlossDownloadTaskMeta>) {
+    async function saveTaskMetaMap(nextMap: Record<string, IGlossDownloadTaskMeta>): Promise<void> {
         await PersistentStore.set(DOWNLOAD_TASK_META_KEY, nextMap, true);
     }
 
-    // 重试成功三件套：forget 后端 + 清快照 + 删 meta 落盘。
-    async function forgetTaskRecord(gid: string) {
-        try {
-            await Downloader.removeDownloadResult(gid);
-        } catch {
-            // 旧任务已被清理属于正常竞态，忽略。
-        }
+    async function forgetTaskRecord(gid: string): Promise<void> {
+        await facade.forget(gid);
         removeTaskMeta(gid);
-        await removeDownloadTaskSnapshot(gid);
         await saveTaskMetaMap(taskMetaMap.value);
+        pullSnapshot();
     }
 
-    // 删任务四件套：后端记录 + 本地文件 + 快照 + meta 落盘。
-    async function removeTaskRecord(task: IDownloaderTask) {
-        if (!isRestoredDownloadTask(task) && ["active", "waiting", "paused"].includes(task.status)) {
-            await Downloader.remove(task.gid, true);
-            await waitForRemovedTask(task.gid);
-        }
+    async function removeTaskRecord(task: IDownloaderTask): Promise<void> {
+        const gid = task.gid;
         const primaryFile = getTaskPrimaryFile(task);
-        if (primaryFile?.path) {
-            const deleted = await FileHandler.deleteFile(primaryFile.path);
-            if (!deleted) throw new Error(`删除本地文件失败：${task.gid}`);
-            await FileHandler.deleteFile(`${primaryFile.path}.download.bitcode`);
+        const filePath = primaryFile?.path;
+        if (filePath) {
+            await FileHandler.deleteFile(filePath);
+            await FileHandler.deleteFile(`${filePath}.download.bitcode`);
         }
-        if (!isRestoredDownloadTask(task)) {
-            let lastError: unknown = null;
-            for (let index = 0; index < 6; index += 1) {
-                try {
-                    await Downloader.removeDownloadResult(task.gid);
-                    lastError = null;
-                    break;
-                } catch (error: unknown) {
-                    lastError = error;
-                    // eslint-disable-next-line no-promise-executor-return
-                    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 250));
-                }
-            }
-            if (lastError) throw lastError;
-        }
-        await removeDownloadTaskSnapshot(task.gid);
-        removeTaskMeta(task.gid);
+        await facade.cancel(gid, false);
+        removeTaskMeta(gid);
         await saveTaskMetaMap(taskMetaMap.value);
+        pullSnapshot();
     }
 
-    async function waitForRemovedTask(gid: string) {
-        for (let index = 0; index < 6; index += 1) {
-            try {
-                const task = await Downloader.tellStatus(gid);
-                if (["removed", "complete", "error"].includes(task.status)) return;
-            } catch {
-                return;
-            }
-            // eslint-disable-next-line no-promise-executor-return
-            await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 250));
+    function startTaskOperation(gid: string): void {
+        if (!taskOperatingIds.value.includes(gid)) {
+            taskOperatingIds.value = [...taskOperatingIds.value, gid];
         }
     }
 
-    function startTaskOperation(gid: string) {
-        if (taskOperatingIds.value.includes(gid)) return;
-        taskOperatingIds.value = [...taskOperatingIds.value, gid];
-    }
-
-    function finishTaskOperation(gid: string) {
+    function finishTaskOperation(gid: string): void {
         taskOperatingIds.value = taskOperatingIds.value.filter((item) => item !== gid);
     }
 
-    function handleWindowFocusRefresh() {
-        void refreshTaskLists(true);
-    }
-
-    function handleVisibilityRefresh() {
-        if (document.visibilityState === "visible") {
-            void refreshTaskLists(true);
-        }
-    }
-
-    function ensureEventSubscription() {
+    function ensureEventSubscription(): () => void {
         subscriberCount += 1;
-        if (!releaseTaskEvents) {
-            void subscribeDownloadTaskEvents(() => {
-                void refreshTaskLists(true);
-            }).then((release) => {
-                releaseTaskEvents = release;
+        if (!releaseSubscribe) {
+            pullSnapshot();
+            releaseSubscribe = facade.subscribe(() => {
+                pullSnapshot();
             });
         }
         return () => {
             subscriberCount = Math.max(0, subscriberCount - 1);
             if (subscriberCount === 0) {
-                releaseTaskEvents?.();
-                releaseTaskEvents = null;
+                releaseSubscribe?.();
+                releaseSubscribe = null;
             }
         };
     }
 
-    function ensureFocusRefresh() {
-        focusListenerCount += 1;
-        if (focusListenerCount === 1) {
-            window.addEventListener("focus", handleWindowFocusRefresh);
-            document.addEventListener("visibilitychange", handleVisibilityRefresh);
-        }
+    function ensureFocusRefresh(): () => void {
+        const onFocus = (): void => {
+            void refreshTaskLists(true);
+        };
+        window.addEventListener("focus", onFocus);
         return () => {
-            focusListenerCount = Math.max(0, focusListenerCount - 1);
-            if (focusListenerCount === 0) {
-                window.removeEventListener("focus", handleWindowFocusRefresh);
-                document.removeEventListener("visibilitychange", handleVisibilityRefresh);
-            }
+            window.removeEventListener("focus", onFocus);
         };
     }
 
-    function onNewlyCompleted(handler: NewlyCompletedHandler) {
+    function onNewlyCompleted(handler: NewlyCompletedHandler): () => void {
         completedHandlers.add(handler);
         return () => {
             completedHandlers.delete(handler);

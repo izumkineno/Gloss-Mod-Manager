@@ -1,19 +1,16 @@
-import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
 import { ElMessage } from "element-plus-message";
-import { Downloader } from "@/lib/native-downloader";
-import type { IDownloaderTask } from "@/lib/download-task-types";
+
+import type { IDownloaderTask } from "@/features/download/types";
 import { FileHandler } from "@/lib/FileHandler";
 import {
     findGlossDuplicateLocalMods,
     type IGlossDownloadTaskMeta,
 } from "@/lib/gloss-download";
-import { resolveGlossDownloadImportSourceType } from "@/lib/gloss-download-queue";
+import { resolveGlossDownloadImportSourceType } from "@/features/download/meta/import-source";
 import {
     importLocalModSources,
     type ILocalModImportSource,
 } from "@/lib/local-mod-import";
-import { mergeDownloadTaskSnapshots } from "@/lib/download-task-cache";
-import { PersistentStore } from "@/lib/persistent-store";
 import { useManager } from "@/stores/manager";
 
 interface IGlossDownloadMonitorSettings {
@@ -320,15 +317,13 @@ export class GlossDownloadMonitor {
         if (GlossDownloadMonitor.eventsSubscribed) {
             return;
         }
-        // 先占位防并发重入，失败时回滚并释放已订阅的 listener。
+        // Wave 3：订阅走 facade.subscribe（后端事件→投影机→快照推送）。
         GlossDownloadMonitor.eventsSubscribed = true;
-        // 事件只做触发器：收到后拉一次快照（数据源仍是快照，丢事件由慢轮询兜底）。
         try {
-            GlossDownloadMonitor.eventRelease = await subscribeDownloadTaskEvents(
-                () => {
-                    void GlossDownloadMonitor.refresh();
-                },
-            );
+            const { getDownloadFacade } = await import("@/features/download/facade");
+            GlossDownloadMonitor.eventRelease = getDownloadFacade().subscribe(() => {
+                void GlossDownloadMonitor.refresh();
+            });
         } catch {
             GlossDownloadMonitor.eventsSubscribed = false;
         }
@@ -349,36 +344,23 @@ export class GlossDownloadMonitor {
                 return;
             }
 
-            const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all(
-                [
-                    Downloader.tellActive(),
-                    Downloader.tellWaiting(0, 100),
-                    Downloader.tellStopped(0, 100),
-                ],
-            );
-            const liveTasks = [
-                ...activeTasks,
-                ...waitingTasks,
-                ...stoppedTasks,
-            ];
-            const allTasks = await mergeDownloadTaskSnapshots(
-                liveTasks,
-                taskMetaMap,
-                await Downloader.resolveDownloadDirectory(),
-            );
+            // Wave 3：快照读 facade（单例投影），不再 tell/merge。
+            const { getDownloadFacade } = await import("@/features/download/facade");
+            const allTasks: IDownloaderTask[] = getDownloadFacade().snapshot().map((task) => ({
+                gid: task.gid,
+                status: task.status,
+                files: [],
+            }));
             const syncResult = syncTaskMetaStatuses(taskMetaMap, allTasks);
-
             if (syncResult.changed) {
                 await PersistentStore.set(
                     DOWNLOAD_TASK_META_KEY,
                     syncResult.nextTaskMetaMap,
                 );
             }
-
             if (!GlossDownloadMonitor.initialized) {
                 GlossDownloadMonitor.initialized = true;
             }
-
             await autoImportCompletedDownloadTasks(
                 GlossDownloadMonitor.settings,
                 syncResult.newlyCompletedTaskGids,

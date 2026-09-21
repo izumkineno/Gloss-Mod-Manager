@@ -18,7 +18,7 @@ import {
     listLegacyCustomGameDefinitions,
     saveLegacyCustomGameDefinition,
 } from "@/lib/legacy-custom-data";
-import { queueGlossModDownload } from "@/lib/gloss-download-queue";
+import { queueGlossModDownload } from "@/features/download/queue/gloss-queue";
 import { Log } from "@/lib/log";
 import { Manager } from "@/lib/Manager";
 import { PersistentStore } from "@/lib/persistent-store";

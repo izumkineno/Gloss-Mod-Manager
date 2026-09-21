@@ -1,15 +1,14 @@
-import { Downloader } from "@/lib/native-downloader";
+import { ensureFileName, ensureServer, getStoredSettings, resolveDownloadDirectory } from "../meta/engine";
 import {
     type IDownloaderTask,
     type IDownloaderSettings,
-} from "@/lib/download-task-types";
+} from "../types";
 import { FileHandler } from "@/lib/FileHandler";
 import { getUrlFileName, sanitizeFileName } from "@/lib/file-name-utils";
 import {
     findGlossDuplicateTasks,
     type IGlossDownloadTaskMeta,
 } from "@/lib/gloss-download";
-import { mergeDownloadTaskSnapshots } from "@/lib/download-task-cache";
 import { PersistentStore } from "@/lib/persistent-store";
 
 export type CustomQueueDownloadStatus =
@@ -53,11 +52,11 @@ function buildOutputFileName(options: IQueueCustomDownloadOptions) {
 }
 
 async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
-    const outputDirectory = await Downloader.resolveDownloadDirectory();
+    const outputDirectory = await resolveDownloadDirectory();
     await FileHandler.createDirectory(outputDirectory);
-    await Downloader.ensureServer({ outputDirectory });
+    await ensureServer({ outputDirectory });
 
-    const settings = await Downloader.getStoredSettings();
+    const settings = await getStoredSettings();
     const proxy = (
         (await PersistentStore.get<string>("downloadProxy", "")) ?? ""
     ).trim();
@@ -66,18 +65,19 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
             DOWNLOAD_TASK_META_KEY,
             {},
         )) ?? {};
-    const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-        Downloader.tellActive(),
-        Downloader.tellWaiting(0, 100),
-        Downloader.tellStopped(0, 100),
-    ]);
-
+    // Wave 2：去重读 facade 快照（单例）。
+    const { getDownloadFacade } = await import("@/features/download/facade");
+    const allTasks: IDownloaderTask[] = getDownloadFacade().snapshot().map((task) => ({
+        gid: task.gid,
+        status: task.status,
+        files: [],
+    }));
     return {
         outputDirectory,
         proxy,
         settings,
         taskMetaMap,
-        allTasks: [...activeTasks, ...waitingTasks, ...stoppedTasks],
+        allTasks,
     };
 }
 
@@ -87,26 +87,6 @@ async function saveTaskMetaMap(
     await PersistentStore.set(DOWNLOAD_TASK_META_KEY, taskMetaMap);
 }
 
-function buildDownloadOptions(runtime: IQueueRuntimeContext, fileName: string) {
-    const options: Record<string, string> = {
-        dir: runtime.outputDirectory,
-        out: fileName,
-        continue: "true",
-        "allow-overwrite": "true",
-        split: String(runtime.settings.split),
-        "max-connection-per-server": String(
-            runtime.settings.maxConnectionPerServer,
-        ),
-        "min-split-size": runtime.settings.minSplitSize,
-        "user-agent": CUSTOM_DOWNLOAD_USER_AGENT,
-    };
-
-    if (runtime.proxy) {
-        options["all-proxy"] = runtime.proxy;
-    }
-
-    return options;
-}
 
 function resolveExistingTaskStatus(task?: IDownloaderTask | null) {
     switch (task?.status) {
@@ -145,7 +125,7 @@ export async function queueCustomDownload(
     let outputFileName = buildOutputFileName(options);
     const runtime = await getQueueRuntimeContext();
     // 本地名缺后缀时从服务器探测补全，失败回退本地名。
-    outputFileName = await Downloader.ensureFileName(
+    outputFileName = await ensureFileName(
         downloadUrl,
         outputFileName,
         { "User-Agent": CUSTOM_DOWNLOAD_USER_AGENT },
@@ -169,19 +149,15 @@ export async function queueCustomDownload(
             return task.gid === matchedTask.gid;
         });
         const status = resolveExistingTaskStatus(targetTask);
-
+        // Wave 2：恢复/重试走 facade（后端 dl_resume/dl_retry），同一 gid。
+        const { getDownloadFacade } = await import("@/features/download/facade");
+        const facade = getDownloadFacade();
         if (status === "resumed") {
-            await Downloader.unpause(matchedTask.gid);
+            await facade.resume(matchedTask.gid);
         }
-
         if (status === "retried") {
-            await Downloader.changeOption(
-                matchedTask.gid,
-                buildDownloadOptions(runtime, outputFileName),
-            );
-            await Downloader.unpause(matchedTask.gid);
+            await facade.retry(matchedTask.gid);
         }
-
         return {
             status,
             gid: matchedTask.gid,
@@ -189,10 +165,14 @@ export async function queueCustomDownload(
         };
     }
 
-    const gid = await Downloader.addUri(
-        [downloadUrl],
-        buildDownloadOptions(runtime, outputFileName),
-    );
+    // Wave 2：建任务走 facade.enqueue，快照由 facade 接管。
+    const { getDownloadFacade } = await import("@/features/download/facade");
+    const gid = await getDownloadFacade().enqueue({
+        url: downloadUrl,
+        dir: runtime.outputDirectory,
+        fileName: outputFileName,
+        headers: [["User-Agent", CUSTOM_DOWNLOAD_USER_AGENT]],
+    });
     const now = new Date().toISOString();
     const nextTaskMetaMap = {
         ...runtime.taskMetaMap,
@@ -211,12 +191,6 @@ export async function queueCustomDownload(
     };
 
     await saveTaskMetaMap(nextTaskMetaMap);
-    const createdTask = await Downloader.tellStatus(gid);
-    await mergeDownloadTaskSnapshots(
-        [...runtime.allTasks, createdTask],
-        nextTaskMetaMap,
-        runtime.outputDirectory,
-    );
 
     return {
         status: "created",

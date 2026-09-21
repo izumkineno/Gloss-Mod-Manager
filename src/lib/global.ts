@@ -4,7 +4,6 @@ import { platform } from "@tauri-apps/plugin-os";
 import { TrayIcon } from "@tauri-apps/api/tray";
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Downloader } from "@/lib/native-downloader";
 import {
     hasPendingAppUpdateInstall,
     installPendingAppUpdate,
@@ -52,13 +51,6 @@ async function prepareQuitApplication() {
         console.error(error);
     }
 
-    try {
-        // 退出前停掉下载服务（无实际连接，但保持调用对称）。
-        await Downloader.stopServer();
-    } catch (error) {
-        console.error("停止下载服务失败");
-        console.error(error);
-    }
 }
 
 async function quitApplication(

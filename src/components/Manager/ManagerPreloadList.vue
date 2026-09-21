@@ -1,12 +1,9 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus-message";
-import { Downloader } from "@/lib/native-downloader";
-import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
-import type { IDownloaderTask } from "@/lib/download-task-types";
 import {
     queueGlossModDownloadWithSelection,
     queueThirdPartyModDownloadWithSelection,
-} from "@/lib/download-file-selection";
+} from "@/features/download/view/file-selection";
 import {
     findGlossDuplicateTasks,
     getGlossModPresence,
@@ -55,7 +52,7 @@ const queueingPreloadId = ref("");
 const resolvedPreloadCriteriaMap = ref<Record<string, IPreloadLookupCriteria>>(
     {},
 );
-const taskSnapshots = ref<Record<string, IDownloaderTask>>({});
+const taskSnapshots = ref<Record<string, { gid: string; status: string }>>({});
 
 const currentGame = computed(() => manager.managerGame);
 const currentGameId = computed(() => currentGame.value?.GlossGameId ?? 0);
@@ -183,14 +180,14 @@ watch(
     shouldPollTaskSnapshots,
     (shouldPoll) => {
         if (shouldPoll) {
-            // 事件驱动：dl-progress（0.5s 节流）推进度，dl-task-changed 推终态/入队。
+            // Wave 3：事件驱动走 facade.subscribe，快照推送即刷新。
             void refreshTaskSnapshots();
             if (releaseTaskSnapshotEvents === null) {
-                void subscribeDownloadTaskEvents(handleTaskSnapshotEvent).then(
-                    (release) => {
-                        releaseTaskSnapshotEvents = release;
-                    },
-                );
+                void import("@/features/download/facade").then(({ getDownloadFacade }) => {
+                    releaseTaskSnapshotEvents = getDownloadFacade().subscribe(() => {
+                        void refreshTaskSnapshots();
+                    });
+                });
             }
             return;
         }
@@ -200,11 +197,6 @@ watch(
     },
     { immediate: true },
 );
-
-// 事件回调只做触发器：快照仍从 tell* 拉取。
-function handleTaskSnapshotEvent() {
-    void refreshTaskSnapshots();
-}
 
 onBeforeUnmount(() => {
     releaseTaskSnapshotEvents?.();
@@ -313,7 +305,7 @@ function toNumber(value?: string | number) {
     return Number.isFinite(normalized) ? normalized : 0;
 }
 
-function getTaskProgress(task?: IDownloaderTask | null) {
+function getTaskProgress(task?: { gid: string; status: string; totalLength?: string | number; completedLength?: string | number } | null) {
     if (!task) {
         return 0;
     }
@@ -502,17 +494,10 @@ async function refreshTaskSnapshots() {
     refreshTaskSnapshotPending = true;
 
     try {
-        const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-            Downloader.tellActive(),
-            Downloader.tellWaiting(0, 100),
-            Downloader.tellStopped(0, 100),
-        ]);
-
+        // Wave 3：快照读 facade 单例投影，不再 tell*。
+        const { getDownloadFacade } = await import("@/features/download/facade");
         taskSnapshots.value = Object.fromEntries(
-            [...activeTasks, ...waitingTasks, ...stoppedTasks].map((task) => [
-                task.gid,
-                task,
-            ]),
+            getDownloadFacade().snapshot().map((task) => [task.gid, task]),
         );
     } catch (error) {
         console.error("刷新前置下载状态失败");

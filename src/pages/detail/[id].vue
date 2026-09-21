@@ -4,7 +4,7 @@ import { ElMessage } from "element-plus-message";
 import {
     hasGlossMultipleResources,
     queueGlossModDownloadWithSelection,
-} from "@/lib/download-file-selection";
+} from "@/features/download/view/file-selection";
 import { resolveGlossModKey } from "@/lib/gloss-mod-api";
 import RichModDesc from "@/components/common/RichModDesc.vue";
 

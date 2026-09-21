@@ -641,6 +641,9 @@ mod batch_tests {
     #[test]
     fn remove_restores_backup() {
         let (src, dst) = batch_dir("remove");
+        // 真实卸载链路 src 恒为 mod 存储路径且必须存在（op_remove 源缺失即失败），
+        // 这里补齐源文件以对齐前端 Manager 卸载时传入的形态。
+        fs::write(src.join("a.txt"), "installed").unwrap();
         fs::write(dst.join("a.txt"), "installed").unwrap();
         fs::write(dst.join("a.txt.gmmback"), "original").unwrap();
         let roots = roots_for(&src, &dst);

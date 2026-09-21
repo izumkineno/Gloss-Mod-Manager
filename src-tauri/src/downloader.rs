@@ -11,13 +11,32 @@ use tauri::Emitter;
 
 const MAX_ACTIVE: usize = 5;
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+// 自动重试退避（上限 3 次）；参数收敛进 options 预留，不接任何 UI/配置。
+const RETRY_BACKOFF_MS: [u64; 3] = [1000, 2000, 4000];
+const MAX_AUTO_RETRY: u32 = 3;
+
+// 当前毫秒时间戳（可序列化计时，不用 Instant）。
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+// 退避毫秒数：retry_count 从 1 起按 1s/2s/4s 取档，超档按末档。
+fn backoff_ms(retry_count: u32) -> u64 {
+    let idx = retry_count.saturating_sub(1).min(2) as usize;
+    RETRY_BACKOFF_MS[idx]
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum TaskStatus {
     Active,
     Waiting,
     Paused,
     Error,
+    Retrying,
     Complete,
 }
 
@@ -28,6 +47,7 @@ impl TaskStatus {
             TaskStatus::Waiting => "waiting",
             TaskStatus::Paused => "paused",
             TaskStatus::Error => "error",
+            TaskStatus::Retrying => "retrying",
             TaskStatus::Complete => "complete",
         }
     }
@@ -42,6 +62,10 @@ struct TaskEntry {
     workers: u64,
     proxy: Option<String>,
     status: TaskStatus,
+    /// 自动/人工重试计数（后端真相源，前端只投影）。
+    retry_count: u32,
+    /// 下次重试时刻毫秒时间戳；0 表示无待触发计时。
+    next_retry_at_ms: u64,
     total: u64,
     downloaded: u64,
     speed: f64,
@@ -95,6 +119,12 @@ pub(crate) struct DlProgress {
 pub(crate) struct DlTaskChanged {
     gid: String,
     status: String,
+    retry_count: u32,
+    next_retry_at_ms: u64,
+    /// 注册表当前大小（终局对齐后的真相源）：快速完成时前端可能没收到任何
+    /// dl-progress 帧（0.5s 节流），终局/错误行靠这两个字段兜底补齐，避免 0/0。
+    total_length: u64,
+    completed_length: u64,
 }
 
 impl DownloaderState {
@@ -109,16 +139,50 @@ impl DownloaderState {
         }
     }
 
-    fn emit_changed(&self, gid: &str, status: &str) {
+    fn emit_changed(&self, gid: &str, status: &str, retry_count: u32, next_retry_at_ms: u64) {
         if let Some(app) = self.app.lock().expect("downloader app lock").as_ref() {
+            // 事件顺带携带注册表当前大小（调用方均未持 inner 锁；任务已移除时读 0），
+            // 前端终局归档/错误行用它兜底补齐，修"秒完成任务 0/0"。
+            let (total_length, completed_length) = self
+                .inner
+                .lock()
+                .ok()
+                .and_then(|inner| inner.tasks.get(gid).map(|e| (e.total, e.downloaded)))
+                .unwrap_or((0, 0));
             let _ = app.emit(
                 "dl-task-changed",
                 DlTaskChanged {
                     gid: gid.to_string(),
                     status: status.to_string(),
+                    retry_count,
+                    next_retry_at_ms,
+                    total_length,
+                    completed_length,
                 },
             );
         }
+    }
+
+    /// 状态快照发射（字符串状态版，供终局 complete/error 复用）。
+    fn emit_snapshot_str(&self, gid: &str, status: &str) {
+        let (retry_count, next_retry_at_ms) = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|inner| inner.tasks.get(gid).map(|e| (e.retry_count, e.next_retry_at_ms)))
+            .unwrap_or((0, 0));
+        self.emit_changed(gid, status, retry_count, next_retry_at_ms);
+    }
+
+    /// 状态快照发射：锁内读出 retry 字段后发射（调用方已持有数据时用 emit_changed 直接传值）。
+    fn emit_snapshot(&self, gid: &str, status: TaskStatus) {
+        let (retry_count, next_retry_at_ms) = self
+            .inner
+            .lock()
+            .ok()
+            .and_then(|inner| inner.tasks.get(gid).map(|e| (e.retry_count, e.next_retry_at_ms)))
+            .unwrap_or((0, 0));
+        self.emit_changed(gid, status.as_status_str(), retry_count, next_retry_at_ms);
     }
     /// 游览页判重索引：一次锁内建 url 精确索引 + 文件名索引。
     /// 返回 (url -> (gid, status, progress), normalizedFileName -> (gid, status, progress))。
@@ -174,6 +238,8 @@ pub(crate) struct TaskFileSnapshot {
 pub(crate) struct TaskSnapshot {
     gid: String,
     status: String,
+    retry_count: u32,
+    next_retry_at_ms: u64,
     total_length: String,
     completed_length: String,
     download_speed: String,
@@ -183,20 +249,13 @@ pub(crate) struct TaskSnapshot {
     error_message: Option<String>,
 }
 
-#[derive(Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct GlobalStat {
-    download_speed: String,
-    num_active: String,
-    num_waiting: String,
-    num_stopped: String,
-}
-
 fn snapshot_of(entry: &TaskEntry) -> TaskSnapshot {
     let path = entry.output_path();
     TaskSnapshot {
         gid: entry.gid.clone(),
         status: entry.status.as_status_str().to_string(),
+        retry_count: entry.retry_count,
+        next_retry_at_ms: entry.next_retry_at_ms,
         total_length: entry.total.to_string(),
         completed_length: entry.downloaded.to_string(),
         download_speed: (entry.speed.max(0.0) as u64).to_string(),
@@ -319,39 +378,92 @@ fn spawn_task(state: DownloaderState, gid: String) {
             })
             .await;
 
+        // 终局判定（锁内只读结果，状态变更走 set_status）。
+        enum Terminal {
+            Complete,
+            AutoRetry { retry_count: u32, next_retry_at_ms: u64 },
+            ErrorFinal,
+            None,
+        }
         let terminal = {
             let mut inner = state.inner.lock().expect("downloader lock");
-            let terminal = if let Some(entry) = inner.tasks.get_mut(&gid) {
+            let outcome = if let Some(entry) = inner.tasks.get_mut(&gid) {
                 entry.handle = None;
                 entry.speed = 0.0;
                 // 中止（pause/cancel）时状态已被调用方改写，不覆盖。
-                if entry.status == TaskStatus::Active {
+                if entry.status != TaskStatus::Active {
+                    Terminal::None
+                } else {
                     match result {
                         Ok(()) => {
-                            entry.status = TaskStatus::Complete;
+                            let _ = set_status(&mut inner, &gid, TaskStatus::Complete);
                             // 终局对齐：成功即全量（零 Tick/流式场景 downloaded 可能滞后）。
-                            if entry.total > 0 {
-                                entry.downloaded = entry.total;
-                            } else {
-                                entry.total = entry.downloaded;
+                            if let Some(done) = inner.tasks.get_mut(&gid) {
+                                if done.total > 0 {
+                                    done.downloaded = done.total;
+                                } else {
+                                    done.total = done.downloaded;
+                                }
                             }
+                            Terminal::Complete
                         }
                         Err(error) => {
-                            entry.status = TaskStatus::Error;
-                            entry.error = Some(error.to_string());
+                            let msg = error.to_string();
+                            if let Some(entry) = inner.tasks.get_mut(&gid) {
+                                entry.error = Some(msg);
+                            }
+                            // 自动重试：retry_count+1，按 1s/2s/4s 退避；3 次耗尽停留 error。
+                            let next_count = inner
+                                .tasks
+                                .get(&gid)
+                                .map(|e| e.retry_count + 1)
+                                .unwrap_or(1);
+                            if next_count <= MAX_AUTO_RETRY {
+                                let wait = backoff_ms(next_count);
+                                let at = now_ms().saturating_add(wait);
+                                if let Some(entry) = inner.tasks.get_mut(&gid) {
+                                    entry.retry_count = next_count;
+                                    entry.next_retry_at_ms = at;
+                                }
+                                let _ = set_status(&mut inner, &gid, TaskStatus::Retrying);
+                                Terminal::AutoRetry {
+                                    retry_count: next_count,
+                                    next_retry_at_ms: at,
+                                }
+                            } else {
+                                let _ = set_status(&mut inner, &gid, TaskStatus::Error);
+                                if let Some(entry) = inner.tasks.get_mut(&gid) {
+                                    entry.next_retry_at_ms = 0;
+                                }
+                                Terminal::ErrorFinal
+                            }
                         }
                     }
                 }
-                (entry.status == TaskStatus::Complete || entry.status == TaskStatus::Error)
-                    .then(|| (gid.clone(), entry.status.as_status_str().to_string()))
             } else {
-                None
+                Terminal::None
             };
             drop(inner);
-            terminal
+            outcome
         };
-        if let Some((done_gid, status)) = terminal {
-            state.emit_changed(&done_gid, &status);
+        match terminal {
+            // 完成：终局副作用（保留条目供查询/导入，标 complete）。
+            Terminal::Complete => {
+                state.emit_snapshot_str(&gid, "complete");
+            }
+            // 自动重试：发射 retrying 事件 + 后端 tick 到期回 waiting。
+            Terminal::AutoRetry {
+                retry_count,
+                next_retry_at_ms,
+            } => {
+                state.emit_changed(&gid, "retrying", retry_count, next_retry_at_ms);
+                schedule_retry_tick(state.clone(), gid.clone(), next_retry_at_ms);
+            }
+            // 耗尽：停留 error 待人工 retry。
+            Terminal::ErrorFinal => {
+                state.emit_snapshot_str(&gid, "error");
+            }
+            Terminal::None => {}
         }
         pump(state.clone());
     });
@@ -360,6 +472,55 @@ fn spawn_task(state: DownloaderState, gid: String) {
     if let Some(entry) = inner.tasks.get_mut(&worker_gid) {
         entry.handle = Some(handle);
     }
+}
+
+/// 后端 retry tick：sleep 到 next_retry_at 再回 waiting 同一 gid。
+/// pause 闸优先：到期时若任务已 paused/error 外状态则不回 waiting；paused 保持占位。
+fn schedule_retry_tick(state: DownloaderState, gid: String, next_retry_at_ms: u64) {
+    // 独立线程 sleep（不占 async 运行时），到期后回 waiting 同一 gid。
+    std::thread::spawn(move || {
+        let now = now_ms();
+        let wait = next_retry_at_ms.saturating_sub(now);
+        if wait > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(wait));
+        }
+        let should_pump = {
+            let mut inner = state.inner.lock().expect("downloader lock");
+            let Some(entry) = inner.tasks.get(&gid) else {
+                return;
+            };
+            // 仅 retrying 到期回 waiting；pause 闸冻结（保持 paused 占位，不续接退避）。
+            if entry.status != TaskStatus::Retrying {
+                return;
+            }
+            if inner.paused_all
+                || entry
+                    .collection_id
+                    .clone()
+                    .is_some_and(|id| inner.paused_collections.contains(&id))
+            {
+                // 闸开着：转 paused 冻结，retry 计时作废，resume 后重排。
+                let _ = set_status(&mut inner, &gid, TaskStatus::Paused);
+                if let Some(entry) = inner.tasks.get_mut(&gid) {
+                    entry.next_retry_at_ms = 0;
+                }
+                false
+            } else {
+                if let Some(entry) = inner.tasks.get_mut(&gid) {
+                    entry.next_retry_at_ms = 0;
+                }
+                let _ = set_status(&mut inner, &gid, TaskStatus::Waiting);
+                true
+            }
+        };
+        if should_pump {
+            state.emit_snapshot(&gid, TaskStatus::Waiting);
+            // 闸冻结路径不 pump（paused 占位保留）。
+            pump(state.clone());
+        } else {
+            state.emit_snapshot(&gid, TaskStatus::Paused);
+        }
+    });
 }
 
 /// 泵出等待队列：临界区只做标记，spawn 在锁外，避免与 worker 回调的锁嵌套。
@@ -382,8 +543,11 @@ fn pump(state: DownloaderState) {
             let Some(next) = inner.pending.pop_front() else {
                 break;
             };
+            // pause 闸 > retry 计时：Paused 占位直接跳过；Retrying 未到期跳过（到期由 tick 回 waiting）。
+            let now = now_ms();
             let gated = inner.tasks.get(&next).is_some_and(|entry| {
                 entry.status != TaskStatus::Waiting
+                    || entry.next_retry_at_ms > now && entry.retry_count > 0
                     || entry
                         .collection_id
                         .as_ref()
@@ -394,10 +558,7 @@ fn pump(state: DownloaderState) {
                 continue;
             }
             slots -= 1;
-            if let Some(entry) = inner.tasks.get_mut(&next) {
-                entry.status = TaskStatus::Active;
-                entry.error = None;
-            }
+            let _ = set_status(&mut inner, &next, TaskStatus::Active);
             starters.push(next);
         }
         // 被闸住的任务放回队列头部，下次 pump 到闸解除时再起。
@@ -455,6 +616,8 @@ pub fn dl_enqueue(
                 }),
                 // 被闸住的任务直接 Paused，不进 pending；闸解除后由 resume 显式恢复。
                 status: if gated { TaskStatus::Paused } else { TaskStatus::Waiting },
+                retry_count: 0,
+                next_retry_at_ms: 0,
                 total: 0,
                 downloaded: 0,
                 speed: 0.0,
@@ -470,12 +633,12 @@ pub fn dl_enqueue(
         gated
     };
     if gated {
-        state.emit_changed(&gid, TaskStatus::Paused.as_status_str());
+        state.emit_snapshot(&gid, TaskStatus::Paused);
         return Ok(gid);
     }
     pump((*state).clone());
     // 入队即事件：前端纯事件驱动需要此触发器，否则新任务要等下一次刷新才出现。
-    state.emit_changed(&gid, TaskStatus::Waiting.as_status_str());
+    state.emit_snapshot(&gid, TaskStatus::Waiting);
     Ok(gid)
 }
 
@@ -485,28 +648,41 @@ pub fn dl_pause_all(state: tauri::State<DownloaderState>) -> Result<usize, Strin
     let gids: Vec<String> = {
         let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
         inner.paused_all = true;
-        inner
+        let ids: Vec<String> = inner
             .tasks
-            .iter_mut()
+            .iter()
             .filter(|(_, entry)| {
-                entry.status == TaskStatus::Active || entry.status == TaskStatus::Waiting
+                matches!(
+                    entry.status,
+                    TaskStatus::Active
+                        | TaskStatus::Waiting
+                        | TaskStatus::Error
+                        | TaskStatus::Retrying
+                )
             })
-            .map(|(gid, entry)| {
+            .map(|(gid, _)| gid.clone())
+            .collect();
+        let mut gids = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(entry) = inner.tasks.get_mut(&id) {
                 if entry.status == TaskStatus::Active {
                     abort_entry(entry);
                 }
-                entry.status = TaskStatus::Paused;
-                gid.clone()
-            })
-            .collect()
+            }
+            // retry 计时作废：pause 闸 > retry 计时。
+            if let Some(entry) = inner.tasks.get_mut(&id) {
+                entry.next_retry_at_ms = 0;
+            }
+            if set_status(&mut inner, &id, TaskStatus::Paused).is_ok() {
+                gids.push(id);
+            }
+        }
+        gids
     };
-    {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
-        inner.pending.retain(|pending| !gids.contains(pending));
-    }
+    // paused 保持后端 pending 槽位（不摘除），pump 侧跳过。
     let count = gids.len();
     for gid in &gids {
-        state.emit_changed(gid, TaskStatus::Paused.as_status_str());
+        state.emit_snapshot(gid, TaskStatus::Paused);
     }
     Ok(count)
 }
@@ -520,23 +696,27 @@ pub fn dl_resume_all(state: tauri::State<DownloaderState>) -> Result<usize, Stri
         let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
         inner.paused_all = false;
         inner.paused_collections.clear();
-        let gids: Vec<String> = inner
+        let ids: Vec<String> = inner
             .tasks
-            .iter_mut()
+            .iter()
             .filter(|(_, entry)| entry.status == TaskStatus::Paused)
-            .map(|(gid, entry)| {
-                entry.status = TaskStatus::Waiting;
-                gid.clone()
-            })
+            .map(|(gid, _)| gid.clone())
             .collect();
-        for gid in &gids {
-            inner.pending.push_back(gid.clone());
+        let mut gids = Vec::with_capacity(ids.len());
+        for id in ids {
+            // resume 回 waiting 重排，不续接剩余退避；人工语义由 dl_retry 重置计数。
+            if let Some(entry) = inner.tasks.get_mut(&id) {
+                entry.next_retry_at_ms = 0;
+            }
+            if set_status(&mut inner, &id, TaskStatus::Waiting).is_ok() {
+                gids.push(id);
+            }
         }
         gids
     };
     let count = gids.len();
     for gid in &gids {
-        state.emit_changed(gid, TaskStatus::Waiting.as_status_str());
+        state.emit_snapshot(gid, TaskStatus::Waiting);
     }
     pump((*state).clone());
     Ok(count)
@@ -551,31 +731,39 @@ pub fn dl_pause_collection(
     let gids: Vec<String> = {
         let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
         inner.paused_collections.insert(collection_id.clone());
-        inner
+        let ids: Vec<String> = inner
             .tasks
-            .iter_mut()
+            .iter()
             .filter(|(_, entry)| {
                 entry.collection_id.as_deref() == Some(collection_id.as_str())
-                    && (entry.status == TaskStatus::Active
-                        || entry.status == TaskStatus::Waiting)
+                    && matches!(
+                        entry.status,
+                        TaskStatus::Active
+                            | TaskStatus::Waiting
+                            | TaskStatus::Error
+                            | TaskStatus::Retrying
+                    )
             })
-            .map(|(gid, entry)| {
+            .map(|(gid, _)| gid.clone())
+            .collect();
+        let mut gids = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(entry) = inner.tasks.get_mut(&id) {
                 if entry.status == TaskStatus::Active {
                     abort_entry(entry);
                 }
-                entry.status = TaskStatus::Paused;
-                gid.clone()
-            })
-            .collect()
+                entry.next_retry_at_ms = 0;
+            }
+            if set_status(&mut inner, &id, TaskStatus::Paused).is_ok() {
+                gids.push(id);
+            }
+        }
+        gids
     };
-    // waiting 任务从 pending 摘除，避免 pump 误起（pump 也有闸，双保险）。
-    {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
-        inner.pending.retain(|pending| !gids.contains(pending));
-    }
+    // paused 保持后端 pending 槽位（不摘除），pump 侧跳过。
     let count = gids.len();
     for gid in &gids {
-        state.emit_changed(gid, TaskStatus::Paused.as_status_str());
+        state.emit_snapshot(gid, TaskStatus::Paused);
     }
     pump((*state).clone());
     Ok(count)
@@ -594,29 +782,91 @@ pub fn dl_resume_collection(
             return Ok(0);
         }
         let target = collection_id.clone();
-        let gids: Vec<String> = inner
+        let ids: Vec<String> = inner
             .tasks
-            .iter_mut()
+            .iter()
             .filter(|(_, entry)| {
                 entry.collection_id.as_deref() == Some(target.as_str())
                     && entry.status == TaskStatus::Paused
             })
-            .map(|(gid, entry)| {
-                entry.status = TaskStatus::Waiting;
-                gid.clone()
-            })
+            .map(|(gid, _)| gid.clone())
             .collect();
-        for gid in &gids {
-            inner.pending.push_back(gid.clone());
+        let mut gids = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(entry) = inner.tasks.get_mut(&id) {
+                entry.next_retry_at_ms = 0;
+            }
+            if set_status(&mut inner, &id, TaskStatus::Waiting).is_ok() {
+                gids.push(id);
+            }
         }
         gids
     };
     let count = gids.len();
     for gid in &gids {
-        state.emit_changed(gid, TaskStatus::Waiting.as_status_str());
+        state.emit_snapshot(gid, TaskStatus::Waiting);
     }
     pump((*state).clone());
     Ok(count)
+}
+
+/// 唯一状态入口：任何状态变更必须经此函数（transition 合法性断言见变迁表 §2）。
+/// 非法变迁返回 Err 且不改状态；合法变迁改状态并处理 pending 占位副作用。
+/// pause 闸语义：paused 保持后端 pending 槽位（不摘除），pump 侧跳过。
+fn set_status(inner: &mut Inner, gid: &str, to: TaskStatus) -> Result<TaskStatus, String> {
+    let entry = inner
+        .tasks
+        .get_mut(gid)
+        .ok_or_else(|| format!("任务不存在：{gid}"))?;
+    let from = entry.status;
+    // 合法变迁表（与计划 §2 一一对应；complete 经终局副作用出机，不经此表）。
+    let allowed = matches!(
+        (from, to),
+        (TaskStatus::Waiting, TaskStatus::Active)
+            | (TaskStatus::Waiting, TaskStatus::Paused)
+            | (TaskStatus::Active, TaskStatus::Paused)
+            | (TaskStatus::Active, TaskStatus::Error)
+            | (TaskStatus::Active, TaskStatus::Waiting)
+            | (TaskStatus::Error, TaskStatus::Paused)
+            | (TaskStatus::Error, TaskStatus::Retrying)
+            | (TaskStatus::Retrying, TaskStatus::Paused)
+            | (TaskStatus::Retrying, TaskStatus::Waiting)
+            | (TaskStatus::Retrying, TaskStatus::Error)
+            | (TaskStatus::Paused, TaskStatus::Waiting)
+            | (TaskStatus::Error, TaskStatus::Waiting)
+    ) || from == to;
+    if !allowed {
+        return Err(format!(
+            "非法状态变迁：{} → {}",
+            from.as_status_str(),
+            to.as_status_str()
+        ));
+    }
+    let _ = std::mem::replace(&mut entry.status, to);
+    match to {
+        // Active：清 error，pending 由 pump 侧消费（此处不重复入队，由调用方决定）。
+        TaskStatus::Active => {
+            entry.error = None;
+        }
+        // Waiting：回等待清 error；paused 保持占位不摘除（pause 闸 > retry 计时）。
+        TaskStatus::Waiting => {
+            entry.error = None;
+            if !inner.pending.contains(&gid.to_string()) {
+                inner.pending.push_back(gid.to_string());
+            }
+        }
+        // Retrying：pending 摘除，等待 tick 到期再回 waiting。
+        TaskStatus::Retrying => {
+            inner.pending.retain(|pending| pending != gid);
+        }
+        // Complete：终局副作用占位（正常路径走 spawn 终局，此分支仅断言用）。
+        TaskStatus::Complete => {
+            inner.pending.retain(|pending| pending != gid);
+        }
+        // Paused：保持后端 pending 槽位（不摘除），pump 跳过；Error：保留现场不动。
+        TaskStatus::Paused | TaskStatus::Error => {}
+    }
+    Ok(from)
 }
 
 fn abort_entry(entry: &mut TaskEntry) {
@@ -628,19 +878,56 @@ fn abort_entry(entry: &mut TaskEntry) {
 
 #[tauri::command]
 pub fn dl_pause(state: tauri::State<DownloaderState>, gid: String) -> Result<(), String> {
-    let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
-    let Some(entry) = inner.tasks.get_mut(&gid) else {
-        return Err(format!("任务不存在：{gid}"));
-    };
-    if entry.status == TaskStatus::Active {
-        abort_entry(entry);
+    // Active 先中止传输（保留 sidecar 断点），再经唯一入口冻结。
+    {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let Some(entry) = inner.tasks.get_mut(&gid) else {
+            return Err(format!("任务不存在：{gid}"));
+        };
+        if entry.status == TaskStatus::Active {
+            abort_entry(entry);
+        }
+        // retry 计时作废；paused 保持 pending 槽位（set_status 内不摘除）。
+        entry.next_retry_at_ms = 0;
     }
-    entry.status = TaskStatus::Paused;
-    inner.pending.retain(|pending| pending != &gid);
-    drop(inner);
+    {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        set_status(&mut inner, &gid, TaskStatus::Paused)?;
+    }
     // 腾出槽位后泵出等待队列。
-    state.emit_changed(&gid, TaskStatus::Paused.as_status_str());
+    state.emit_snapshot(&gid, TaskStatus::Paused);
     pump((*state).clone());
+    Ok(())
+}
+
+/// 人工重试入口：error → retrying（同一 gid，保留 sidecar 断点），后端 tick 退避后回 waiting。
+/// 人工 retry 重置自动计数，按首次退避 1s 触发；同一 gid 全程不变。
+#[tauri::command]
+pub fn dl_retry(state: tauri::State<DownloaderState>, gid: String) -> Result<(), String> {
+    let (retry_count, next_retry_at_ms) = {
+        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        {
+            let Some(entry) = inner.tasks.get(&gid) else {
+                return Err(format!("任务不存在：{gid}"));
+            };
+            if entry.status != TaskStatus::Error {
+                return Err(format!(
+                    "仅 error 任务可重试，当前：{}",
+                    entry.status.as_status_str()
+                ));
+            }
+        }
+        // 人工重试重置计数，按首次退避触发。
+        if let Some(entry) = inner.tasks.get_mut(&gid) {
+            entry.retry_count = 1;
+            entry.next_retry_at_ms = now_ms().saturating_add(backoff_ms(1));
+        }
+        set_status(&mut inner, &gid, TaskStatus::Retrying)?;
+        let entry = inner.tasks.get(&gid).expect("retry entry");
+        (entry.retry_count, entry.next_retry_at_ms)
+    };
+    state.emit_changed(&gid, "retrying", retry_count, next_retry_at_ms);
+    schedule_retry_tick((*state).clone(), gid, next_retry_at_ms);
     Ok(())
 }
 
@@ -656,7 +943,10 @@ pub fn dl_resume(state: tauri::State<DownloaderState>, gid: String) -> Result<()
         let Some(entry) = inner.tasks.get_mut(&gid) else {
             return Err(format!("任务不存在：{gid}"));
         };
-        if entry.status == TaskStatus::Active || entry.status == TaskStatus::Complete {
+        if entry.status == TaskStatus::Active
+            || entry.status == TaskStatus::Complete
+            || entry.status == TaskStatus::Retrying
+        {
             return Ok(());
         }
         // 闸开着时 resume 直接拒绝，避免前端自动恢复把暂停顶掉。
@@ -665,13 +955,13 @@ pub fn dl_resume(state: tauri::State<DownloaderState>, gid: String) -> Result<()
         {
             return Err("已暂停全部/该 Collection，无法继续任务。".to_string());
         }
-        entry.status = TaskStatus::Waiting;
-        entry.error = None;
-        if !inner.pending.contains(&gid) {
-            inner.pending.push_back(gid.clone());
+        // resume 回 waiting 重排，不续接剩余退避。
+        if let Some(entry) = inner.tasks.get_mut(&gid) {
+            entry.next_retry_at_ms = 0;
         }
+        set_status(&mut inner, &gid, TaskStatus::Waiting)?;
     }
-    state.emit_changed(&gid, TaskStatus::Waiting.as_status_str());
+    state.emit_snapshot(&gid, TaskStatus::Waiting);
     pump((*state).clone());
     Ok(())
 }
@@ -695,7 +985,7 @@ pub fn dl_cancel(
         let _ = std::fs::remove_file(&output);
         let _ = std::fs::remove_file(format!("{output}.download.bitcode"));
     }
-    state.emit_changed(&gid, "removed");
+    state.emit_changed(&gid, "removed", 0, 0);
     pump((*state).clone());
     Ok(())
 }
@@ -729,7 +1019,10 @@ pub fn dl_purge_stopped(
             let Some(mut entry) = inner.tasks.remove(&gid) else {
                 continue;
             };
-            if entry.status == TaskStatus::Active || entry.status == TaskStatus::Waiting {
+            if matches!(
+                entry.status,
+                TaskStatus::Active | TaskStatus::Waiting | TaskStatus::Retrying
+            ) {
                 let status = entry.status.as_status_str().to_string();
                 inner.tasks.insert(gid.clone(), entry);
                 failed.push((gid, format!("任务{status}，跳过")));
@@ -746,7 +1039,7 @@ pub fn dl_purge_stopped(
             let _ = std::fs::remove_file(output);
             let _ = std::fs::remove_file(format!("{output}.download.bitcode"));
         }
-        state.emit_changed(gid, "removed");
+        state.emit_changed(gid, "removed", 0, 0);
     }
     pump((*state).clone());
     Ok((targets.len(), failed))
@@ -791,82 +1084,14 @@ pub fn dl_tell_status(
         .ok_or_else(|| format!("任务不存在：{gid}"))
 }
 
-fn collect_by(
-    inner: &Inner,
-    matches: fn(TaskStatus) -> bool,
-    offset: usize,
-    num: usize,
-) -> Vec<TaskSnapshot> {
-    let mut snapshots: Vec<TaskSnapshot> = inner
-        .tasks
-        .values()
-        .filter(|entry| matches(entry.status))
-        .map(snapshot_of)
-        .collect();
-    snapshots.sort_by(|left, right| left.gid.cmp(&right.gid));
-    snapshots.into_iter().skip(offset).take(num).collect()
+/// 全量任务快照：前端投影机引导同步用（应用重启/页面重载后拉取后端真相源）。
+/// 含机内 5 态任务与终局归档（complete 保留在后端注册表中，语义与 aria2 stopped 一致）。
+#[tauri::command]
+pub fn dl_list(state: tauri::State<DownloaderState>) -> Result<Vec<TaskSnapshot>, String> {
+    let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+    Ok(inner.tasks.values().map(snapshot_of).collect())
 }
 
-#[tauri::command]
-pub fn dl_tell_active(state: tauri::State<DownloaderState>) -> Result<Vec<TaskSnapshot>, String> {
-    let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
-    Ok(collect_by(&inner, |status| status == TaskStatus::Active, 0, usize::MAX))
-}
-
-#[tauri::command]
-pub fn dl_tell_waiting(
-    state: tauri::State<DownloaderState>,
-    offset: usize,
-    num: usize,
-) -> Result<Vec<TaskSnapshot>, String> {
-    let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
-    Ok(collect_by(
-        &inner,
-        |status| status == TaskStatus::Waiting || status == TaskStatus::Paused,
-        offset,
-        num,
-    ))
-}
-
-#[tauri::command]
-pub fn dl_tell_stopped(
-    state: tauri::State<DownloaderState>,
-    offset: usize,
-    num: usize,
-) -> Result<Vec<TaskSnapshot>, String> {
-    let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
-    Ok(collect_by(
-        &inner,
-        |status| status == TaskStatus::Complete || status == TaskStatus::Error,
-        offset,
-        num,
-    ))
-}
-
-#[tauri::command]
-pub fn dl_global_stat(state: tauri::State<DownloaderState>) -> Result<GlobalStat, String> {
-    let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
-    let mut active = 0;
-    let mut waiting = 0;
-    let mut stopped = 0;
-    let mut speed = 0u64;
-    for entry in inner.tasks.values() {
-        match entry.status {
-            TaskStatus::Active => {
-                active += 1;
-                speed += entry.speed.max(0.0) as u64;
-            }
-            TaskStatus::Waiting | TaskStatus::Paused => waiting += 1,
-            TaskStatus::Complete | TaskStatus::Error => stopped += 1,
-        }
-    }
-    Ok(GlobalStat {
-        download_speed: speed.to_string(),
-        num_active: active.to_string(),
-        num_waiting: waiting.to_string(),
-        num_stopped: stopped.to_string(),
-    })
-}
 // ---------- 从服务器获取文件名（移植自 sdownloader lib.rs） ----------
 // 优先级：Content-Disposition（含 filename* RFC5987/6266）> 预签名 URL 查询参数
 // response-content-disposition > URL 尾段；无扩展名时按 Content-Type 补扩展名。
@@ -1467,4 +1692,93 @@ async fn nexus_game_id_via_page(
         }
     }
     Err("未能解析游戏 ID，请检查网络或 Cookie。".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 构造带 AppHandle=None 的内存态（不发射事件，只测变迁）。
+    fn mem_state() -> DownloaderState {
+        DownloaderState::default()
+    }
+
+    fn insert_task(inner: &mut Inner, gid: &str, status: TaskStatus) {
+        inner.tasks.insert(
+            gid.to_string(),
+            TaskEntry {
+                gid: gid.to_string(),
+                url: "http://example.invalid/f.zip".to_string(),
+                dir: "C:/tmp".to_string(),
+                file_name: "f.zip".to_string(),
+                headers: Vec::new(),
+                workers: 1,
+                proxy: None,
+                status,
+                retry_count: 0,
+                next_retry_at_ms: 0,
+                total: 0,
+                downloaded: 0,
+                speed: 0.0,
+                error: None,
+                handle: None,
+                last_emit: None,
+                collection_id: None,
+            },
+        );
+    }
+
+    #[test]
+    fn retry_same_gid() {
+        // error → retrying 同一 gid，retry_count 递增，next_retry_at 按退避 1s 落点。
+        let state = mem_state();
+        let mut inner = state.inner.lock().unwrap();
+        insert_task(&mut inner, "g1", TaskStatus::Error);
+        // 模拟 dl_retry 核心段：计数重置为 1 + 变迁。
+        let entry = inner.tasks.get_mut("g1").unwrap();
+        entry.retry_count = 1;
+        entry.next_retry_at_ms = now_ms() + backoff_ms(1);
+        set_status(&mut inner, "g1", TaskStatus::Retrying).unwrap();
+        let entry = inner.tasks.get("g1").unwrap();
+        assert_eq!(entry.gid, "g1");
+        assert_eq!(entry.status, TaskStatus::Retrying);
+        assert_eq!(entry.retry_count, 1);
+        assert!(entry.next_retry_at_ms > 0);
+        // tick 到期回 waiting，同一 gid 不变。
+        let entry = inner.tasks.get_mut("g1").unwrap();
+        entry.next_retry_at_ms = 0;
+        set_status(&mut inner, "g1", TaskStatus::Waiting).unwrap();
+        let entry = inner.tasks.get("g1").unwrap();
+        assert_eq!(entry.gid, "g1");
+        assert_eq!(entry.status, TaskStatus::Waiting);
+        // 退避档位断言：1s/2s/4s。
+        assert_eq!(backoff_ms(1), 1000);
+        assert_eq!(backoff_ms(2), 2000);
+        assert_eq!(backoff_ms(3), 4000);
+    }
+
+    #[test]
+    fn transition_legality() {
+        let state = mem_state();
+        let mut inner = state.inner.lock().unwrap();
+        // 合法：waiting→active→error→retrying→waiting→paused→waiting。
+        insert_task(&mut inner, "g2", TaskStatus::Waiting);
+        set_status(&mut inner, "g2", TaskStatus::Active).unwrap();
+        set_status(&mut inner, "g2", TaskStatus::Error).unwrap();
+        set_status(&mut inner, "g2", TaskStatus::Retrying).unwrap();
+        set_status(&mut inner, "g2", TaskStatus::Waiting).unwrap();
+        set_status(&mut inner, "g2", TaskStatus::Paused).unwrap();
+        set_status(&mut inner, "g2", TaskStatus::Waiting).unwrap();
+        // 非法：waiting→error、waiting→retrying、paused→error、active→retrying。
+        insert_task(&mut inner, "g3", TaskStatus::Waiting);
+        assert!(set_status(&mut inner, "g3", TaskStatus::Error).is_err());
+        assert!(set_status(&mut inner, "g3", TaskStatus::Retrying).is_err());
+        insert_task(&mut inner, "g4", TaskStatus::Paused);
+        assert!(set_status(&mut inner, "g4", TaskStatus::Error).is_err());
+        assert!(set_status(&mut inner, "g4", TaskStatus::Retrying).is_err());
+        insert_task(&mut inner, "g5", TaskStatus::Active);
+        assert!(set_status(&mut inner, "g5", TaskStatus::Retrying).is_err());
+        // 非法变迁不改状态。
+        assert_eq!(inner.tasks.get("g3").unwrap().status, TaskStatus::Waiting);
+    }
 }

@@ -3,7 +3,6 @@ import { createPinia } from "pinia";
 import App from "@/App.vue";
 import router from "@/routes";
 import "@/style.css";
-import { Downloader } from "@/lib/native-downloader";
 import { initializeAppUpdater } from "@/lib/app-updater";
 import { initializeExternalLaunchHandling } from "@/lib/external-launch";
 import { initializeGlossDownloadMonitor } from "@/lib/gloss-download-monitor";
@@ -43,7 +42,6 @@ async function bootstrap() {
     initializeGlossDownloadMonitor(useSettings(pinia));
     initializeAppUpdater();
 
-    void Downloader.autoStartFromSettings();
     await Log.info("应用启动完成。");
 }
 

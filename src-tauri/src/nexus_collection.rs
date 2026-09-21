@@ -1,4 +1,4 @@
-//! NexusMods Collection GraphQL 直调：revision 列表 + 文件清单归一化。
+//! NexusMods Collection GraphQL 直调：revision 列表 + 文件清单归一化 + 待下载清单存储。
 //!
 //! 收益：apikey 不再经 WebView 发请求；超时/重试/解析统一在 Rust 侧；
 //! 前端只拿归一化结果做弹窗渲染。

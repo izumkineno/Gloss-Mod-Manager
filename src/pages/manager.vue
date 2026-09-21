@@ -3,7 +3,7 @@ import { onMounted, onUnmounted } from "vue";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage } from "element-plus-message";
-import { queueGlossModDownloadWithSelection } from "@/lib/download-file-selection";
+import { queueGlossModDownloadWithSelection } from "@/features/download/view/file-selection";
 import { Manager } from "@/lib/Manager";
 import { FileHandler } from "@/lib/FileHandler";
 import { installGmmPackage } from "@/lib/gmm-package";

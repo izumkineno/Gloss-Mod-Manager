@@ -127,6 +127,7 @@ declare global {
   const fetchThirdPartyModDetail: typeof import('./lib/third-party-mod-api').fetchThirdPartyModDetail
   const fetchThirdPartyMods: typeof import('./lib/third-party-mod-api').fetchThirdPartyMods
   const fetchThunderstoreCacheStatus: typeof import('./lib/third-party-mod-api').fetchThunderstoreCacheStatus
+  const filterDownloadFilePickerItems: typeof import('./lib/download-picker-filter').filterDownloadFilePickerItems
   const findGlossDuplicateLocalMods: typeof import('./lib/gloss-download').findGlossDuplicateLocalMods
   const findGlossDuplicateTasks: typeof import('./lib/gloss-download').findGlossDuplicateTasks
   const findLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').findLegacyCustomGameDefinition
@@ -554,20 +555,14 @@ declare global {
   export type { TCustomGameModTypeTemplate, TCustomGameCheckTypeTemplate } from './lib/custom-definition-utils'
   import('./lib/custom-definition-utils')
   // @ts-ignore
-  export type { CustomQueueDownloadStatus, IQueueCustomDownloadOptions, IQueueCustomDownloadResult } from './lib/custom-download-queue'
-  import('./lib/custom-download-queue')
-  // @ts-ignore
   export type { TDetectedEngine, IGameExeCandidate, IGameDirectoryInspection, IDefinitionValidationResult } from './lib/custom-game-builder'
   import('./lib/custom-game-builder')
   // @ts-ignore
   export type { DotNetTool } from './lib/dotnet-tool'
   import('./lib/dotnet-tool')
   // @ts-ignore
-  export type { DownloadTaskEventName } from './lib/download-task-events'
-  import('./lib/download-task-events')
-  // @ts-ignore
-  export type { IDownloaderTaskUri, IDownloaderTaskFile, IDownloaderTask, IDownloaderGlobalStat, IDownloaderEnsureOptions, IDownloaderSettings } from './lib/download-task-types'
-  import('./lib/download-task-types')
+  export type { TDownloadFilePickerFilter } from './lib/download-picker-filter'
+  import('./lib/download-picker-filter')
   // @ts-ignore
   export type { IExploreTranslationSourceItem, IExploreTranslationEntry, IExploreTranslationRequest } from './lib/explore-ai-translation'
   import('./lib/explore-ai-translation')
@@ -577,9 +572,6 @@ declare global {
   // @ts-ignore
   export type { GlossDownloadMonitor } from './lib/gloss-download-monitor'
   import('./lib/gloss-download-monitor')
-  // @ts-ignore
-  export type { GlossQueueDownloadStatus, IQueueGlossDownloadOptions, IQueueGlossDownloadResult } from './lib/gloss-download-queue'
-  import('./lib/gloss-download-queue')
   // @ts-ignore
   export type { IGlossDownloadTaskMeta, GlossDownloadPresence, IGlossDuplicateCriteria, IGlossDuplicateTaskMatch, IGlossDuplicateLocalModMatch } from './lib/gloss-download'
   import('./lib/gloss-download')
@@ -611,9 +603,6 @@ declare global {
   export type { IClassifyMatcher, IClassifyRule } from './lib/mod-classify-rules'
   import('./lib/mod-classify-rules')
   // @ts-ignore
-  export type { Downloader } from './lib/native-downloader'
-  import('./lib/native-downloader')
-  // @ts-ignore
   export type { NativeToolsManifest, EmbeddedToolName, EmbeddedSidecarCommand } from './lib/native-tools-manifest'
   import('./lib/native-tools-manifest')
   // @ts-ignore
@@ -622,9 +611,6 @@ declare global {
   // @ts-ignore
   export type { INexusCollectionRevision, INexusCollectionInfo, INexusCollectionFile } from './lib/nexus-collection-api'
   import('./lib/nexus-collection-api')
-  // @ts-ignore
-  export type { IQueueNexusCollectionOptions, IQueueNexusCollectionResult } from './lib/nexus-collection-download'
-  import('./lib/nexus-collection-download')
   // @ts-ignore
   export type { NexusCollectionPendingItemStatus, INexusCollectionPendingItem, INexusCollectionPending } from './lib/nexus-collection-pending'
   import('./lib/nexus-collection-pending')
@@ -646,9 +632,6 @@ declare global {
   // @ts-ignore
   export type { Theme, ThemeMode } from './lib/theme'
   import('./lib/theme')
-  // @ts-ignore
-  export type { ThirdPartyQueueDownloadStatus, IQueueThirdPartyDownloadOptions, IQueueThirdPartyDownloadResult } from './lib/third-party-download-queue'
-  import('./lib/third-party-download-queue')
   // @ts-ignore
   export type { NexusModsAuthorizationError, ThirdPartyProvider, ThirdPartyDescriptionFormat, ThirdPartyListSortKey, IThirdPartyListQuery, IThirdPartyModFile, IThirdPartyModItem, IThirdPartyModDetail, IThirdPartyModListResult, IThirdPartyModFacetOption, IThirdPartyModFacets, INexusModsFacetSelection, IThirdPartyProviderOption, INexusModsDownloadAuthorization, NexusModsDownloadMode, INexusModsDirectOptions, IThunderstoreCacheStatus } from './lib/third-party-mod-api'
   import('./lib/third-party-mod-api')

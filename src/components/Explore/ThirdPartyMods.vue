@@ -3,13 +3,10 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { ElMessage } from "element-plus-message";
 import { useI18n } from "vue-i18n";
 import RichModDesc from "@/components/common/RichModDesc.vue";
-import { Downloader } from "@/lib/native-downloader";
-import { subscribeDownloadTaskEvents } from "@/lib/download-task-events";
-import type { IDownloaderTask } from "@/lib/download-task-types";
 import {
     hasThirdPartyMultipleFiles,
     queueThirdPartyModDownloadsWithSelection,
-} from "@/lib/download-file-selection";
+} from "@/features/download/view/file-selection";
 import {
     findGlossDuplicateTasks,
     getGlossModPresence,
@@ -179,7 +176,7 @@ const detailLoading = ref(false);
 const detailError = ref("");
 const selectedListItem = ref<IThirdPartyModItem | null>(null);
 const selectedMod = ref<IThirdPartyModDetail | null>(null);
-const taskSnapshots = ref<Record<string, IDownloaderTask>>({});
+const taskSnapshots = ref<Record<string, { gid: string; status: string }>>({});
 const listTranslationMap = ref<Record<string, IExploreTranslationEntry>>({});
 const detailTranslationMap = ref<Record<string, IExploreTranslationEntry>>({});
 const manualTranslationVisible = ref(false);
@@ -535,14 +532,14 @@ watch(
     shouldPollTaskSnapshots,
     (shouldPoll) => {
         if (shouldPoll) {
-            // 事件驱动：dl-progress（0.5s 节流）推进度，dl-task-changed 推终态/入队。
+            // Wave 3：事件驱动走 facade.subscribe，快照推送即刷新。
             void refreshTaskSnapshots();
             if (releaseTaskSnapshotEvents === null) {
-                void subscribeDownloadTaskEvents(handleTaskSnapshotEvent).then(
-                    (release) => {
-                        releaseTaskSnapshotEvents = release;
-                    },
-                );
+                void import("@/features/download/facade").then(({ getDownloadFacade }) => {
+                    releaseTaskSnapshotEvents = getDownloadFacade().subscribe(() => {
+                        void refreshTaskSnapshots();
+                    });
+                });
             }
             return;
         }
@@ -552,11 +549,6 @@ watch(
     },
     { immediate: true },
 );
-
-// 事件回调只做触发器：快照仍从 tell* 拉取。
-function handleTaskSnapshotEvent() {
-    void refreshTaskSnapshots();
-}
 
 onBeforeUnmount(() => {
     cancelTranslations();
@@ -876,17 +868,10 @@ async function refreshTaskSnapshots() {
     refreshTaskSnapshotPending = true;
 
     try {
-        const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-            Downloader.tellActive(),
-            Downloader.tellWaiting(0, 100),
-            Downloader.tellStopped(0, 100),
-        ]);
-
+        // Wave 3：快照读 facade 单例投影，不再 tell*。
+        const { getDownloadFacade } = await import("@/features/download/facade");
         taskSnapshots.value = Object.fromEntries(
-            [...activeTasks, ...waitingTasks, ...stoppedTasks].map((task) => [
-                task.gid,
-                task,
-            ]),
+            getDownloadFacade().snapshot().map((task) => [task.gid, task]),
         );
     } catch (error: unknown) {
         console.error("刷新第三方下载状态失败");
@@ -1287,7 +1272,7 @@ function toNumber(value?: string | number) {
     return Number.isFinite(normalized) ? normalized : 0;
 }
 
-function getTaskProgress(task?: IDownloaderTask | null) {
+function getTaskProgress(task?: { gid: string; status: string; totalLength?: string | number; completedLength?: string | number } | null) {
     if (!task) {
         return 0;
     }

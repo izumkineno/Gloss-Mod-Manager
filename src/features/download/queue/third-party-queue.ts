@@ -1,9 +1,9 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Downloader } from "@/lib/native-downloader";
+import { ensureFileName, ensureServer, getStoredSettings, resolveDownloadDirectory } from "../meta/engine";
 import {
     type IDownloaderTask,
     type IDownloaderSettings,
-} from "@/lib/download-task-types";
+} from "../types";
 import { FileHandler } from "@/lib/FileHandler";
 import { getUrlFileName, sanitizeFileName } from "@/lib/file-name-utils";
 import {
@@ -21,10 +21,6 @@ import {
     type INexusModsDownloadAuthorization,
     type ThirdPartyProvider,
 } from "@/lib/third-party-mod-api";
-import {
-    mergeDownloadTaskSnapshots,
-    removeDownloadTaskSnapshot,
-} from "@/lib/download-task-cache";
 
 export type ThirdPartyQueueDownloadStatus =
     | "created"
@@ -137,11 +133,11 @@ function shouldOpenExternally(
 }
 
 async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
-    const outputDirectory = await Downloader.resolveDownloadDirectory();
+    const outputDirectory = await resolveDownloadDirectory();
     await FileHandler.createDirectory(outputDirectory);
-    await Downloader.ensureServer({ outputDirectory });
+    await ensureServer({ outputDirectory });
 
-    const settings = await Downloader.getStoredSettings();
+    const settings = await getStoredSettings();
     const proxy = (
         (await PersistentStore.get<string>("downloadProxy", "")) ?? ""
     ).trim();
@@ -150,18 +146,19 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
             DOWNLOAD_TASK_META_KEY,
             {},
         )) ?? {};
-    const [activeTasks, waitingTasks, stoppedTasks] = await Promise.all([
-        Downloader.tellActive(),
-        Downloader.tellWaiting(0, 100),
-        Downloader.tellStopped(0, 100),
-    ]);
-
+    // Wave 2：去重读 facade 快照（单例），不再 tellActive/tellWaiting/tellStopped。
+    const { getDownloadFacade } = await import("@/features/download/facade");
+    const allTasks: IDownloaderTask[] = getDownloadFacade().snapshot().map((task) => ({
+        gid: task.gid,
+        status: task.status,
+        files: [],
+    }));
     return {
         outputDirectory,
         proxy,
         settings,
         taskMetaMap,
-        allTasks: [...activeTasks, ...waitingTasks, ...stoppedTasks],
+        allTasks,
     };
 }
 
@@ -171,36 +168,6 @@ async function saveTaskMetaMap(
     await PersistentStore.set(DOWNLOAD_TASK_META_KEY, taskMetaMap);
 }
 
-function buildDownloadOptions(
-    runtime: IQueueRuntimeContext,
-    mod: IThirdPartyModDetail,
-    outputFileName: string,
-    collectionId?: string,
-) {
-    const options: Record<string, string> = {
-        dir: runtime.outputDirectory,
-        out: outputFileName,
-        continue: "true",
-        "allow-overwrite": "true",
-        split: String(runtime.settings.split),
-        "max-connection-per-server": String(
-            runtime.settings.maxConnectionPerServer,
-        ),
-        "min-split-size": runtime.settings.minSplitSize,
-        referer: mod.website || "https://www.nexusmods.com/",
-        "user-agent": THIRD_PARTY_DOWNLOAD_USER_AGENT,
-    };
-
-    if (runtime.proxy) {
-        options["all-proxy"] = runtime.proxy;
-    }
-
-    if (collectionId) {
-        options.collectionId = collectionId;
-    }
-
-    return options;
-}
 
 
 async function createThirdPartyDownloadTask(
@@ -210,9 +177,19 @@ async function createThirdPartyDownloadTask(
     downloadUrl: string,
     outputFileName: string,
 ) {
-    const gid = await Downloader.addUri(
-        [downloadUrl],
-        buildDownloadOptions(runtime, options.mod, outputFileName, options.collectionId),
+    // Wave 2：建任务走 facade.enqueue（后端 dl_enqueue 真签），meta/快照由 facade 接管。
+    const { getDownloadFacade } = await import("@/features/download/facade");
+    const gid = await getDownloadFacade().enqueue(
+        {
+            url: downloadUrl,
+            dir: runtime.outputDirectory,
+            fileName: outputFileName,
+            collectionId: options.collectionId,
+            headers: [
+                ["Referer", options.mod.website || "https://www.nexusmods.com/"],
+                ["User-Agent", THIRD_PARTY_DOWNLOAD_USER_AGENT],
+            ],
+        },
     );
     const now = new Date().toISOString();
 
@@ -243,14 +220,7 @@ async function createThirdPartyDownloadTask(
     };
 
     await saveTaskMetaMap(nextTaskMetaMap);
-    const createdTask = await Downloader.tellStatus(gid);
-    await mergeDownloadTaskSnapshots(
-        [...runtime.allTasks, createdTask],
-        nextTaskMetaMap,
-        runtime.outputDirectory,
-    );
     runtime.taskMetaMap = nextTaskMetaMap;
-    runtime.allTasks = [...runtime.allTasks, createdTask];
 
     return gid;
 }
@@ -355,7 +325,7 @@ export async function queueThirdPartyModDownload(
     const runtime = await getQueueRuntimeContext();
     console.debug(`${queueTag} stage=runtime-ready`);
     // 本地名缺后缀时从服务器探测补全（Nexus CDN 等哈希直链），失败回退本地名。
-    outputFileName = await Downloader.ensureFileName(
+    outputFileName = await ensureFileName(
         downloadUrl,
         outputFileName,
         {
@@ -427,29 +397,12 @@ export async function queueThirdPartyModDownload(
         }
 
         if (currentTask.status === "error") {
-            // 旧 error 任务已终局：先 forget + 删旧 meta，避免孤儿条目堆积（新任务新 gid）。
-            const staleGid = currentTask.gid;
-            try {
-                await Downloader.removeDownloadResult(staleGid);
-            } catch {
-                // 旧任务已被清理属于正常竞态，忽略。
-            }
-            const gid = await createThirdPartyDownloadTask(
-                runtime,
-                options,
-                file,
-                downloadUrl,
-                outputFileName,
-            );
-            const nextMap = { ...runtime.taskMetaMap };
-            delete nextMap[staleGid];
-            await saveTaskMetaMap(nextMap);
-            await removeDownloadTaskSnapshot(staleGid);
-            runtime.taskMetaMap = nextMap;
-
+            // Wave 2：同一 gid retry（保留断点），禁止删建新 gid。
+            const { getDownloadFacade } = await import("@/features/download/facade");
+            await getDownloadFacade().retry(currentTask.gid);
             return {
                 status: "retried",
-                gid,
+                gid: currentTask.gid,
                 mod: options.mod,
                 file,
                 message: `已重新加入下载队列：${file.name}`,

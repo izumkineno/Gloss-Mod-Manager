@@ -7,7 +7,7 @@ import { SecretStore } from "@/lib/secret-store";
 import { readGmmPackageDetails } from "@/lib/gmm-package";
 import { importGmmShareCode, parseGmmShareCode } from "@/lib/gmm-share-code";
 import { normalizeCompareText } from "@/lib/gloss-download";
-import { queueNexusCollectionDownloadWithSelection } from "@/lib/nexus-collection-download";
+import { queueNexusCollectionDownloadWithSelection } from "@/features/download/shell/collection-download";
 import {
     NexusModsAuthorizationError,
     fetchThirdPartyModDetail,
