@@ -14,7 +14,7 @@ import type {
     IDownloaderTask,
     TaskProjection,
 } from "@/features/download/types";
-import { PersistentStore } from "@/lib/persistent-store";
+import { listDownloadMeta, putDownloadMeta, removeDownloadMeta, saveDownloadMetaMap } from "@/lib/download-meta";
 import {
     formatBytes,
     getTaskPrimaryFile,
@@ -125,27 +125,32 @@ function finishTaskOperation(gid: string): void {
 }
 const isTaskOperating = (gid: string) => taskOperatingIds.value.includes(gid);
 let releaseFacadeSubscribe: (() => void) | null = null;
-// meta 仍走 PersistentStore 落盘供导入链路（与原 store 键一致）。
-const taskMetaMap = PersistentStore.useValue<Record<string, IGlossDownloadTaskMeta>>("aria2TaskMetaMap", {});
-function setTaskMeta(gid: string, metadata: IGlossDownloadTaskMeta): void {
+// meta 真相源在后端 download_meta.json；页面持本地 ref 展示，写操作直调后端桥。
+const taskMetaMap = ref<Record<string, IGlossDownloadTaskMeta>>({});
+async function reloadTaskMetaMap(): Promise<void> {
+    taskMetaMap.value = await listDownloadMeta();
+}
+async function setTaskMeta(gid: string, metadata: IGlossDownloadTaskMeta): Promise<void> {
+    await putDownloadMeta(gid, metadata);
     taskMetaMap.value = { ...taskMetaMap.value, [gid]: metadata };
 }
-function removeTaskMeta(gid: string): void {
+async function removeTaskMeta(gid: string): Promise<void> {
+    await removeDownloadMeta(gid);
     const next = { ...taskMetaMap.value };
     delete next[gid];
     taskMetaMap.value = next;
 }
 async function saveTaskMetaMap(nextMap: Record<string, IGlossDownloadTaskMeta>): Promise<void> {
-    await PersistentStore.set("aria2TaskMetaMap", nextMap, true);
+    await saveDownloadMetaMap(nextMap);
 }
 async function forgetTaskRecord(gid: string): Promise<void> {
     await facade.forget(gid);
-    removeTaskMeta(gid);
+    await removeTaskMeta(gid);
     await refreshTaskLists(true);
 }
 async function removeTaskRecord(task: IDownloaderTask): Promise<void> {
     await facade.cancel(task.gid);
-    removeTaskMeta(task.gid);
+    await removeTaskMeta(task.gid);
     await refreshTaskLists(true);
 }
 
@@ -549,6 +554,7 @@ async function initializeDownloadPage(): Promise<void> {
         tasksErrorMessage.value = "";
         await engine.refreshDefaultDownloadDirectory(storagePath.value);
         await engine.ensureEngineReady();
+        await reloadTaskMetaMap();
         await refreshTaskLists();
     } catch (error: unknown) {
         tasksErrorMessage.value = getErrorMessage(error);

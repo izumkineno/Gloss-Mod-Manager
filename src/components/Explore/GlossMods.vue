@@ -30,7 +30,6 @@ import {
     type IExploreTranslationEntry,
     type IExploreTranslationSourceItem,
 } from "@/lib/explore-ai-translation";
-import { PersistentStore } from "@/lib/persistent-store";
 const DEFAULT_PAGE_SIZE = "12";
 const PAGE_SIZE_OPTIONS = ["12", "20", "36", "48"];
 const EMPTY_POSTER =
@@ -136,9 +135,7 @@ const effectiveGlossKey = computed(() => resolveGlossModKey(settings.glossModKey
 const router = useRouter();
 const route = useRoute();
 const { t, locale } = useI18n();
-const taskMetaMap = PersistentStore.useValue<
-    Record<string, IGlossDownloadTaskMeta>
->("aria2TaskMetaMap", {});
+const taskMetaMap = ref<Record<string, IGlossDownloadTaskMeta>>({});
 
 const numberFormatter = computed(
     () => new Intl.NumberFormat(locale.value.replace(/_/gu, "-")),
@@ -1182,11 +1179,13 @@ async function refreshTaskSnapshots() {
     }
     refreshTaskSnapshotPending = true;
     try {
-        // Wave 3：快照读 facade 单例投影（5 态），不再 tell*。
+        // Wave 3：快照读 facade 单例投影（5 态），不再 tell*；meta 读后端（展示用）。
         const { getDownloadFacade } = await import("@/features/download/facade");
         taskSnapshots.value = Object.fromEntries(
             getDownloadFacade().snapshot().map((task) => [task.gid, task]),
         );
+        const { listDownloadMeta } = await import("@/lib/download-meta");
+        taskMetaMap.value = await listDownloadMeta();
     } catch (error) {
         console.error("刷新游览页下载状态失败");
         console.error(error);

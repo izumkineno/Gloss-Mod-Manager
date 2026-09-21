@@ -12,6 +12,7 @@ import {
     type ILocalModImportSource,
 } from "@/lib/local-mod-import";
 import { useManager } from "@/stores/manager";
+import { listDownloadMeta, putDownloadMeta, saveDownloadMetaMap } from "@/lib/download-meta";
 
 interface IGlossDownloadMonitorSettings {
     autoAddAfterDownload: boolean;
@@ -25,7 +26,6 @@ interface ITaskMetaSyncResult {
     newlyCompletedTaskGids: string[];
 }
 
-const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
 // 事件驱动为主（dl-progress/dl-task-changed 触发 refresh）；60s 兜底只防“完成事件丢失导致永不导入”。
 const POLL_INTERVAL_MS = 60000;
 const importingTaskGids = new Set<string>();
@@ -51,12 +51,7 @@ function getBaseName(filePath?: string) {
 }
 
 async function readTaskMetaMap() {
-    return (
-        (await PersistentStore.get<Record<string, IGlossDownloadTaskMeta>>(
-            DOWNLOAD_TASK_META_KEY,
-            {},
-        )) ?? {}
-    );
+    return listDownloadMeta();
 }
 
 async function updateTaskMeta(
@@ -70,12 +65,9 @@ async function updateTaskMeta(
         return;
     }
 
-    await PersistentStore.set(DOWNLOAD_TASK_META_KEY, {
-        ...taskMetaMap,
-        [gid]: {
-            ...currentMeta,
-            ...metadata,
-        },
+    await putDownloadMeta(gid, {
+        ...currentMeta,
+        ...metadata,
     });
 }
 
@@ -353,10 +345,7 @@ export class GlossDownloadMonitor {
             }));
             const syncResult = syncTaskMetaStatuses(taskMetaMap, allTasks);
             if (syncResult.changed) {
-                await PersistentStore.set(
-                    DOWNLOAD_TASK_META_KEY,
-                    syncResult.nextTaskMetaMap,
-                );
+                await saveDownloadMetaMap(syncResult.nextTaskMetaMap);
             }
             if (!GlossDownloadMonitor.initialized) {
                 GlossDownloadMonitor.initialized = true;

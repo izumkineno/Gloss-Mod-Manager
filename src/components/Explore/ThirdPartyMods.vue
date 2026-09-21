@@ -13,7 +13,6 @@ import {
     type GlossDownloadPresence,
     type IGlossDownloadTaskMeta,
 } from "@/lib/gloss-download";
-import { PersistentStore } from "@/lib/persistent-store";
 import {
     fetchThirdPartyModDetail,
     fetchThirdPartyMods,
@@ -113,9 +112,7 @@ const settings = useSettings();
 const router = useRouter();
 const route = useRoute();
 const { t, locale } = useI18n();
-const taskMetaMap = PersistentStore.useValue<
-    Record<string, IGlossDownloadTaskMeta>
->("aria2TaskMetaMap", {});
+const taskMetaMap = ref<Record<string, IGlossDownloadTaskMeta>>({});
 const numberFormatter = computed(
     () => new Intl.NumberFormat(locale.value.replace(/_/gu, "-")),
 );
@@ -868,11 +865,13 @@ async function refreshTaskSnapshots() {
     refreshTaskSnapshotPending = true;
 
     try {
-        // Wave 3：快照读 facade 单例投影，不再 tell*。
+        // Wave 3：快照读 facade 单例投影，不再 tell*；meta 读后端（展示用）。
         const { getDownloadFacade } = await import("@/features/download/facade");
         taskSnapshots.value = Object.fromEntries(
             getDownloadFacade().snapshot().map((task) => [task.gid, task]),
         );
+        const { listDownloadMeta } = await import("@/lib/download-meta");
+        taskMetaMap.value = await listDownloadMeta();
     } catch (error: unknown) {
         console.error("刷新第三方下载状态失败");
         console.error(error);

@@ -1,5 +1,6 @@
 mod nexus_collection;
 mod downloader;
+mod download_meta;
 mod explore;
 mod fsops;
 mod mcp_server;
@@ -361,7 +362,10 @@ pub fn run() {
             downloader::dl_resume,
             downloader::dl_cancel,
             downloader::dl_forget,
-            downloader::dl_purge_stopped,
+            download_meta::dl_meta_list,
+            download_meta::dl_meta_save,
+            download_meta::dl_meta_put,
+            download_meta::dl_meta_remove,
             downloader::dl_change_option,
             downloader::dl_tell_status,
             downloader::dl_list,

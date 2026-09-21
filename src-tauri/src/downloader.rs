@@ -1035,18 +1035,9 @@ pub fn dl_purge_stopped(
         inner.pending.retain(|pending| !targets.iter().any(|(gid, _)| gid == pending));
         (targets, failed)
     };
-    let mut failed = failed;
     for (gid, output) in &targets {
         if delete_file {
-            // 文件/目录都尝试删（单文件任务也可能落成目录）；失败记入明细，不静默吞错。
-            let file_err = std::fs::remove_file(output).err();
-            let dir_err = if file_err.is_some() { std::fs::remove_dir_all(output).err() } else { None };
-            if let Some(err) = dir_err.or(file_err) {
-                // 文件本就不存在不算失败（用户手动删过）。
-                if err.kind() != std::io::ErrorKind::NotFound {
-                    failed.push((gid.clone(), format!("文件删除失败：{err}")));
-                }
-            }
+            let _ = std::fs::remove_file(output);
             let _ = std::fs::remove_file(format!("{output}.download.bitcode"));
         }
         state.emit_changed(gid, "removed", 0, 0);

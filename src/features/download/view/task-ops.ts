@@ -83,7 +83,7 @@ export async function removeTask(
 export async function purgeStoppedTasks(
     stoppedTasks: IDownloaderTask[],
     hooks: TaskOpsHooks & {
-        removeTaskMeta: (gid: string) => void;
+        removeTaskMeta: (gid: string) => Promise<void>;
         saveTaskMetaMap: (nextMap: Record<string, IGlossDownloadTaskMeta>) => Promise<void>;
         taskMetaMap: Record<string, IGlossDownloadTaskMeta>;
     },
@@ -109,7 +109,7 @@ export async function purgeStoppedTasks(
     let removed = 0;
     for (const task of tasks) {
         try {
-            hooks.removeTaskMeta(task.gid);
+            await hooks.removeTaskMeta(task.gid);
             removed += 1;
         } catch {
             // 单条清理失败不中断。

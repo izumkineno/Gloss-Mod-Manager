@@ -11,7 +11,6 @@ import {
     type IGlossDownloadTaskMeta,
 } from "@/lib/gloss-download";
 import { fetchGlossGamePlugins } from "@/lib/gloss-mod-api";
-import { PersistentStore } from "@/lib/persistent-store";
 import {
     fetchThirdPartyModDetail,
     NexusModsAuthorizationError,
@@ -38,9 +37,7 @@ interface IPreloadLookupCriteria {
 const manager = useManager();
 const settings = useSettings();
 const router = useRouter();
-const taskMetaMap = PersistentStore.useValue<
-    Record<string, IGlossDownloadTaskMeta>
->("aria2TaskMetaMap", {});
+const taskMetaMap = ref<Record<string, IGlossDownloadTaskMeta>>({});
 
 const { showPreloadList } = storeToRefs(settings);
 
@@ -494,11 +491,13 @@ async function refreshTaskSnapshots() {
     refreshTaskSnapshotPending = true;
 
     try {
-        // Wave 3：快照读 facade 单例投影，不再 tell*。
+        // Wave 3：快照读 facade 单例投影，不再 tell*；meta 读后端（展示用）。
         const { getDownloadFacade } = await import("@/features/download/facade");
         taskSnapshots.value = Object.fromEntries(
             getDownloadFacade().snapshot().map((task) => [task.gid, task]),
         );
+        const { listDownloadMeta } = await import("@/lib/download-meta");
+        taskMetaMap.value = await listDownloadMeta();
     } catch (error) {
         console.error("刷新前置下载状态失败");
         console.error(error);

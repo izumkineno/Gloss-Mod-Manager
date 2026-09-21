@@ -12,6 +12,7 @@ import {
     type IGlossDownloadTaskMeta,
 } from "@/lib/gloss-download";
 import { PersistentStore } from "@/lib/persistent-store";
+import { listDownloadMeta, saveDownloadMetaMap } from "@/lib/download-meta";
 import {
     fetchNexusModsSingleFileName,
     resolveThirdPartyDownloadUrl,
@@ -58,7 +59,6 @@ interface IQueueRuntimeContext {
     allTasks: IDownloaderTask[];
 }
 
-const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
 const THIRD_PARTY_DOWNLOAD_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 const FILE_EXTENSION_PATTERN =
@@ -141,11 +141,7 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
     const proxy = (
         (await PersistentStore.get<string>("downloadProxy", "")) ?? ""
     ).trim();
-    const taskMetaMap =
-        (await PersistentStore.get<Record<string, IGlossDownloadTaskMeta>>(
-            DOWNLOAD_TASK_META_KEY,
-            {},
-        )) ?? {};
+    const taskMetaMap = await listDownloadMeta();
     // Wave 2：去重读 facade 快照（单例），不再 tellActive/tellWaiting/tellStopped。
     const { getDownloadFacade } = await import("@/features/download/facade");
     const allTasks: IDownloaderTask[] = getDownloadFacade().snapshot().map((task) => ({
@@ -165,7 +161,7 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
 async function saveTaskMetaMap(
     taskMetaMap: Record<string, IGlossDownloadTaskMeta>,
 ) {
-    await PersistentStore.set(DOWNLOAD_TASK_META_KEY, taskMetaMap);
+    await saveDownloadMetaMap(taskMetaMap);
 }
 
 

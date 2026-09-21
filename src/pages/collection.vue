@@ -59,37 +59,17 @@ function cancelRetryEntry(entryId: string) {
 // 本地 mod 列表 + 设置（状态识别/建任务用）。
 const manager = useManager();
 const settings = useSettings();
-// 刷新清单。
 async function refreshCollectionPending() {
     collectionPendingLoading.value = true;
     try {
+        // 纯展示：清单真相源在后端，前端只读不写（不再做 reason 对账）。
         collectionPendingList.value = await listCollectionPending();
         // 条目增删后夹紧外层页码，避免停在空页。
         const total = Math.max(1, Math.ceil(collectionPendingList.value.length / COLLECTION_PAGE_SIZE));
         if (collectionPage.value > total) collectionPage.value = total;
-        // 对账：任务已完成/本地已装的行，其历史 reason 已过期，自动清除。
-        await reconcileStaleReasons();
     } finally {
         collectionPendingLoading.value = false;
     }
-}
-
-// reason 是上次失败的快照；任务终态已完成或已安装时 reason 必过期，直接清掉。
-async function reconcileStaleReasons() {
-    const { updateCollectionPendingItem } = await import("@/lib/nexus-collection-pending");
-    let changed = false;
-    for (const entry of collectionPendingList.value) {
-        for (const item of entry.items) {
-            if (!item.reason) continue;
-            if (getPendingTaskStatus(item) === "complete" || isPendingItemInstalled(item)) {
-                await updateCollectionPendingItem(entry.id, item.modId, item.fileId, "queued", undefined);
-                item.status = "queued";
-                item.reason = undefined;
-                changed = true;
-            }
-        }
-    }
-    if (changed) collectionPendingList.value = await listCollectionPending();
 }
 
 

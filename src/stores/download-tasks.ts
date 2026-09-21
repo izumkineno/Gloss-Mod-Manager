@@ -1,16 +1,14 @@
 // 下载任务共享 Pinia store（Wave 3 薄包装）：状态一律走 facade 单例，禁止自有状态机。
-// 数据经 facade.snapshot()/subscribe 读取；操作经 facade 方法透传；meta 仍走 PersistentStore 落盘供导入链路。
+// 数据经 facade.snapshot()/subscribe 读取；操作经 facade 方法透传；meta 真相源在后端 download_meta.json。
 import { computed, ref } from "vue";
 import { ElMessage } from "element-plus-message";
 import { getDownloadFacade } from "@/features/download/facade";
 import type { TaskProjection } from "@/features/download/types";
 import { FileHandler } from "@/lib/FileHandler";
-import { PersistentStore } from "@/lib/persistent-store";
 import { getTaskPrimaryFile } from "@/features/download/view/format";
 import type { IDownloaderGlobalStat, IDownloaderTask } from "@/features/download/types";
 import type { IGlossDownloadTaskMeta } from "@/lib/gloss-download";
-
-export const DOWNLOAD_TASK_META_KEY = "aria2TaskMetaMap";
+import { listDownloadMeta, putDownloadMeta, removeDownloadMeta, saveDownloadMetaMap } from "@/lib/download-meta";
 
 function defaultGlobalStat(): IDownloaderGlobalStat {
     return { downloadSpeed: "0", numActive: "0", numWaiting: "0", numStopped: "0" };
@@ -40,7 +38,7 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
     const globalStat = ref<IDownloaderGlobalStat>(defaultGlobalStat());
     const taskList = ref<TaskProjection[]>([]);
     const taskOperatingIds = ref<string[]>([]);
-    const taskMetaMap = PersistentStore.useValue<Record<string, IGlossDownloadTaskMeta>>(DOWNLOAD_TASK_META_KEY, {});
+    const taskMetaMap = ref<Record<string, IGlossDownloadTaskMeta>>({});
 
     const completedHandlers = new Set<NewlyCompletedHandler>();
     let releaseSubscribe: (() => void) | null = null;
@@ -59,10 +57,8 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
     }
 
     async function refreshTaskLists(silent = false): Promise<void> {
-        if (!silent) {
-            refreshingTasks.value = true;
-        }
         try {
+            taskMetaMap.value = await listDownloadMeta();
             pullSnapshot();
             tasksErrorMessage.value = "";
         } catch (error: unknown) {
@@ -78,30 +74,32 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
         await refreshTaskLists(true);
     }
 
-    function setTaskMeta(gid: string, metadata: IGlossDownloadTaskMeta): void {
+    async function setTaskMeta(gid: string, metadata: IGlossDownloadTaskMeta): Promise<void> {
         const nextMeta: IGlossDownloadTaskMeta = { ...taskMetaMap.value[gid], ...metadata };
         if (!nextMeta.createdAt) {
             nextMeta.createdAt = new Date().toISOString();
         }
+        await putDownloadMeta(gid, nextMeta);
         taskMetaMap.value = { ...taskMetaMap.value, [gid]: nextMeta };
     }
 
-    function removeTaskMeta(gid: string): void {
+    async function removeTaskMeta(gid: string): Promise<void> {
         if (!taskMetaMap.value[gid]) {
             return;
         }
+        await removeDownloadMeta(gid);
         const nextMap = { ...taskMetaMap.value };
         delete nextMap[gid];
         taskMetaMap.value = nextMap;
     }
 
     async function saveTaskMetaMap(nextMap: Record<string, IGlossDownloadTaskMeta>): Promise<void> {
-        await PersistentStore.set(DOWNLOAD_TASK_META_KEY, nextMap, true);
+        await saveDownloadMetaMap(nextMap);
     }
 
     async function forgetTaskRecord(gid: string): Promise<void> {
         await facade.forget(gid);
-        removeTaskMeta(gid);
+        await removeTaskMeta(gid);
         await saveTaskMetaMap(taskMetaMap.value);
         pullSnapshot();
     }
@@ -115,7 +113,7 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
             await FileHandler.deleteFile(`${filePath}.download.bitcode`);
         }
         await facade.cancel(gid, false);
-        removeTaskMeta(gid);
+        await removeTaskMeta(gid);
         await saveTaskMetaMap(taskMetaMap.value);
         pullSnapshot();
     }
