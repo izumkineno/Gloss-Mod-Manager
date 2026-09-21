@@ -14,7 +14,7 @@ import type {
     IDownloaderTask,
     TaskProjection,
 } from "@/features/download/types";
-import { listDownloadMeta, putDownloadMeta, removeDownloadMeta, saveDownloadMetaMap } from "@/lib/download-meta";
+import { listDownloadMeta, putDownloadMeta, removeDownloadMeta } from "@/lib/download-meta";
 import {
     formatBytes,
     getTaskPrimaryFile,
@@ -125,10 +125,21 @@ function finishTaskOperation(gid: string): void {
 }
 const isTaskOperating = (gid: string) => taskOperatingIds.value.includes(gid);
 let releaseFacadeSubscribe: (() => void) | null = null;
-// meta 真相源在后端 download_meta.json；页面持本地 ref 展示，写操作直调后端桥。
+// meta/投影/引擎设置真相源在后端（download_meta.json/download_store.json）；页面持本地 ref 展示，写操作直调后端桥。
 const taskMetaMap = ref<Record<string, IGlossDownloadTaskMeta>>({});
 async function reloadTaskMetaMap(): Promise<void> {
-    taskMetaMap.value = await listDownloadMeta();
+    const loaded = await listDownloadMeta();
+    const entries = Object.entries(loaded);
+    const orphans = entries.filter(([, m]) => !(m as { fileName?: string })?.fileName && !(m as { resourceName?: string })?.resourceName);
+    if (orphans.length > 0) {
+        console.warn(`[uuid-trace] reloadTaskMetaMap orphans=${orphans.length}/${entries.length} gids=${orphans.map(([gid]) => gid).join(",")}`);
+        for (const [gid, meta] of orphans) {
+            console.warn(`[uuid-trace] orphan meta gid=${gid} `, meta);
+        }
+    } else {
+        console.debug(`[uuid-trace] reloadTaskMetaMap ok total=${entries.length}`);
+    }
+    taskMetaMap.value = loaded;
 }
 async function setTaskMeta(gid: string, metadata: IGlossDownloadTaskMeta): Promise<void> {
     await putDownloadMeta(gid, metadata);
@@ -139,9 +150,6 @@ async function removeTaskMeta(gid: string): Promise<void> {
     const next = { ...taskMetaMap.value };
     delete next[gid];
     taskMetaMap.value = next;
-}
-async function saveTaskMetaMap(nextMap: Record<string, IGlossDownloadTaskMeta>): Promise<void> {
-    await saveDownloadMetaMap(nextMap);
 }
 async function forgetTaskRecord(gid: string): Promise<void> {
     await facade.forget(gid);
@@ -277,8 +285,6 @@ function confirmPurgeTasks(): Promise<void> {
         {
             ...taskOpsHooks,
             removeTaskMeta,
-            saveTaskMetaMap,
-            taskMetaMap: taskMetaMap.value,
         },
         purgeDeleteFile.value,
     );
@@ -314,7 +320,6 @@ function buildRetryDeps(): RetryDeps {
         },
         ensureEngineReady: () => engine.ensureEngineReady(),
         normalizedDownloaderSettings: normalizedDownloaderSettings.value,
-        downloadProxy: downloadProxy.value ?? "",
     };
 }
 function retryTask(task: IDownloaderTask, quiet = false): Promise<string | null> {
@@ -615,9 +620,36 @@ watch(
     },
 );
 
+let pendingMetaReload: ReturnType<typeof setTimeout> | null = null;
+function scheduleMetaReload(): void {
+    if (pendingMetaReload) return;
+    pendingMetaReload = setTimeout(async () => {
+        pendingMetaReload = null;
+        try {
+            const before = Object.keys(taskMetaMap.value).length;
+            const loaded = await listDownloadMeta();
+            // Only apply if changed to avoid noisy warn spam
+            const after = Object.keys(loaded).length;
+            if (after !== before) {
+                console.debug(`[uuid-trace] scheduleMetaReload before=${before} after=${after}`);
+            }
+            // Detect newly arrived orphan fix? log if any gid still empty
+            const orphans = Object.entries(loaded).filter(([, m]) => !(m as { fileName?: string })?.fileName && !(m as { resourceName?: string })?.resourceName);
+            if (orphans.length > 0) console.warn(`[uuid-trace] scheduleMetaReload still orphans=${orphans.length} gids=${orphans.map(([gid])=>gid).join(",").slice(0,300)}`);
+            taskMetaMap.value = loaded;
+        } catch {}
+    }, 350);
+}
+
 onMounted(() => {
     releaseFacadeSubscribe = facade.subscribe((tasks) => {
         taskList.value = tasks;
+        // 下载页任务名回退 uuid 的真因：taskMetaMap 只在页面初始化时 load 一次，
+        // 合集批量建任务时后端 download_meta.json 已有 fileName，但前端 map 仍是旧快照，
+        // getTaskDisplayName(metaFileName empty) → 误判为孤儿回退 gid/uuid。
+        // 这里按 facade 快照增量触发 meta 补全（去抖 350ms，避免每条入队都全量读）。
+        const missing = tasks.some((t: TaskProjection) => !taskMetaMap.value[t.gid]);
+        if (missing) scheduleMetaReload();
     });
     // 新完成任务自动导入（轮询快照差集，替代原 store 事件）。
     let knownComplete = new Set(
@@ -639,6 +671,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+    if (pendingMetaReload) { clearTimeout(pendingMetaReload); pendingMetaReload = null; }
     releaseFacadeSubscribe?.();
     releaseFacadeSubscribe = null;
 });

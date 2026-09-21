@@ -8,7 +8,7 @@ import { FileHandler } from "@/lib/FileHandler";
 import { getTaskPrimaryFile } from "@/features/download/view/format";
 import type { IDownloaderGlobalStat, IDownloaderTask } from "@/features/download/types";
 import type { IGlossDownloadTaskMeta } from "@/lib/gloss-download";
-import { listDownloadMeta, putDownloadMeta, removeDownloadMeta, saveDownloadMetaMap } from "@/lib/download-meta";
+import { listDownloadMeta, putDownloadMeta, removeDownloadMeta } from "@/lib/download-meta";
 
 function defaultGlobalStat(): IDownloaderGlobalStat {
     return { downloadSpeed: "0", numActive: "0", numWaiting: "0", numStopped: "0" };
@@ -47,10 +47,10 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
     // 页内仍消费 active/waiting/stopped 三桶：waiting 桶含 paused（模板 v-if 区分）。
     const activeTasks = computed(() => taskList.value.filter((t) => t.status === "active").map(toLegacyTask));
     const waitingTasks = computed(() => taskList.value.filter((t) => t.status === "waiting" || t.status === "paused").map(toLegacyTask));
-    const stoppedTasks = computed(() => taskList.value.filter((t) => t.status === "error" || t.status === "retrying").map(toLegacyTask));
+    const stoppedTasks = computed(() => taskList.value.filter((t) => t.status === "complete").map(toLegacyTask));
     const allTasks = computed(() => taskList.value.map(toLegacyTask));
     const failedTasks = computed(() => taskList.value.filter((t) => t.status === "error").map(toLegacyTask));
-    const finishedTasks = computed(() => taskList.value.filter((t) => t.status === "error").map(toLegacyTask));
+    const finishedTasks = computed(() => taskList.value.filter((t) => t.status === "complete").map(toLegacyTask));
 
     function pullSnapshot(): void {
         taskList.value = facade.snapshot();
@@ -93,14 +93,10 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
         taskMetaMap.value = nextMap;
     }
 
-    async function saveTaskMetaMap(nextMap: Record<string, IGlossDownloadTaskMeta>): Promise<void> {
-        await saveDownloadMetaMap(nextMap);
-    }
-
     async function forgetTaskRecord(gid: string): Promise<void> {
         await facade.forget(gid);
+        // meta 单键删除已在 removeTaskMeta 落盘；不再整表回写（旧快照会洗掉并发链路的新条目）。
         await removeTaskMeta(gid);
-        await saveTaskMetaMap(taskMetaMap.value);
         pullSnapshot();
     }
 
@@ -113,8 +109,8 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
             await FileHandler.deleteFile(`${filePath}.download.bitcode`);
         }
         await facade.cancel(gid, false);
+        // meta 单键删除已在 removeTaskMeta 落盘；不再整表回写（旧快照会洗掉并发链路的新条目）。
         await removeTaskMeta(gid);
-        await saveTaskMetaMap(taskMetaMap.value);
         pullSnapshot();
     }
 
@@ -179,7 +175,6 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
         refreshTaskSnapshot,
         setTaskMeta,
         removeTaskMeta,
-        saveTaskMetaMap,
         forgetTaskRecord,
         removeTaskRecord,
         startTaskOperation,

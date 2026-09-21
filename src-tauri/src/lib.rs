@@ -1,9 +1,10 @@
-mod nexus_collection;
-mod downloader;
+mod download_store;
 mod download_meta;
+mod downloader;
 mod explore;
 mod fsops;
 mod mcp_server;
+mod nexus_collection;
 mod thunderstore;
 
 use std::io;
@@ -227,7 +228,14 @@ fn init_tracing(log_directory: PathBuf, session_file_name: String) {
 
     // dev 默认 debug 便于排查，release 默认 info 降噪；RUST_LOG 环境变量可覆盖。
     // h2/hyper 等底层 HTTP/2 编解码日志极其刷屏，默认压到 warn。
-    let default_directives = format!("{0},h2=warn,hyper=warn", if cfg!(debug_assertions) { "debug" } else { "info" });
+    let default_directives = format!(
+        "{0},h2=warn,hyper=warn",
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "info"
+        }
+    );
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&default_directives));
 
@@ -362,9 +370,12 @@ pub fn run() {
             downloader::dl_resume,
             downloader::dl_cancel,
             downloader::dl_forget,
+            downloader::dl_purge_stopped,
             download_meta::dl_meta_list,
             download_meta::dl_meta_save,
             download_meta::dl_meta_put,
+            download_store::dl_store_get,
+            download_store::dl_store_set,
             download_meta::dl_meta_remove,
             downloader::dl_change_option,
             downloader::dl_tell_status,

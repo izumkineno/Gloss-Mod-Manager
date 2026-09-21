@@ -94,6 +94,12 @@ const filteredCollections = computed(() => {
     if (collectionFilter.value === "undownloaded") {
         return collectionPendingList.value.filter((entry) => entry.items.some(isItemUndownloaded));
     }
+    if (collectionFilter.value === "imported") {
+        return collectionPendingList.value.filter((entry) => entry.items.some(isPendingItemImported));
+    }
+    if (collectionFilter.value === "unimported") {
+        return collectionPendingList.value.filter((entry) => entry.items.some((item) => !isPendingItemImported(item)));
+    }
     return collectionPendingList.value.filter((entry) => {
         if (getEntryFilterState(entry) === collectionFilter.value) return true;
         return entry.items.some((item) => getItemFilterState(item) === collectionFilter.value);
@@ -103,6 +109,8 @@ const filteredCollections = computed(() => {
 const filteredItemsOf = (entry: INexusCollectionPending): INexusCollectionPendingItem[] => {
     if (collectionFilter.value === "all") return entry.items;
     if (collectionFilter.value === "undownloaded") return entry.items.filter(isItemUndownloaded);
+    if (collectionFilter.value === "imported") return entry.items.filter(isPendingItemImported);
+    if (collectionFilter.value === "unimported") return entry.items.filter((item) => !isPendingItemImported(item));
     return entry.items.filter((item) => getItemFilterState(item) === collectionFilter.value);
 };
 const collectionTotalPages = computed(() =>
@@ -170,6 +178,7 @@ function getPendingTask(item: INexusCollectionPendingItem): IDownloaderTask | nu
 }
 
 // 下载列表识别：externalId:resourceId → 任务状态（无任务时回退 meta 快照）。
+// meta.taskStatus 是后端真相的本地投影：任务记录被清理但 meta 仍标 complete 时也算已下载。
 function getPendingTaskStatus(item: INexusCollectionPendingItem): string | null {
     const task = getPendingTask(item);
     if (task) return task.status;
@@ -210,31 +219,57 @@ async function openPendingItemLocation(item: INexusCollectionPendingItem) {
     }
     ElMessage.warning("该文件暂无本地位置（未下载也未安装）。");
 }
-// 行级终态：done 优先（已安装/任务完成），其次失败，其次已建任务，其次待处理。
-function getItemFilterState(item: INexusCollectionPendingItem): CollectionFilter {
-    if (isPendingItemInstalled(item) || getPendingTaskStatus(item) === "complete") return "done";
-    if (item.status === "failed" || getPendingTaskStatus(item) === "error") return "failed";
-    if (item.status === "queued") return "queued";
-    return "pending";
+// 关联任务 meta：externalId:resourceId → gid 命中的 meta（导入态判读用）。
+function getPendingMeta(item: INexusCollectionPendingItem): { gid: string; localModId?: unknown } | null {
+    const key = `${item.modId}:${item.fileId}`;
+    for (const [gid, meta] of Object.entries(taskMetaMap.value)) {
+        if (`${meta.externalId}:${meta.resourceId}` !== key) continue;
+        const task = allTasks.value.find((t) => t.gid === gid);
+        if (!task) continue;
+        return { gid, localModId: (meta as { localModId?: unknown }).localModId };
+    }
+    return null;
 }
-// 条目级状态：全部 done 才算 done，有 failed 算 failed，其次 queued/pending。
-function getEntryFilterState(entry: INexusCollectionPending): CollectionFilter {
-    const states = entry.items.map(getItemFilterState);
-    if (states.length > 0 && states.every((s) => s === "done")) return "done";
-    if (states.includes("failed")) return "failed";
-    if (states.includes("queued")) return "queued";
-    if (states.includes("pending")) return "pending";
-    return "all";
+// 导入态：关联任务已有 localModId 算已导入；无关联任务按本地安装兜底（已装即已导入）。
+function isPendingItemImported(item: INexusCollectionPendingItem): boolean {
+    const pendingMeta = getPendingMeta(item);
+    if (pendingMeta) return pendingMeta.localModId != null;
+    return isPendingItemInstalled(item);
 }
-type CollectionFilter = "all" | "pending" | "queued" | "failed" | "done" | "undownloaded";
-const collectionFilterOptions: Array<{ value: CollectionFilter; label: string }> = [
-    { value: "all", label: "全部" },
-    { value: "undownloaded", label: "未下载" },
-    { value: "pending", label: "待处理" },
-    { value: "queued", label: "已建任务" },
-    { value: "failed", label: "失败" },
+// 下载中：关联任务存活（active/waiting/paused）即算下载中。
+function isPendingItemDownloading(item: INexusCollectionPendingItem): boolean {
+    return hasLiveTask(item);
+}
+ // 行级终态：done 优先（已安装/任务完成），其次失败，其次已建任务，其次待处理。
+ function getItemFilterState(item: INexusCollectionPendingItem): CollectionFilter {
+     if (isPendingItemInstalled(item) || getPendingTaskStatus(item) === "complete") return "done";
+     if (item.status === "failed" || getPendingTaskStatus(item) === "error") return "failed";
+    if (isPendingItemDownloading(item)) return "downloading";
+     if (item.status === "queued") return "queued";
+     return "pending";
+ }
+ // 条目级状态：全部 done 才算 done，有 failed 算 failed，其次 queued/pending。
+ function getEntryFilterState(entry: INexusCollectionPending): CollectionFilter {
+     const states = entry.items.map(getItemFilterState);
+     if (states.length > 0 && states.every((s) => s === "done")) return "done";
+     if (states.includes("failed")) return "failed";
+    if (states.includes("downloading")) return "downloading";
+     if (states.includes("queued")) return "queued";
+     if (states.includes("pending")) return "pending";
+     return "all";
+ }
+type CollectionFilter = "all" | "pending" | "queued" | "downloading" | "failed" | "done" | "undownloaded" | "imported" | "unimported";
+ const collectionFilterOptions: Array<{ value: CollectionFilter; label: string }> = [
+     { value: "all", label: "全部" },
+     { value: "undownloaded", label: "未下载" },
+     { value: "pending", label: "待处理" },
+     { value: "queued", label: "已建任务" },
+    { value: "downloading", label: "下载中" },
+     { value: "failed", label: "失败" },
+    { value: "imported", label: "已下载" },
+    { value: "unimported", label: "未下载" },
 ];
-// 未下载：非 done 即未下载（pending/queued/failed 统收）。条目/明细匹配时特殊处理。
+// 未下载：非 done 即未下载（pending/queued/downloading/failed 统收）。条目/明细匹配时特殊处理。
 function isItemUndownloaded(item: INexusCollectionPendingItem): boolean {
     return getItemFilterState(item) !== "done";
 }
@@ -306,11 +341,22 @@ function toggleEntrySelectAll(entry: INexusCollectionPending, checked: boolean) 
     }
     selectedPendingItems.value = { ...selectedPendingItems.value, [entry.id]: [...current] };
 }
-// 条目 mod 计数：共 X · 必装 Y · 可选 Z · 已导入 W。
+// 条目 mod 计数（与下载页口径对齐）：按 modId 去重计数，共 X 个 Mod · 必装 Y · 可选 Z · 已下载 W。
+// 已下载 = 该 mod 任一文件 done（已安装/任务 complete）；必装/可选按该 mod 是否含必装文件划分。
 function getEntryCounts(entry: INexusCollectionPending): { total: number; required: number; optional: number; done: number } {
-    const total = entry.items.length;
-    const required = entry.items.filter((item) => !item.optional).length;
-    const done = entry.items.filter((item) => getItemFilterState(item) === "done").length;
+    const byMod = new Map<string, INexusCollectionPendingItem[]>();
+    for (const item of entry.items) {
+        const list = byMod.get(item.modId) ?? [];
+        list.push(item);
+        byMod.set(item.modId, list);
+    }
+    const total = byMod.size;
+    let required = 0;
+    let done = 0;
+    for (const items of byMod.values()) {
+        if (items.some((item) => !item.optional)) required += 1;
+        if (items.some((item) => getItemFilterState(item) === "done")) done += 1;
+    }
     return { total, required, optional: total - required, done };
 }
 // 跳 Nexus 网页：collection 主页 / 单文件 mod 页。
@@ -427,7 +473,7 @@ async function retryPendingEntry(entry: INexusCollectionPending) {
     const selected = new Set(getSelectedKeys(entry.id));
     const todo = entry.items.filter((item) => selected.has(getItemKey(item)) && !hasLiveTask(item) && !isPendingItemInstalled(item) && isItemSelectable(item));
     if (todo.length === 0) {
-        ElMessage.info("没有可重试的勾选文件（已导入的不可勾选）。");
+        ElMessage.info("没有可重试的勾选文件（已下载的不可勾选）。");
         return;
     }
     // 先关暂停闸：后建的任务以 Paused 落库不启动，重试全程可暂停/继续。
@@ -564,9 +610,9 @@ onUnmounted(() => {
                                         <Badge class="rounded-full" variant="outline">{{ entry.gameDomain }}/{{
                                             entry.slug }}</Badge>
                                         <Badge class="rounded-full" variant="outline">
-                                            共 {{ getEntryCounts(entry).total }} 个文件 · 必装 {{
+                                            共 {{ getEntryCounts(entry).total }} 个 Mod · 必装 {{
                                                 getEntryCounts(entry).required }} · 可选 {{ getEntryCounts(entry).optional }}
-                                            · 已导入 {{ getEntryCounts(entry).done }}
+                                            · 已下载 {{ getEntryCounts(entry).done }}
                                         </Badge>
                                     </div>
                                     <div v-if="getRetryProgress(entry.id)"
@@ -638,7 +684,7 @@ onUnmounted(() => {
                                             <input type="checkbox" class="h-4 w-4 shrink-0 accent-primary"
                                                 :checked="isItemSelected(entry.id, item)"
                                                 :disabled="!isItemSelectable(item)"
-                                                :title="isItemSelectable(item) ? (item.optional ? '可选：勾选后下载' : '必装：默认勾选') : '已导入：不可勾选'"
+                                                :title="isItemSelectable(item) ? (item.optional ? '可选：勾选后下载' : '必装：默认勾选') : '已下载：不可勾选'"
                                                 @click.stop
                                                 @change="setItemSelected(entry.id, item, ($event.target as HTMLInputElement).checked)" />
                                             <div class="min-w-0 flex-1">

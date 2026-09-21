@@ -67,7 +67,7 @@ export function getBaseName(filePath?: string): string {
     return filePath.split(/[\\/]+/u).pop() ?? filePath;
 }
 
-// 任务展示名优先级：meta.fileName > meta.resourceName > BT 名 > 主文件基名 > gid。
+// 任务展示名优先级：meta.fileName > meta.resourceName > BT 名 > 主文件基名 > gid（最后一级是 uuid 回退，必须打日志）。
 export function getTaskDisplayName(
     task: IDownloaderTask,
     meta?: { fileName?: string; resourceName?: string } | null,
@@ -90,6 +90,14 @@ export function getTaskDisplayName(
         return getBaseName(primaryFile.path);
     }
 
+    // [uuid-trace] 最终回退到 gid/uuid：无名悬孤任务，日志要包含全部显示源的空值字段与相关 gid，以便反查是哪一环节丢名。
+    try {
+        const metaFileName = (meta as unknown as { fileName?: unknown })?.fileName;
+        const metaResourceName = (meta as unknown as { resourceName?: unknown })?.resourceName;
+        console.warn(
+            `[uuid-trace] getTaskDisplayName fallback gid=${task.gid} status=${task.status ?? "-"} meta.fileName=${String(metaFileName ?? "")} meta.resourceName=${String(metaResourceName ?? "")} bittorrent.name=${String(task.bittorrent?.info?.name ?? "")} primaryFile.path=${String(primaryFile?.path ?? "")} dir=${String((task as unknown as { dir?: unknown })?.dir ?? "")} — returned gid fallback`,
+        );
+    } catch {}
     return task.gid;
 }
 
@@ -108,6 +116,11 @@ export function getTaskOutputFileName(
         return getBaseName(primaryFile.path);
     }
 
+    try {
+        console.warn(
+            `[uuid-trace] getTaskOutputFileName fallback gid=${task.gid} status=${task.status ?? "-"} meta.fileName=${String((meta as unknown as { fileName?: unknown })?.fileName ?? "")} primaryFile.path=${String(primaryFile?.path ?? "")} — returned download.bin`,
+        );
+    } catch {}
     return "download.bin";
 }
 

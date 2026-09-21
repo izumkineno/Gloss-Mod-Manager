@@ -8,6 +8,23 @@
 use std::collections::HashMap;
 use tauri::Manager;
 
+/// 抽取 meta 中的展示名用于日志，避免整包序列化刷屏。
+fn meta_display_name(value: &serde_json::Value) -> String {
+    value
+        .get("fileName")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            value
+                .get("resourceName")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
 const META_FILE_NAME: &str = "download_meta.json";
 
 fn meta_file_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -64,16 +81,55 @@ fn write_map(
 pub(crate) fn dl_meta_list(
     app: tauri::AppHandle,
 ) -> Result<HashMap<String, serde_json::Value>, String> {
-    read_map(&app)
+    let map = read_map(&app)?;
+    let total = map.len();
+    let missing = map.iter().filter(|(_, v)| meta_display_name(v) == "-").count();
+    if missing > 0 {
+        tracing::warn!(target: "gmm::meta", "[uuid-trace] dl_meta_list total={} missing_name={} — 存在无名 meta（会回退为 gid/uuid 展示）", total, missing);
+        for (gid, v) in map.iter().filter(|(_, v)| meta_display_name(v) == "-") {
+            let src = v.get("sourceType").and_then(|x| x.as_str()).unwrap_or("-");
+            let durl = v.get("downloadUrl").and_then(|x| x.as_str()).unwrap_or("-");
+            tracing::warn!(target: "gmm::meta", "[uuid-trace] dl_meta_list orphan gid={} sourceType={} downloadUrl_head={} meta={}", gid, src, &durl[..durl.len().min(80)], v);
+        }
+    } else {
+        tracing::debug!(target: "gmm::meta", "[uuid-trace] dl_meta_list total={} missing_name=0", total);
+    }
+    Ok(map)
 }
 
-/// 整表覆盖（前端批量落盘用，与原 PersistentStore.set 整表语义一致）。
+/// 按 gid 合并写入（治本：前端各链路持有的表快照可能滞后，整表替换会把并发期间
+/// 其它链路刚写入的 gid 条目整体洗掉，表现为下载页任务名回退成 uuid）。合并语义：
+/// 只覆盖传入的键、保留未传入的键，删除仍走 dl_meta_remove。
 #[tauri::command]
 pub(crate) fn dl_meta_save(
     app: tauri::AppHandle,
     map: HashMap<String, serde_json::Value>,
 ) -> Result<(), String> {
-    write_map(&app, &map)
+    if map.is_empty() {
+        tracing::debug!(target: "gmm::meta", "[uuid-trace] dl_meta_save skip empty");
+        return Ok(());
+    }
+    let incoming = map.len();
+    let incoming_missing = map.iter().filter(|(_, v)| meta_display_name(v) == "-").count();
+    if incoming_missing > 0 {
+        tracing::warn!(target: "gmm::meta", "[uuid-trace] dl_meta_save incoming={} missing_name={} — 入参已含无名条目，会直接产生 uuid 展示", incoming, incoming_missing);
+        for (gid, v) in map.iter().filter(|(_, v)| meta_display_name(v) == "-") {
+            tracing::warn!(target: "gmm::meta", "[uuid-trace] dl_meta_save incoming orphan gid={} meta={}", gid, v);
+        }
+    }
+    let mut current = read_map(&app)?;
+    let before = current.len();
+    for (gid, meta) in map {
+        let name = meta_display_name(&meta);
+        if name == "-" {
+            tracing::warn!(target: "gmm::meta", "[uuid-trace] dl_meta_save put gid={} name=- sourceType={}", gid, meta.get("sourceType").and_then(|x| x.as_str()).unwrap_or("-"));
+        } else {
+            tracing::debug!(target: "gmm::meta", "[uuid-trace] dl_meta_save put gid={} name={}", gid, name);
+        }
+        current.insert(gid, meta);
+    }
+    tracing::info!(target: "gmm::meta", "[uuid-trace] dl_meta_save merged before={} incoming={} after={}", before, incoming, current.len());
+    write_map(&app, &current)
 }
 
 /// 单键写入/合并（建任务、导入标记等单点更新用，前端传合并后的单条）。
@@ -83,15 +139,39 @@ pub(crate) fn dl_meta_put(
     gid: String,
     meta: serde_json::Value,
 ) -> Result<(), String> {
+    let name = meta_display_name(&meta);
+    let src = meta.get("sourceType").and_then(|v| v.as_str()).unwrap_or("-");
+    let has_file = meta.get("fileName").and_then(|v| v.as_str()).map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let has_res = meta.get("resourceName").and_then(|v| v.as_str()).map(|s| !s.trim().is_empty()).unwrap_or(false);
+    if name == "-" {
+        tracing::warn!(target: "gmm::meta", "[uuid-trace] dl_meta_put gid={} sourceType={} fileName_empty={} resourceName_empty={} — 无名写入，前端将回退 gid/uuid！ meta={}", gid, src, !has_file, !has_res, meta);
+    } else {
+        tracing::info!(target: "gmm::meta", "[uuid-trace] dl_meta_put gid={} name={} sourceType={}", gid, name, src);
+    }
     let mut map = read_map(&app)?;
-    map.insert(gid, meta);
-    write_map(&app, &map)
+    let existed = map.contains_key(&gid);
+    map.insert(gid.clone(), meta);
+    let res = write_map(&app, &map);
+    if res.is_ok() {
+        tracing::debug!(target: "gmm::meta", "[uuid-trace] dl_meta_put done gid={} existed={} total={}", gid, existed, map.len());
+    } else {
+        tracing::error!(target: "gmm::meta", "[uuid-trace] dl_meta_put FAILED gid={} existed={}", gid, existed);
+    }
+    res
 }
 
 /// 单键删除（清理/移除任务时调用，与 purge 链路同生命周期）。
 #[tauri::command]
 pub(crate) fn dl_meta_remove(app: tauri::AppHandle, gid: String) -> Result<(), String> {
+    tracing::info!(target: "gmm::meta", "[uuid-trace] dl_meta_remove gid={}", gid);
     let mut map = read_map(&app)?;
+    let existed = map.contains_key(&gid);
     map.remove(&gid);
-    write_map(&app, &map)
+    let res = write_map(&app, &map);
+    if res.is_ok() {
+        tracing::debug!(target: "gmm::meta", "[uuid-trace] dl_meta_remove done gid={} existed={} total={}", gid, existed, map.len());
+    } else {
+        tracing::error!(target: "gmm::meta", "[uuid-trace] dl_meta_remove FAILED gid={}", gid);
+    }
+    res
 }

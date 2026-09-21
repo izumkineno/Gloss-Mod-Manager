@@ -159,11 +159,12 @@ export function useQueueView(buckets: QueueBuckets) {
     const pausedTasks = computed(() =>
         buckets.waitingTasks.value.filter((task) => task.status === "paused"),
     );
+    // 已导入/未导入：在已下载（complete）桶内再按 localModId 过滤。
     const importedTasks = computed(() =>
-        buckets.allTasks.value.filter((task) => buckets.taskMetaMap.value[task.gid]?.localModId != null),
+        buckets.finishedTasks.value.filter((task) => buckets.taskMetaMap.value[task.gid]?.localModId != null),
     );
     const unimportedTasks = computed(() =>
-        buckets.allTasks.value.filter((task) => buckets.taskMetaMap.value[task.gid]?.localModId == null),
+        buckets.finishedTasks.value.filter((task) => buckets.taskMetaMap.value[task.gid]?.localModId == null),
     );
 
     // 任务创建时间：meta.createdAt 优先，其次 updatedAt。

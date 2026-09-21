@@ -90,6 +90,13 @@ export function settleTerminal(store: MachineStore, gid: string, kind: TerminalK
             store.terminalLog.push({ gid, kind });
             return;
         }
+        // removed 幂等：后端 dl_cancel/dl_purge_stopped 会 emit "removed" 事件，
+        // facade.cancel/purge 本地又 settleTerminal 一次，事件先到时本地二次终局属正常竞态，
+        // 直接吞掉并记审计日志，不再抛"机内无此任务"中断删除链路（meta 清理/列表刷新）。
+        if (kind === "removed") {
+            store.terminalLog.push({ gid, kind });
+            return;
+        }
         throw new Error(`机内无此任务，无法终局: ${gid}`);
     }
     store.tasks.delete(gid);

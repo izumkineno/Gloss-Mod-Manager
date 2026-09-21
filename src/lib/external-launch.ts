@@ -8,6 +8,11 @@ import { readGmmPackageDetails } from "@/lib/gmm-package";
 import { importGmmShareCode, parseGmmShareCode } from "@/lib/gmm-share-code";
 import { normalizeCompareText } from "@/lib/gloss-download";
 import { queueNexusCollectionDownloadWithSelection } from "@/features/download/shell/collection-download";
+import { queueCustomDownload } from "@/features/download/queue/custom-queue";
+import {
+    queueGlossModDownloadWithSelection,
+    queueThirdPartyModDownloadWithSelection,
+} from "@/features/download/view/file-selection";
 import {
     NexusModsAuthorizationError,
     fetchThirdPartyModDetail,

@@ -20,9 +20,8 @@ export interface RetryDeps {
     selectTask: (gid: string) => void;
     ensureEngineReady: () => Promise<string>;
     normalizedDownloaderSettings: { split: number; maxConnectionPerServer: number; minSplitSize: string };
-    downloadProxy: string;
     /** 新 gid 入机后交接 meta（重下/回退建的新任务沿用旧记录的展示与导入信息）。 */
-    setTaskMeta: (gid: string, metadata: IGlossDownloadTaskMeta) => void;
+    setTaskMeta: (gid: string, metadata: IGlossDownloadTaskMeta) => unknown;
 }
 
 // 重试地址收集：meta.downloadUrl 优先，其次 files 内全部 uri（去重保序）。
@@ -70,21 +69,35 @@ export function isTaskRetryUnrecoverable(
 }
 
 // 新 gid 入机后的 meta 交接：旧记录的展示/导入信息（来源、标题、封面、游戏名等）
-// 原样搬给新任务，仅重置导入态与时间戳。无旧 meta 时不交接（显示名回退文件路径基名，不会是 uuid，
-// 因为 enqueue 带了真实 fileName）。
-function handoverMeta(
+// 原样搬给新任务，仅重置导入态与时间戳。旧记录缺失时用任务自身文件名/地址合成
+// 最小 meta，保证新任务展示名不断（否则回退 gid，见 getTaskDisplayName）。
+async function handoverMeta(
+    task: IDownloaderTask,
     deps: Pick<RetryDeps, "taskMetaMap" | "setTaskMeta">,
     oldGid: string,
     newGid: string,
-): void {
+): Promise<void> {
+    const now = new Date().toISOString();
     const previous = deps.taskMetaMap[oldGid];
-    if (!previous) {
+    if (previous) {
+        await deps.setTaskMeta(newGid, {
+            ...previous,
+            localModId: undefined,
+            taskStatus: "waiting",
+            createdAt: now,
+            updatedAt: now,
+        });
         return;
     }
-    const now = new Date().toISOString();
-    deps.setTaskMeta(newGid, {
-        ...previous,
-        localModId: undefined,
+    // 无旧 meta：从任务自身推导文件名与地址，避免新任务无名。
+    const fileName = (getTaskPrimaryFile(task)?.path?.split(/[\\/]+/u).pop() || "").trim();
+    if (!fileName) return;
+    const downloadUrl = getTaskRetryUris(task, deps.taskMetaMap).filter((uri) => !/:\/\/www\.nexusmods\.com\//iu.test(uri))[0] || task.files.find((file) => (file.uris ?? []).some((item) => item.uri))?.uris?.[0]?.uri || "";
+    await deps.setTaskMeta(newGid, {
+        sourceType: "Customize",
+        modTitle: fileName,
+        fileName,
+        downloadUrl,
         taskStatus: "waiting",
         createdAt: now,
         updatedAt: now,
@@ -141,7 +154,7 @@ export async function retryTask(
                 dir: completeDir,
                 fileName: completeFileName,
             });
-            handoverMeta(deps, task.gid, newGid);
+            await handoverMeta(task, deps, task.gid, newGid);
             await deps.forgetTaskRecord(task.gid);
             await deps.removeStaleSiblingRecords(newGid);
             await deps.refreshTaskLists();
@@ -203,7 +216,7 @@ export async function retryTask(
             }
             const ghostDir = task.dir || String(await deps.ensureEngineReady());
             gid = await getDownloadFacade().enqueue({ url: ghostUrl, dir: ghostDir, fileName: ghostFileName });
-            handoverMeta(deps, task.gid, gid);
+            await handoverMeta(task, deps, task.gid, gid);
             await deps.forgetTaskRecord(task.gid);
         }
         await deps.refreshTaskLists();

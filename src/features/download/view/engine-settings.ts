@@ -5,7 +5,7 @@ import { documentDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage } from "element-plus-message";
 import { FileHandler } from "@/lib/FileHandler";
-import { PersistentStore } from "@/lib/persistent-store";
+import { useDownloadStoreValue } from "@/lib/download-store";
 import { ensureFileName, ensureServer, getDefaultSettings, normalizeSettings } from "../meta/engine";
 import { getDownloadFacade } from "../facade";
 import type { IDownloaderEnsureOptions, IDownloaderSettings } from "../types";
@@ -25,12 +25,12 @@ export function useEngineSettings() {
         "disableSymlinkInstall",
         false,
     );
-    const downloadDirectory = PersistentStore.useValue<string>(
+    const downloadDirectory = useDownloadStoreValue<string>(
         "downloadDirectory",
         "",
     );
-    const downloadProxy = PersistentStore.useValue<string>("downloadProxy", "");
-    const downloaderSettings = PersistentStore.useValue<IDownloaderSettings>(
+    const downloadProxy = useDownloadStoreValue<string>("downloadProxy", "");
+    const downloaderSettings = useDownloadStoreValue<IDownloaderSettings>(
         "nativeDownloaderSettings",
         getDefaultSettings(),
     );

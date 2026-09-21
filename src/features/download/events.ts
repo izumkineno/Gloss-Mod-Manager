@@ -71,8 +71,18 @@ export function applyProgress(store: MachineStore, payload: DlProgressPayload): 
     if (!current) {
         return;
     }
+    // 兜底：后端 dl-task-changed(Active) 单发，漏接/迟订阅即卡死 waiting 有进度。
+    // 有实际进度/速度即视为已启动，waiting → active 合法变迁直接补推。
+    if (current.status === "waiting" && (payload.downloaded > 0 || payload.speed > 0)) {
+        try {
+            transition(store, payload.gid, "active");
+        } catch {
+            // 机内无此任务或变迁表拒绝时不挡进度数字更新。
+        }
+    }
+    const latest = store.tasks.get(payload.gid) ?? current;
     store.tasks.set(payload.gid, {
-        ...current,
+        ...latest,
         downloaded: payload.downloaded,
         total: payload.total,
         speed: payload.speed,

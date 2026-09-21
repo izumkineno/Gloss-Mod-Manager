@@ -12,7 +12,7 @@ import {
     type ILocalModImportSource,
 } from "@/lib/local-mod-import";
 import { useManager } from "@/stores/manager";
-import { listDownloadMeta, putDownloadMeta, saveDownloadMetaMap } from "@/lib/download-meta";
+import { listDownloadMeta, putDownloadMeta } from "@/lib/download-meta";
 
 interface IGlossDownloadMonitorSettings {
     autoAddAfterDownload: boolean;
@@ -21,8 +21,7 @@ interface IGlossDownloadMonitorSettings {
 }
 
 interface ITaskMetaSyncResult {
-    changed: boolean;
-    nextTaskMetaMap: Record<string, IGlossDownloadTaskMeta>;
+    changedEntries: Array<{ gid: string; meta: IGlossDownloadTaskMeta }>;
     newlyCompletedTaskGids: string[];
 }
 
@@ -75,12 +74,13 @@ function syncTaskMetaStatuses(
     taskMetaMap: Record<string, IGlossDownloadTaskMeta>,
     tasks: IDownloaderTask[],
 ): ITaskMetaSyncResult {
-    const nextTaskMetaMap = { ...taskMetaMap };
+    // 只收集真正变化的条目，由调用方逐键 putDownloadMeta 落盘：
+    // 整表覆盖在并发建任务窗口会用旧快照洗掉新写入的 meta（任务名回退 uuid 的根因之一）。
+    const changedEntries: Array<{ gid: string; meta: IGlossDownloadTaskMeta }> = [];
     const newlyCompletedTaskGids: string[] = [];
-    let changed = false;
 
     for (const task of tasks) {
-        const currentMeta = nextTaskMetaMap[task.gid];
+        const currentMeta = taskMetaMap[task.gid];
 
         if (!currentMeta) {
             continue;
@@ -114,14 +114,12 @@ function syncTaskMetaStatuses(
             nextMeta.taskStatus !== currentMeta.taskStatus ||
             nextMeta.downloadedAt !== currentMeta.downloadedAt
         ) {
-            nextTaskMetaMap[task.gid] = nextMeta;
-            changed = true;
+            changedEntries.push({ gid: task.gid, meta: nextMeta });
         }
     }
 
     return {
-        changed,
-        nextTaskMetaMap,
+        changedEntries,
         newlyCompletedTaskGids,
     };
 }
@@ -344,8 +342,14 @@ export class GlossDownloadMonitor {
                 files: [],
             }));
             const syncResult = syncTaskMetaStatuses(taskMetaMap, allTasks);
-            if (syncResult.changed) {
-                await saveDownloadMetaMap(syncResult.nextTaskMetaMap);
+            // 逐键落盘：整表覆盖会洗掉并发链路（批量建任务/导入标记）刚写入的 meta。
+            for (const entry of syncResult.changedEntries) {
+                try {
+                    await putDownloadMeta(entry.gid, entry.meta);
+                } catch (error: unknown) {
+                    console.error(`下载任务 meta 单键更新失败 gid=${entry.gid}`);
+                    console.error(error);
+                }
             }
             if (!GlossDownloadMonitor.initialized) {
                 GlossDownloadMonitor.initialized = true;

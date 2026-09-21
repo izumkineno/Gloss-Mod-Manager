@@ -3,7 +3,6 @@
 import { ElMessage } from "element-plus-message";
 import { getDownloadFacade } from "../facade";
 import type { IDownloaderTask } from "../types";
-import type { IGlossDownloadTaskMeta } from "@/lib/gloss-download";
 import { getErrorMessage } from "./task-display";
 
 export interface TaskOpsHooks {
@@ -84,8 +83,6 @@ export async function purgeStoppedTasks(
     stoppedTasks: IDownloaderTask[],
     hooks: TaskOpsHooks & {
         removeTaskMeta: (gid: string) => Promise<void>;
-        saveTaskMetaMap: (nextMap: Record<string, IGlossDownloadTaskMeta>) => Promise<void>;
-        taskMetaMap: Record<string, IGlossDownloadTaskMeta>;
     },
     deleteFile = false,
 ): Promise<void> {
@@ -115,7 +112,7 @@ export async function purgeStoppedTasks(
             // 单条清理失败不中断。
         }
     }
-    await hooks.saveTaskMetaMap(hooks.taskMetaMap);
+    // meta 已逐键 removeTaskMeta 落盘；不再整表回写（旧快照会洗掉并发链路的新条目）。
     await hooks.refreshTaskLists();
     if (backendFailed.length > 0) {
         ElMessage.warning(`已清理 ${removed} 条记录，但 ${backendFailed.length} 个文件删失败：${backendFailed[0][1]}${backendFailed.length > 1 ? "…" : ""}`);

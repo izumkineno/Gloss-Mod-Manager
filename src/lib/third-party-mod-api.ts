@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 // 统一走带超时与重试的封装，避免对端无响应时请求永久挂起。
 import { requestWithRetry as httpFetch } from "@/lib/http-client";
-import { PersistentStore } from "@/lib/persistent-store";
+import { getDownloadStore } from "@/lib/download-store";
 import { SecretStore } from "@/lib/secret-store";
 
 export type ThirdPartyProvider =
@@ -385,7 +385,7 @@ export async function resolveThirdPartyDownloadUrl(
             throw new Error("未配置 NexusMods Cookie，请在设置页填写后重试。");
         }
     // 代理未显式传入时读全局下载代理：后端 reqwest 只认显式代理，直连 www.nexusmods.com 会被墙。
-    const storedProxy = ((await PersistentStore.get<string>("downloadProxy", "")) ?? "").trim();
+    const storedProxy = ((await getDownloadStore<string>("downloadProxy", "")) ?? "").trim();
     console.debug(`${resolveTag} stage=cookie-invoke game=${gameDomain} proxy=${storedProxy ? "yes" : "no"}`);
         return invoke<string>("nexus_resolve_direct", {
             gameDomain,

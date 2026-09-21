@@ -194,8 +194,8 @@ export async function queueNexusCollectionDownloadWithSelection(
     const collectionId = pending.id;
     // 推送设置：排队上限（等待中任务达上限即停塞，5s 轮询）+ 单次并发批数 + 批间等待毫秒。
     const settings = useSettings();
-    const queueLimit = Math.max(1, Number(settings.collectionQueueLimit) || 10);
-    const batchSize = Math.max(1, Math.floor(Number(settings.collectionPushBatch) || 1));
+    const queueLimit = Math.max(1, Number(settings.collectionQueueLimit) || 20);
+    const batchSize = Math.max(1, Math.floor(Number(settings.collectionPushBatch) || 5));
     const batchInterval = Math.max(0, Number(settings.collectionPushInterval) || 0);
     // 逐文件走单文件链路：查详情拿真实 fileName，再建任务（自带去重/直链）。
     const result: IQueueNexusCollectionResult = {
@@ -211,12 +211,12 @@ export async function queueNexusCollectionDownloadWithSelection(
             const check = () => {
                 const waiting = getDownloadFacade()
                     .snapshot()
-                    .filter((task) => ["active", "waiting", "paused"].includes(task.status)).length;
+                    .filter((task) => ["active", "waiting", "paused", "retrying"].includes(task.status)).length;
                 if (waiting < queueLimit) {
                     resolve();
                     return;
                 }
-                setTimeout(check, 5000);
+                setTimeout(check, 1000);
             };
             check();
         });
@@ -244,6 +244,7 @@ export async function queueNexusCollectionDownloadWithSelection(
                 } else {
                     console.debug(`[collection-hydrate] modId=${item.modId} stage=meta-miss`);
                 }
+                console.debug(`[uuid-trace] collection queue start modId=${item.modId} fileId=${item.fileId} name=${item.name}`);
                 await queueThirdPartyModDownload({
                     provider: "NexusMods",
                     mod,

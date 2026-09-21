@@ -38,6 +38,7 @@ export function sanitizeFileName(name: string) {
 
     // 原实现会剥离分隔符但保留 ..，单独出现时仍可能被拼接成上级路径。
     if (/^\.+$/u.test(sanitized)) {
+        console.warn(`[uuid-trace] sanitizeFileName stripped name="${String(name).slice(0,120)}" -> ""`);
         return "";
     }
 

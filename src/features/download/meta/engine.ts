@@ -2,7 +2,7 @@
 // probe 系 nexus cookie 受保护链路，原样迁移零改动；任务操作一律走 facade。
 import { invoke } from "@tauri-apps/api/core";
 import { documentDir, join } from "@tauri-apps/api/path";
-import { PersistentStore } from "@/lib/persistent-store";
+import { getDownloadStore } from "@/lib/download-store";
 import type { IDownloaderEnsureOptions, IDownloaderSettings } from "../types";
 
 export function getDefaultSettings(): IDownloaderSettings {
@@ -27,7 +27,7 @@ export function normalizeSettings(settings: Partial<IDownloaderSettings> = {}): 
 }
 
 export async function getStoredSettings(): Promise<IDownloaderSettings> {
-    const settings = await PersistentStore.get<Partial<IDownloaderSettings>>(
+    const settings = await getDownloadStore<Partial<IDownloaderSettings>>(
         "nativeDownloaderSettings",
         getDefaultSettings(),
     );
@@ -36,7 +36,7 @@ export async function getStoredSettings(): Promise<IDownloaderSettings> {
 }
 
 export async function resolveDownloadDirectory(): Promise<string> {
-    const explicitDirectory = (await PersistentStore.get<string>("downloadDirectory", ""))?.trim();
+    const explicitDirectory = (await getDownloadStore<string>("downloadDirectory", ""))?.trim();
 
     if (explicitDirectory) {
         return explicitDirectory;
@@ -74,16 +74,22 @@ export async function ensureFileName(
         /\.(tar\.(?:gz|xz|bz2)|zip|7z|rar|tar|gz|xz|bz2|exe|dll|pak|bin)$/iu.test(current) ||
         (tail !== "" && /[A-Za-z]/u.test(tail));
     if (hasExtension) {
+        console.debug(`[uuid-trace] ensureFileName passthrough current=${current}`);
         return current;
     }
     try {
         const probed = await probeFilename(url, headers, proxy);
         const probedName = (probed?.name ?? "").trim();
         if (probedName) {
+            console.debug(`[uuid-trace] ensureFileName probed url_head=${url.slice(0, 80)} current=${current} probed=${probedName} source=${(probed as unknown as { source?: string })?.source ?? "-"}`);
             return probedName;
         }
-    } catch {
-        // 探测失败回退原名，不阻塞建任务。
+        console.warn(`[uuid-trace] ensureFileName probe_empty url_head=${url.slice(0, 80)} current=${current}`);
+    } catch (error: unknown) {
+        console.warn(`[uuid-trace] ensureFileName probe_failed url_head=${url.slice(0, 80)} current=${current} error=${String((error as Error)?.message ?? String(error)).slice(0, 200)}`);
+    }
+    if (!current) {
+        console.warn(`[uuid-trace] ensureFileName fallback EMPTY url_head=${url.slice(0, 80)} — will produce uuid display downstream`);
     }
     return current;
 }

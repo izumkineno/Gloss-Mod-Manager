@@ -11,8 +11,8 @@ import {
     findGlossDuplicateTasks,
     type IGlossDownloadTaskMeta,
 } from "@/lib/gloss-download";
-import { PersistentStore } from "@/lib/persistent-store";
-import { listDownloadMeta, saveDownloadMetaMap } from "@/lib/download-meta";
+import { getDownloadStore } from "@/lib/download-store";
+import { listDownloadMeta, putDownloadMeta } from "@/lib/download-meta";
 import {
     fetchNexusModsSingleFileName,
     resolveThirdPartyDownloadUrl,
@@ -114,7 +114,9 @@ function buildOutputFileName(
     }
 
     const urlFileName = getUrlFileName(downloadUrl);
-    return baseName || urlFileName || "download.bin";
+    const out = baseName || urlFileName || "download.bin";
+    if (out === "download.bin") console.warn(`[uuid-trace] buildOutputFileName fallback mod=${mod.id} file=${file.id} baseName="${String(baseName).slice(0,80)}" urlFileName="${String(urlFileName).slice(0,80)}" downloadUrl_head=${downloadUrl.slice(0,80)}`);
+    return out;
 }
 
 function shouldOpenExternally(
@@ -139,7 +141,7 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
 
     const settings = await getStoredSettings();
     const proxy = (
-        (await PersistentStore.get<string>("downloadProxy", "")) ?? ""
+        (await getDownloadStore<string>("downloadProxy", "")) ?? ""
     ).trim();
     const taskMetaMap = await listDownloadMeta();
     // Wave 2：去重读 facade 快照（单例），不再 tellActive/tellWaiting/tellStopped。
@@ -157,14 +159,6 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
         allTasks,
     };
 }
-
-async function saveTaskMetaMap(
-    taskMetaMap: Record<string, IGlossDownloadTaskMeta>,
-) {
-    await saveDownloadMetaMap(taskMetaMap);
-}
-
-
 
 async function createThirdPartyDownloadTask(
     runtime: IQueueRuntimeContext,
@@ -210,13 +204,14 @@ async function createThirdPartyDownloadTask(
         updatedAt: now,
     };
 
-    const nextTaskMetaMap = {
-        ...runtime.taskMetaMap,
-        [gid]: taskMeta,
-    };
-
-    await saveTaskMetaMap(nextTaskMetaMap);
-    runtime.taskMetaMap = nextTaskMetaMap;
+    if (!outputFileName || !taskMeta.fileName) {
+        console.warn(`[uuid-trace] createThirdPartyDownloadTask put gid=${gid} fileName_EMPTY outputFileName=${String(outputFileName ?? "")} file.name=${file.name ?? ""} file.fileName=${file.fileName ?? ""} downloadUrl_head=${downloadUrl.slice(0, 80)}`);
+    } else {
+        console.debug(`[uuid-trace] createThirdPartyDownloadTask put gid=${gid} fileName=${outputFileName}`);
+    }
+    // 单条写入：合集重试并发建任务时，整表覆盖会互相吞 meta（读-改-写旧快照）。
+    await putDownloadMeta(gid, taskMeta);
+    runtime.taskMetaMap[gid] = taskMeta;
 
     return gid;
 }
@@ -281,11 +276,13 @@ export async function queueThirdPartyModDownload(
                 file = { ...file, fileName: hydrated };
                 console.debug(`${queueTag} stage=file-hydrated fileName=${hydrated}`);
             } else {
-                console.debug(`${queueTag} stage=file-hydrate-miss`);
+                console.warn(`[uuid-trace] hydrate-miss modId=${options.mod.id} fileId=${file.id} — fileName still empty after single-file API`);
             }
         }
     }
+    const beforeFileName = file.fileName ?? "";
     let outputFileName = buildOutputFileName(options.mod, file, downloadUrl);
+    if (!outputFileName) console.warn(`[uuid-trace] buildOutputFileName empty mod=${options.mod.id} file=${file.id} before=${String(beforeFileName).slice(0,80)}`);
 
     console.debug(`${queueTag} stage=url-ok`);
     let duplicateCriteria = {
@@ -333,6 +330,7 @@ export async function queueThirdPartyModDownload(
     // 治本第二道闸：到这里仍无后缀说明回填+探测全失败，直接抛错不建任务，
     // 避免无后缀文件再次落盘（禁止事后补后缀）。
     if (!getFileNameExtension(outputFileName)) {
+        console.error(`[uuid-trace] extension gate block mod=${options.mod.id} file=${file.id} outputFileName="${String(outputFileName).slice(0,120)}" file.name="${String(file.name).slice(0,80)}" file.fileName="${String(file.fileName ?? "").slice(0,80)}"`);
         throw new Error(`未能获取 ${file.name} 的真实文件名（含后缀），已阻止建任务，请稍后重试。`);
     }
     duplicateCriteria = { ...duplicateCriteria, fileName: outputFileName };
@@ -369,18 +367,6 @@ export async function queueThirdPartyModDownload(
             };
         }
 
-        const nextTaskMetaMap = {
-            ...runtime.taskMetaMap,
-            [currentTask.gid]: {
-                ...runtime.taskMetaMap[currentTask.gid],
-                replaceLocalModId:
-                    options.replaceLocalModId ??
-                    runtime.taskMetaMap[currentTask.gid]?.replaceLocalModId,
-                taskStatus: currentTask.status as TaskStatus,
-                updatedAt: new Date().toISOString(),
-            },
-        };
-
         if (currentTask.status === "paused") {
             // 暂停闸开着时保持暂停，不自动恢复；由用户显式继续。
             return {
@@ -405,7 +391,21 @@ export async function queueThirdPartyModDownload(
             };
         }
 
-        await saveTaskMetaMap(nextTaskMetaMap);
+            if (!outputFileName) console.warn(`[uuid-trace] third-party exists branch fileName EMPTY gid=${currentTask.gid} provider=${options.provider} file.name=${file.name ?? ""} file.fileName=${file.fileName ?? ""}`);
+        // 单键写入：只更新该任务自身状态投影，不用旧快照覆盖整表（并发建任务会互相洗 meta）。
+        const existsMeta = {
+            ...runtime.taskMetaMap[currentTask.gid],
+            replaceLocalModId:
+                options.replaceLocalModId ??
+                runtime.taskMetaMap[currentTask.gid]?.replaceLocalModId,
+            taskStatus: currentTask.status as TaskStatus,
+            updatedAt: new Date().toISOString(),
+        };
+        await putDownloadMeta(currentTask.gid, existsMeta);
+        runtime.taskMetaMap = {
+            ...runtime.taskMetaMap,
+            [currentTask.gid]: existsMeta,
+        };
 
         return {
             status: "exists",

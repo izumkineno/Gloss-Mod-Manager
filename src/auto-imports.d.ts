@@ -11,11 +11,8 @@ declare global {
   const AppAnalytics: typeof import('./lib/Analytics').AppAnalytics
   const AutoStart: typeof import('./lib/auto-start').AutoStart
   const DEFAULT_AI_CHAT_SYSTEM_PROMPT: typeof import('./lib/AiChat').DEFAULT_AI_CHAT_SYSTEM_PROMPT
-  const DOWNLOAD_TASK_EVENTS: typeof import('./lib/download-task-events').DOWNLOAD_TASK_EVENTS
-  const DOWNLOAD_TASK_META_KEY: typeof import('./stores/download-tasks').DOWNLOAD_TASK_META_KEY
   const DYING_LIGHT_2_CLASSIFY_RULES: typeof import('./lib/mod-classify-rules').DYING_LIGHT_2_CLASSIFY_RULES
   const DotNetTool: typeof import('./lib/dotnet-tool').DotNetTool
-  const Downloader: typeof import('./lib/native-downloader').Downloader
   const EMBEDDED_TOOL_VERSIONS: typeof import('./lib/native-tools-manifest').EMBEDDED_TOOL_VERSIONS
   const EffectScope: typeof import('vue').EffectScope
   const FileHandler: typeof import('./lib/FileHandler').FileHandler
@@ -61,7 +58,6 @@ declare global {
   const bbcodeToHtml: typeof import('./lib/bbcode').bbcodeToHtml
   const buildAiChatAttachmentPromptText: typeof import('./lib/ai-chat-attachments').buildAiChatAttachmentPromptText
   const buildBundledAiChatSkillsPrompt: typeof import('./lib/ai-chat-skills').buildBundledAiChatSkillsPrompt
-  const buildGlossOutputFileName: typeof import('./lib/gloss-download-queue').buildGlossOutputFileName
   const buildMcpToolDriftWarnings: typeof import('./lib/mcp-tool-drift').buildMcpToolDriftWarnings
   const buildMinimalNexusModDetail: typeof import('./lib/third-party-mod-api').buildMinimalNexusModDetail
   const buildUniqueGlossFileName: typeof import('./lib/gloss-download').buildUniqueGlossFileName
@@ -81,7 +77,6 @@ declare global {
   const controlledComputed: typeof import('@vueuse/core').controlledComputed
   const controlledRef: typeof import('@vueuse/core').controlledRef
   const createApp: typeof import('vue').createApp
-  const createArchiveWithSevenZip: typeof import('./lib/sevenZip').createArchiveWithSevenZip
   const createEmptyCheckRule: typeof import('./lib/custom-definition-utils').createEmptyCheckRule
   const createEmptyCustomType: typeof import('./lib/custom-definition-utils').createEmptyCustomType
   const createEmptyGameCustomType: typeof import('./lib/custom-definition-utils').createEmptyGameCustomType
@@ -105,16 +100,12 @@ declare global {
   const defineStore: typeof import('pinia').defineStore
   const deleteLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').deleteLegacyCustomGameDefinition
   const deleteLegacyCustomTypeDefinition: typeof import('./lib/legacy-custom-data').deleteLegacyCustomTypeDefinition
-  const detectFomodConfig: typeof import('./lib/fomod-parser').detectFomodConfig
   const eagerComputed: typeof import('@vueuse/core').eagerComputed
   const effectScope: typeof import('vue').effectScope
   const escapeHtmlText: typeof import('./lib/html-sanitizer').escapeHtmlText
   const evaluateDependency: typeof import('./lib/fomod-parser').evaluateDependency
-  const executeSevenZipSidecar: typeof import('./lib/sidecar').executeSevenZipSidecar
-  const executeSidecar: typeof import('./lib/sidecar').executeSidecar
   const extendRef: typeof import('@vueuse/core').extendRef
   const extractAiChatAttachmentText: typeof import('./lib/ai-chat-attachments').extractAiChatAttachmentText
-  const extractArchiveWithSevenZip: typeof import('./lib/sevenZip').extractArchiveWithSevenZip
   const fetchAllGlossGames: typeof import('./lib/gloss-mod-api').fetchAllGlossGames
   const fetchGlossGamePlugins: typeof import('./lib/gloss-mod-api').fetchGlossGamePlugins
   const fetchGlossGames: typeof import('./lib/gloss-mod-api').fetchGlossGames
@@ -131,42 +122,28 @@ declare global {
   const findGlossDuplicateLocalMods: typeof import('./lib/gloss-download').findGlossDuplicateLocalMods
   const findGlossDuplicateTasks: typeof import('./lib/gloss-download').findGlossDuplicateTasks
   const findLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').findLegacyCustomGameDefinition
-  const formatBytes: typeof import('./lib/download-task-ui').formatBytes
   const formatKeywordText: typeof import('./lib/custom-definition-utils').formatKeywordText
-  const framelessClose: typeof import('./lib/frameless-window').framelessClose
-  const framelessIsMaximized: typeof import('./lib/frameless-window').framelessIsMaximized
-  const framelessMinimize: typeof import('./lib/frameless-window').framelessMinimize
-  const framelessStartDragging: typeof import('./lib/frameless-window').framelessStartDragging
-  const framelessToggleMaximize: typeof import('./lib/frameless-window').framelessToggleMaximize
   const getActivePinia: typeof import('pinia').getActivePinia
   const getBundledAiChatSkills: typeof import('./lib/ai-chat-skills').getBundledAiChatSkills
   const getCurrentInstance: typeof import('vue').getCurrentInstance
   const getCurrentScope: typeof import('vue').getCurrentScope
   const getCurrentWatcher: typeof import('vue').getCurrentWatcher
+  const getDownloadStore: typeof import('./lib/download-store').getDownloadStore
   const getExploreTranslationErrorMessage: typeof import('./lib/explore-ai-translation').getExploreTranslationErrorMessage
   const getGlossModPresence: typeof import('./lib/gloss-download').getGlossModPresence
   const getLegacyConfigRoots: typeof import('./lib/legacy-custom-data').getLegacyConfigRoots
-  const getTaskPrimaryFile: typeof import('./lib/download-task-ui').getTaskPrimaryFile
-  const getTaskProgress: typeof import('./lib/download-task-ui').getTaskProgress
-  const getTaskSpeedText: typeof import('./lib/download-task-ui').getTaskSpeedText
   const getThirdPartyProviderLabel: typeof import('./lib/third-party-mod-api').getThirdPartyProviderLabel
   const getUrlFileName: typeof import('./lib/file-name-utils').getUrlFileName
   const h: typeof import('vue').h
-  const hasExternalFilePayload: typeof import('./lib/browser-drop-import').hasExternalFilePayload
-  const hasGlossMultipleResources: typeof import('./lib/download-file-selection').hasGlossMultipleResources
   const hasMcpToolDrift: typeof import('./lib/mcp-tool-drift').hasMcpToolDrift
   const hasPendingAppUpdateInstall: typeof import('./lib/app-updater').hasPendingAppUpdateInstall
-  const hasThirdPartyMultipleFiles: typeof import('./lib/download-file-selection').hasThirdPartyMultipleFiles
   const hydrateManagerRuntimeData: typeof import('./lib/manager-runtime-data').hydrateManagerRuntimeData
   const ignorableWatch: typeof import('@vueuse/core').ignorableWatch
   const importGmmShareCode: typeof import('./lib/gmm-share-code').importGmmShareCode
   const importLocalModSources: typeof import('./lib/local-mod-import').importLocalModSources
-  const init: typeof import('./lib/global').init
   const initializeAppUpdater: typeof import('./lib/app-updater').initializeAppUpdater
-  const initializeAutoStart: typeof import('./lib/auto-start').initializeAutoStart
   const initializeExternalLaunchHandling: typeof import('./lib/external-launch').initializeExternalLaunchHandling
   const initializeGlossDownloadMonitor: typeof import('./lib/gloss-download-monitor').initializeGlossDownloadMonitor
-  const initializeTheme: typeof import('./lib/theme').initializeTheme
   const inject: typeof import('vue').inject
   const injectLocal: typeof import('@vueuse/core').injectLocal
   const inspectGameDirectory: typeof import('./lib/custom-game-builder').inspectGameDirectory
@@ -174,18 +151,15 @@ declare global {
   const installPendingAppUpdate: typeof import('./lib/app-updater').installPendingAppUpdate
   const isAiChatTextLikeMediaType: typeof import('./lib/ai-chat-attachments').isAiChatTextLikeMediaType
   const isDefined: typeof import('@vueuse/core').isDefined
-  const isGlossCloudDriveResource: typeof import('./lib/gloss-download-queue').isGlossCloudDriveResource
-  const isGlossCloudDriveUrl: typeof import('./lib/gloss-download-queue').isGlossCloudDriveUrl
   const isProxy: typeof import('vue').isProxy
   const isReactive: typeof import('vue').isReactive
   const isReadonly: typeof import('vue').isReadonly
   const isRef: typeof import('vue').isRef
-  const isRestoredDownloadTask: typeof import('./lib/download-task-cache').isRestoredDownloadTask
   const isShallow: typeof import('vue').isShallow
   const isThirdPartyProviderSupported: typeof import('./lib/third-party-mod-api').isThirdPartyProviderSupported
   const joinRelativePath: typeof import('./lib/custom-definition-utils').joinRelativePath
-  const listArchiveWithSevenZip: typeof import('./lib/sevenZip').listArchiveWithSevenZip
   const listCollectionPending: typeof import('./lib/nexus-collection-pending').listCollectionPending
+  const listDownloadMeta: typeof import('./lib/download-meta').listDownloadMeta
   const listLegacyCustomGameDefinitions: typeof import('./lib/legacy-custom-data').listLegacyCustomGameDefinitions
   const listLegacyCustomTypeDefinitions: typeof import('./lib/legacy-custom-data').listLegacyCustomTypeDefinitions
   const loadLegacyCustomGames: typeof import('./lib/legacy-custom-data').loadLegacyCustomGames
@@ -199,11 +173,9 @@ declare global {
   const mapStores: typeof import('pinia').mapStores
   const mapWritableState: typeof import('pinia').mapWritableState
   const markRaw: typeof import('vue').markRaw
-  const materializeBrowserDroppedSources: typeof import('./lib/browser-drop-import').materializeBrowserDroppedSources
   const mcpPromptDefinitions: typeof import('./lib/mcp-service').mcpPromptDefinitions
   const mcpResourceDefinitions: typeof import('./lib/mcp-service').mcpResourceDefinitions
   const mcpToolDefinitions: typeof import('./lib/mcp-service').mcpToolDefinitions
-  const mergeDownloadTaskSnapshots: typeof import('./lib/download-task-cache').mergeDownloadTaskSnapshots
   const mergeLegacyCustomTypesIntoGame: typeof import('./lib/legacy-custom-data').mergeLegacyCustomTypesIntoGame
   const nextTick: typeof import('vue').nextTick
   const normalizeCompareText: typeof import('./lib/gloss-download').normalizeCompareText
@@ -234,21 +206,13 @@ declare global {
   const pausableWatch: typeof import('@vueuse/core').pausableWatch
   const provide: typeof import('vue').provide
   const provideLocal: typeof import('@vueuse/core').provideLocal
-  const pruneStagingToFomodSelection: typeof import('./lib/fomod-parser').pruneStagingToFomodSelection
-  const queueCustomDownload: typeof import('./lib/custom-download-queue').queueCustomDownload
-  const queueGlossModDownload: typeof import('./lib/gloss-download-queue').queueGlossModDownload
-  const queueGlossModDownloadWithSelection: typeof import('./lib/download-file-selection').queueGlossModDownloadWithSelection
-  const queueNexusCollectionDownloadWithSelection: typeof import('./lib/nexus-collection-download').queueNexusCollectionDownloadWithSelection
-  const queueThirdPartyModDownload: typeof import('./lib/third-party-download-queue').queueThirdPartyModDownload
-  const queueThirdPartyModDownloadWithSelection: typeof import('./lib/download-file-selection').queueThirdPartyModDownloadWithSelection
-  const queueThirdPartyModDownloadsWithSelection: typeof import('./lib/download-file-selection').queueThirdPartyModDownloadsWithSelection
+  const putDownloadMeta: typeof import('./lib/download-meta').putDownloadMeta
   const reactify: typeof import('@vueuse/core').reactify
   const reactifyObject: typeof import('@vueuse/core').reactifyObject
   const reactive: typeof import('vue').reactive
   const reactiveComputed: typeof import('@vueuse/core').reactiveComputed
   const reactiveOmit: typeof import('@vueuse/core').reactiveOmit
   const reactivePick: typeof import('@vueuse/core').reactivePick
-  const readDownloadTaskSnapshots: typeof import('./lib/download-task-cache').readDownloadTaskSnapshots
   const readGmmPackageDetails: typeof import('./lib/gmm-package').readGmmPackageDetails
   const readonly: typeof import('vue').readonly
   const ref: typeof import('vue').ref
@@ -260,28 +224,26 @@ declare global {
   const refWithControl: typeof import('@vueuse/core').refWithControl
   const refreshThunderstoreCache: typeof import('./lib/third-party-mod-api').refreshThunderstoreCache
   const removeCollectionPending: typeof import('./lib/nexus-collection-pending').removeCollectionPending
-  const removeDownloadTaskSnapshot: typeof import('./lib/download-task-cache').removeDownloadTaskSnapshot
-  const removeDownloadTaskSnapshots: typeof import('./lib/download-task-cache').removeDownloadTaskSnapshots
+  const removeDownloadMeta: typeof import('./lib/download-meta').removeDownloadMeta
   const requestWithRetry: typeof import('./lib/http-client').requestWithRetry
   const resolveAiChatAttachmentMediaType: typeof import('./lib/ai-chat-attachments').resolveAiChatAttachmentMediaType
   const resolveComponent: typeof import('vue').resolveComponent
   const resolveFomodInstallFiles: typeof import('./lib/fomod-parser').resolveFomodInstallFiles
   const resolveGlossAssetUrl: typeof import('./lib/gloss-mod-api').resolveGlossAssetUrl
-  const resolveGlossDownloadImportSourceType: typeof import('./lib/gloss-download-queue').resolveGlossDownloadImportSourceType
   const resolveGlossModKey: typeof import('./lib/gloss-mod-api').resolveGlossModKey
   const resolveGmmPackFolderKey: typeof import('./lib/gmm-package').resolveGmmPackFolderKey
   const resolveLocalModImportSourceType: typeof import('./lib/local-mod-import').resolveLocalModImportSourceType
   const resolveRef: typeof import('@vueuse/core').resolveRef
   const resolveThirdPartyDownloadUrl: typeof import('./lib/third-party-mod-api').resolveThirdPartyDownloadUrl
-  const resolveUnref: typeof import('@vueuse/core').resolveUnref
   const sanitizeFileName: typeof import('./lib/file-name-utils').sanitizeFileName
   const sanitizeHtml: typeof import('./lib/html-sanitizer').sanitizeHtml
   const saveCollectionPending: typeof import('./lib/nexus-collection-pending').saveCollectionPending
+  const saveDownloadMetaMap: typeof import('./lib/download-meta').saveDownloadMetaMap
   const saveLegacyCustomGameDefinition: typeof import('./lib/legacy-custom-data').saveLegacyCustomGameDefinition
   const saveLegacyCustomTypeDefinition: typeof import('./lib/legacy-custom-data').saveLegacyCustomTypeDefinition
   const setActivePinia: typeof import('pinia').setActivePinia
+  const setDownloadStore: typeof import('./lib/download-store').setDownloadStore
   const setMapStoreSuffix: typeof import('pinia').setMapStoreSuffix
-  const setTheme: typeof import('./lib/theme').setTheme
   const settingsStartPageOptions: typeof import('./stores/settings').settingsStartPageOptions
   const shallowReactive: typeof import('vue').shallowReactive
   const shallowReadonly: typeof import('vue').shallowReadonly
@@ -290,17 +252,14 @@ declare global {
   const startManagerModDrag: typeof import('./lib/manager-internal-drag').startManagerModDrag
   const startManagerTagDrag: typeof import('./lib/manager-internal-drag').startManagerTagDrag
   const storeToRefs: typeof import('pinia').storeToRefs
-  const subscribeDownloadTaskEvents: typeof import('./lib/download-task-events').subscribeDownloadTaskEvents
   const supportedGamesGTA5: typeof import('./lib/GTA5Handler').supportedGamesGTA5
   const supportedGamesGTA5Enhanced: typeof import('./lib/GTA5Handler').supportedGamesGTA5Enhanced
   const syncManagerRuntimeContext: typeof import('./lib/manager-context').syncManagerRuntimeContext
   const syncRef: typeof import('@vueuse/core').syncRef
   const syncRefs: typeof import('@vueuse/core').syncRefs
   const templateRef: typeof import('@vueuse/core').templateRef
-  const testArchiveWithSevenZip: typeof import('./lib/sevenZip').testArchiveWithSevenZip
   const throttledRef: typeof import('@vueuse/core').throttledRef
   const throttledWatch: typeof import('@vueuse/core').throttledWatch
-  const toNumber: typeof import('./lib/download-task-ui').toNumber
   const toRaw: typeof import('vue').toRaw
   const toReactive: typeof import('@vueuse/core').toReactive
   const toRef: typeof import('vue').toRef
@@ -335,7 +294,6 @@ declare global {
   const useAsyncQueue: typeof import('@vueuse/core').useAsyncQueue
   const useAsyncState: typeof import('@vueuse/core').useAsyncState
   const useAttrs: typeof import('vue').useAttrs
-  const useAutoStart: typeof import('./lib/auto-start').useAutoStart
   const useBase64: typeof import('@vueuse/core').useBase64
   const useBattery: typeof import('@vueuse/core').useBattery
   const useBluetooth: typeof import('@vueuse/core').useBluetooth
@@ -368,6 +326,7 @@ declare global {
   const useDisplayMedia: typeof import('@vueuse/core').useDisplayMedia
   const useDocumentVisibility: typeof import('@vueuse/core').useDocumentVisibility
   const useDownloadFilePickerStore: typeof import('./stores/download-picker').useDownloadFilePickerStore
+  const useDownloadStoreValue: typeof import('./lib/download-store').useDownloadStoreValue
   const useDownloadTasksStore: typeof import('./stores/download-tasks').useDownloadTasksStore
   const useDraggable: typeof import('@vueuse/core').useDraggable
   const useDropZone: typeof import('@vueuse/core').useDropZone
@@ -468,7 +427,6 @@ declare global {
   const useTextDirection: typeof import('@vueuse/core').useTextDirection
   const useTextSelection: typeof import('@vueuse/core').useTextSelection
   const useTextareaAutosize: typeof import('@vueuse/core').useTextareaAutosize
-  const useTheme: typeof import('./lib/theme').useTheme
   const useThrottle: typeof import('@vueuse/core').useThrottle
   const useThrottleFn: typeof import('@vueuse/core').useThrottleFn
   const useThrottledRefHistory: typeof import('@vueuse/core').useThrottledRefHistory
@@ -560,6 +518,9 @@ declare global {
   // @ts-ignore
   export type { DotNetTool } from './lib/dotnet-tool'
   import('./lib/dotnet-tool')
+  // @ts-ignore
+  export type { DownloadMetaMap } from './lib/download-meta'
+  import('./lib/download-meta')
   // @ts-ignore
   export type { TDownloadFilePickerFilter } from './lib/download-picker-filter'
   import('./lib/download-picker-filter')

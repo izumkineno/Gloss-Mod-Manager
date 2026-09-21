@@ -9,8 +9,8 @@ import {
     findGlossDuplicateTasks,
     type IGlossDownloadTaskMeta,
 } from "@/lib/gloss-download";
-import { PersistentStore } from "@/lib/persistent-store";
-import { listDownloadMeta, saveDownloadMetaMap } from "@/lib/download-meta";
+import { getDownloadStore } from "@/lib/download-store";
+import { listDownloadMeta, putDownloadMeta } from "@/lib/download-meta";
 
 export type CustomQueueDownloadStatus =
     | "created"
@@ -58,7 +58,7 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
 
     const settings = await getStoredSettings();
     const proxy = (
-        (await PersistentStore.get<string>("downloadProxy", "")) ?? ""
+        (await getDownloadStore<string>("downloadProxy", "")) ?? ""
     ).trim();
     const taskMetaMap = await listDownloadMeta();
     // Wave 2：去重读 facade 快照（单例）。
@@ -164,23 +164,27 @@ export async function queueCustomDownload(
         headers: [["User-Agent", CUSTOM_DOWNLOAD_USER_AGENT]],
     });
     const now = new Date().toISOString();
-    const nextTaskMetaMap = {
-        ...runtime.taskMetaMap,
-        [gid]: {
-            sourceType: "Customize",
-            externalId: downloadUrl,
-            modTitle: (options.title || outputFileName).trim(),
-            resourceName: outputFileName,
-            fileName: outputFileName,
-            sourceUrl: downloadUrl,
-            downloadUrl,
-            createdAt: now,
-            taskStatus: "waiting",
-            updatedAt: now,
-        } satisfies IGlossDownloadTaskMeta,
-    };
+    const taskMeta = {
+        sourceType: "Customize",
+        externalId: downloadUrl,
+        modTitle: (options.title || outputFileName).trim(),
+        resourceName: outputFileName,
+        fileName: outputFileName,
+        sourceUrl: downloadUrl,
+        downloadUrl,
+        createdAt: now,
+        taskStatus: "waiting",
+        updatedAt: now,
+    } satisfies IGlossDownloadTaskMeta;
 
-    await saveDownloadMetaMap(nextTaskMetaMap);
+    if (!outputFileName || !taskMeta.fileName) {
+        console.warn(`[uuid-trace] custom put gid=${gid} fileName_EMPTY outputFileName=${String(outputFileName ?? "")} title=${String(options.title ?? "")} url_head=${downloadUrl.slice(0, 80)}`);
+    } else {
+        console.debug(`[uuid-trace] custom put gid=${gid} fileName=${outputFileName}`);
+    }
+    // 单条写入：并发建任务时整表覆盖会互相吞 meta。
+    await putDownloadMeta(gid, taskMeta);
+    runtime.taskMetaMap[gid] = taskMeta;
 
     return {
         status: "created",

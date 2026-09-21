@@ -83,6 +83,26 @@ describe("同一 gid 语义", () => {
         expect(store.archive.has("g10")).toBe(false);
     });
 
+    // 回归：后端 dl_cancel/dl_purge_stopped 会 emit "removed" 事件，facade.cancel/purge 本地又
+    // settleTerminal 一次；事件先到时二次 removed 曾抛"机内无此任务，无法终局"中断删除链路。
+    // removed 幂等：机内/归档皆无时不再抛错。
+    it("removed 二次终局幂等，complete 缺行仍断言", () => {
+        const store = createMachine();
+        enterMachine(store, makeTask("g12"));
+        settleTerminal(store, "g12", "removed");
+        // 事件与本地调用双发：第二次 removed 必须吞掉而不是抛错。
+        expect(() => settleTerminal(store, "g12", "removed")).not.toThrow();
+        expect(store.terminalLog.filter((item) => item.gid === "g12" && item.kind === "removed")).toHaveLength(2);
+        // 归档行的删除同理：complete → archive 后再次 removed 也要能清掉归档行。
+        enterMachine(store, makeTask("g13"));
+        transition(store, "g13", "active");
+        settleTerminal(store, "g13", "complete");
+        expect(() => settleTerminal(store, "g13", "removed")).not.toThrow();
+        expect(store.archive.has("g13")).toBe(false);
+        // complete 缺行仍是逻辑错误，保持断言。
+        expect(() => settleTerminal(store, "g14", "complete")).toThrowError(/机内无此任务/);
+    });
+
     it("retrying 事件携带后端 retry_count 投影", () => {
         const store = createMachine();
         enterMachine(store, makeTask("g7"));

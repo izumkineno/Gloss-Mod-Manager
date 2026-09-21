@@ -10,7 +10,7 @@ export async function listDownloadMeta(): Promise<DownloadMetaMap> {
     return invoke<DownloadMetaMap>("dl_meta_list");
 }
 
-/** 整表覆盖（批量清理落盘用，与原 PersistentStore.set 整表语义一致）。 */
+/** 整表读取（dl_meta_list）。写入一律走 putDownloadMeta 单键 / dl_meta_save 后端合并语义。 */
 export async function saveDownloadMetaMap(map: DownloadMetaMap): Promise<void> {
     await invoke("dl_meta_save", { map });
 }

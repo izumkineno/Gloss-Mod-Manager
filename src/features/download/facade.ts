@@ -6,10 +6,10 @@ import { createMachine, enterMachine, restoreTask, settleTerminal, transition, t
 import { pump } from "./queue/pump";
 import { createMetaStore, purgeMeta, putMeta, type MetaStore } from "./meta/meta-store";
 import { subscribeBackendEvents } from "./events";
-import { PersistentStore } from "@/lib/persistent-store";
+import { getDownloadStore, setDownloadStore } from "@/lib/download-store";
 import type { BackoffOptions, TaskMeta, TaskProjection } from "./types";
 
-/** 投影快照持久化键（跨重启恢复，语义对齐旧 download-task-cache 的 DOWNLOAD_TASK_SNAPSHOT_KEY）。 */
+/** 投影快照后端存储键（跨重启恢复，语义对齐旧 download-task-cache 的 DOWNLOAD_TASK_SNAPSHOT_KEY）。 */
 const PROJECTION_SNAPSHOT_KEY = "dlProjectionSnapshot";
 /** 重启恢复降级文案（旧 GMM_RESTORED_TASK 语义：后端注册表不跨进程，重启后按本地快照降级为 error 记录）。 */
 const RESTORED_ERROR_MESSAGE = "任务未能从后端引擎恢复（应用重启），可点击重试重新加入下载队列。";
@@ -98,7 +98,7 @@ export function createFacade(): DownloadFacade {
                 clearTimeout(persistTimer);
                 persistTimer = null;
             }
-            void PersistentStore.set(PROJECTION_SNAPSHOT_KEY, snap, true).catch(() => undefined);
+            void setDownloadStore(PROJECTION_SNAPSHOT_KEY, snap).catch(() => undefined);
             return;
         }
         if (persistTimer) {
@@ -107,7 +107,7 @@ export function createFacade(): DownloadFacade {
         persistTimer = setTimeout(() => {
             persistTimer = null;
             lastPersistedAt = Date.now();
-            void PersistentStore.set(PROJECTION_SNAPSHOT_KEY, snapshot(store), true).catch(() => undefined);
+            void setDownloadStore(PROJECTION_SNAPSHOT_KEY, snapshot(store)).catch(() => undefined);
         }, 1500);
     }
 
@@ -117,14 +117,14 @@ export function createFacade(): DownloadFacade {
     //   用户点重试走 forget+新 gid 入机（老 删建重试 语义的合规替代）；complete 保留可导入/重下。
     // ② 覆盖同 gid：后端活着时以真相源为准。
     async function bootstrap(): Promise<void> {
-        const persisted = await PersistentStore.get<TaskProjection[]>(PROJECTION_SNAPSHOT_KEY);
+        const persisted = await getDownloadStore<TaskProjection[]>(PROJECTION_SNAPSHOT_KEY, []);
         if (Array.isArray(persisted)) {
             for (const item of persisted) {
                 if (!item || typeof item.gid !== "string") {
                     continue;
                 }
                 if (item.status === "complete") {
-                    restoreTask(store, item);
+                    { const hasFiles = Boolean((item as unknown as { files?: unknown[] })?.files?.length); console.debug(`[uuid-trace] bootstrap restore gid=${item.gid} status=${item.status} hasFiles=${hasFiles}`); restoreTask(store, item); }
                 } else if (item.status !== "removed") {
                     restoreTask(store, {
                         ...item,
@@ -177,19 +177,30 @@ export function createFacade(): DownloadFacade {
             collectionId: args.collectionId,
         };
         putMeta(metas, meta);
-        enterMachine(store, {
-            gid,
-            status: "waiting",
-            retryCount: 0,
-            nextRetryAtMs: 0,
-            collectionId: args.collectionId,
-            dir: args.dir,
-        });
-        // 闸命中直入 paused：经 transition 唯一入口，不直写 status。
-        if (gates.pausedAll || (args.collectionId !== undefined && gates.pausedCollections.has(args.collectionId))) {
-            transition(store, gid, "paused");
-        } else {
-            pump(store, gates);
+        // [uuid-trace] 同文件幂等入队：后端 dl_enqueue 同 dir+file_name 去重会返回已有 gid（跨入口并发/重试
+        // 再次入队）。状态机已有该 gid（机内或终局归档）即完全交给状态机，不再重复入机/迁移，
+        // 也不因 enterMachine 断言抛"任务已在机内"中断调用方的 meta 落盘；meta 单条登记照常。
+        const inMachine = store.tasks.has(gid);
+        const inArchive = store.archive.has(gid);
+        if (inMachine || inArchive) {
+            console.info(`[uuid-trace] facade enqueue dedupe gid=${gid} fileName=${args.fileName} inMachine=${inMachine} inArchive=${inArchive} — skip enterMachine, keep meta`);
+        }
+        if (!inMachine && !inArchive) {
+            enterMachine(store, {
+                gid,
+                status: "waiting",
+                retryCount: 0,
+                nextRetryAtMs: 0,
+                collectionId: args.collectionId,
+                dir: args.dir,
+            });
+            console.info(`[uuid-trace] facade enqueue new gid=${gid} fileName=${args.fileName} collection=${String(args.collectionId ?? "-")}`);
+            // 闸命中直入 paused：经 transition 唯一入口，不直写 status。
+            if (gates.pausedAll || (args.collectionId !== undefined && gates.pausedCollections.has(args.collectionId))) {
+                transition(store, gid, "paused");
+            } else {
+                pump(store, gates);
+            }
         }
         emit();
         return gid;
@@ -232,8 +243,45 @@ export function createFacade(): DownloadFacade {
         return failed;
     }
 
+    // 自愈：后端是真相源；complete 等终局经 settleTerminal 出机入归档，机内变迁走 transition。
+    async function reconcile(gid: string): Promise<void> {
+        const item = await invoke<BackendTaskSnapshot>("dl_tell_status", { gid });
+        const status = item.status as TaskProjection["status"];
+        if (status === "removed") return;
+        if (status === "complete") {
+            settleTerminal(store, gid, "complete");
+            const archived = store.archive.get(gid);
+            if (archived) {
+                store.archive.set(gid, {
+                    ...archived,
+                    total: Number(item.totalLength) || archived.total,
+                    downloaded: Number(item.completedLength) || archived.downloaded,
+                });
+            }
+        } else {
+            restoreTask(store, {
+                gid: item.gid,
+                status,
+                retryCount: item.retryCount ?? 0,
+                nextRetryAtMs: item.nextRetryAtMs ?? 0,
+                dir: item.dir,
+                total: Number(item.totalLength) || 0,
+                downloaded: Number(item.completedLength) || 0,
+                speed: Number(item.downloadSpeed) || 0,
+                error: item.errorMessage ?? undefined,
+            });
+        }
+        emit();
+    }
+
     async function pause(gid: string): Promise<void> {
-        await invoke("dl_pause", { gid });
+        try {
+            await invoke("dl_pause", { gid });
+        } catch (error: unknown) {
+            // 后端终局/变迁拒绝时拉真相自愈（修 complete 事件漏投卡 active 行点暂停报错）。
+            if (/非法状态变迁|任务不存在/u.test(String(error))) await reconcile(gid);
+            throw error;
+        }
         emit();
     }
     async function pauseAll(): Promise<number> {

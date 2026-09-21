@@ -12,7 +12,7 @@ use tauri::Emitter;
 const MAX_ACTIVE: usize = 5;
 
 // 自动重试退避（上限 3 次）；参数收敛进 options 预留，不接任何 UI/配置。
-const RETRY_BACKOFF_MS: [u64; 3] = [1000, 2000, 4000];
+const RETRY_BACKOFF_MS: [u64; 3] = [10000, 20000, 40000];
 const MAX_AUTO_RETRY: u32 = 3;
 
 // 当前毫秒时间戳（可序列化计时，不用 Instant）。
@@ -584,12 +584,35 @@ pub fn dl_enqueue(
     collection_id: Option<String>,
 ) -> Result<String, String> {
     if url.trim().is_empty() {
+        tracing::warn!(target: "gmm::dl", "[uuid-trace] dl_enqueue reject empty url file_name_head={} collection={:?}", &file_name[..file_name.len().min(40)], collection_id);
         return Err("下载地址为空".to_string());
     }
     if file_name.trim().is_empty() {
+        tracing::warn!(target: "gmm::dl", "[uuid-trace] dl_enqueue reject empty file_name url_head={} collection={:?}", &url[..url.len().min(80)], collection_id);
         return Err("输出文件名为空".to_string());
     }
+    // 同文件去重：同 dir + file_name 的非终局任务直接复用，不建新 gid（防连点/多入口重复入队抢写同一文件）。
+    // 命中后按任务真实状态发事件：暂停闸开着时复用命中不能把 paused 任务伪报成 waiting，
+    // 否则前端投影机会把已暂停的行迁回 waiting，破坏状态机单一真相。
+    let existing = {
+        let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        inner
+            .tasks
+            .iter()
+            .find(|(_, entry)| {
+                !matches!(entry.status, TaskStatus::Complete)
+                    && entry.dir.trim_end_matches(['/', '\\']) == dir.trim_end_matches(['/', '\\'])
+                    && entry.file_name == file_name
+            })
+            .map(|(gid, entry)| (gid.clone(), entry.status))
+    };
+    if let Some((gid, status)) = existing {
+        tracing::info!(target: "gmm::dl", "[uuid-trace] dl_enqueue dedupe hit gid={} file_name={} status={:?} collection={:?}", gid, file_name, status, collection_id);
+        state.emit_snapshot(&gid, status);
+        return Ok(gid);
+    }
     let gid = uuid::Uuid::new_v4().to_string();
+    tracing::info!(target: "gmm::dl", "[uuid-trace] dl_enqueue new gid={} file_name={} dir={} url_head={} collection={:?}", gid, file_name, dir, &url[..url.len().min(80)], collection_id);
     let header_vec: Vec<(String, String)> = headers.into_iter().collect();
     let gated = {
         let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
@@ -885,6 +908,12 @@ pub fn dl_pause(state: tauri::State<DownloaderState>, gid: String) -> Result<(),
         let Some(entry) = inner.tasks.get_mut(&gid) else {
             return Err(format!("任务不存在：{gid}"));
         };
+        // 终局幂等：已完成任务点暂停直接成功并补发 complete 事件，前端借此自愈投影。
+        if entry.status == TaskStatus::Complete {
+            drop(inner);
+            state.emit_snapshot_str(&gid, "complete");
+            return Ok(());
+        }
         if entry.status == TaskStatus::Active {
             abort_entry(entry);
         }

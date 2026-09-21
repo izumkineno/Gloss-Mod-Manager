@@ -18,8 +18,8 @@ import {
     resolveLocalModImportSourceType,
     type LocalModImportSourceType,
 } from "@/lib/local-mod-import";
-import { PersistentStore } from "@/lib/persistent-store";
-import { listDownloadMeta, saveDownloadMetaMap } from "@/lib/download-meta";
+import { getDownloadStore } from "@/lib/download-store";
+import { listDownloadMeta, putDownloadMeta, removeDownloadMeta } from "@/lib/download-meta";
 import type { IDownloaderTask, IDownloaderTaskFile } from "../types";
 
 export type GlossQueueDownloadStatus =
@@ -285,7 +285,7 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
 
     const settings = await getStoredSettings();
     const proxy = (
-        (await PersistentStore.get<string>("downloadProxy", "")) ?? ""
+        (await getDownloadStore<string>("downloadProxy", "")) ?? ""
     ).trim();
     const taskMetaMap = await listDownloadMeta();
     // Wave 2：去重读 facade 快照（单例）。
@@ -303,13 +303,6 @@ async function getQueueRuntimeContext(): Promise<IQueueRuntimeContext> {
         allTasks,
     };
 }
-
-async function saveTaskMetaMap(
-    taskMetaMap: Record<string, IGlossDownloadTaskMeta>,
-) {
-    await saveDownloadMetaMap(taskMetaMap);
-}
-
 
 async function createGlossDownloadTask(
     runtime: IQueueRuntimeContext,
@@ -355,13 +348,14 @@ async function createGlossDownloadTask(
         updatedAt: now,
     };
 
-    const nextTaskMetaMap = {
-        ...runtime.taskMetaMap,
-        [gid]: taskMeta,
-    };
-
-    await saveTaskMetaMap(nextTaskMetaMap);
-    runtime.taskMetaMap = nextTaskMetaMap;
+    // 单条写入：并发建任务时整表覆盖会互相吞 meta。
+    if (!taskMeta.fileName) {
+        console.warn(`[uuid-trace] createGlossDownloadTask put gid=${gid} fileName_EMPTY mod=${mod.id} resource=${resource.id} resourceName=${String(resource.mods_resource_name ?? "")}`);
+    } else {
+        console.debug(`[uuid-trace] createGlossDownloadTask put gid=${gid} fileName=${taskMeta.fileName}`);
+    }
+    await putDownloadMeta(gid, taskMeta);
+    runtime.taskMetaMap[gid] = taskMeta;
 
     return gid;
 }
@@ -396,14 +390,35 @@ async function removeCompletedDuplicateTask(
             throw new Error("删除旧下载文件失败，请稍后重试。");
         }
     }
+    // 单键删除：整表覆盖在并发建任务时会洗掉其它链路刚写入的 meta（后端 dl_meta_save 已是合并语义，
+    // 依赖它删键会变成无效写，这里显式走 dl_meta_remove）。
+    await removeDownloadMeta(task.gid);
     const nextTaskMetaMap = { ...runtime.taskMetaMap };
     delete nextTaskMetaMap[task.gid];
-    await saveTaskMetaMap(nextTaskMetaMap);
     runtime.taskMetaMap = nextTaskMetaMap;
     runtime.allTasks = runtime.allTasks.filter((item) => item.gid !== task.gid);
 }
 
+// 同资源并发入队单飞锁：连点/多入口同时点下载时，第二方等待第一方结果，直接复用 gid，不建新任务。
+const glossEnqueueInflight = new Map<string, Promise<IQueueGlossDownloadResult>>();
+
 export async function queueGlossModDownload(
+    options: IQueueGlossDownloadOptions,
+): Promise<IQueueGlossDownloadResult> {
+    // 入队键在 mod/resource 确定前未知：先解析身份，再按 key 单飞，避免并发建重复任务。
+    const modId = options.mod?.id ?? options.modId ?? "";
+    const resourceId = options.resourceId ?? "latest";
+    const inflightKey = `${modId}:${resourceId}`;
+    const inflight = glossEnqueueInflight.get(inflightKey);
+    if (inflight) return inflight;
+    const task = queueGlossModDownloadInner(options).finally(() => {
+        if (glossEnqueueInflight.get(inflightKey) === task) glossEnqueueInflight.delete(inflightKey);
+    });
+    glossEnqueueInflight.set(inflightKey, task);
+    return task;
+}
+
+async function queueGlossModDownloadInner(
     options: IQueueGlossDownloadOptions,
 ): Promise<IQueueGlossDownloadResult> {
     const mod = options.mod ?? (await fetchGlossModDetail(options.modId ?? "", options.apiKey));
@@ -503,24 +518,24 @@ export async function queueGlossModDownload(
             };
         }
 
-        const nextTaskMetaMap: Record<string, IGlossDownloadTaskMeta> = {
-            ...runtime.taskMetaMap,
-            [currentTask.gid]: {
-                ...runtime.taskMetaMap[currentTask.gid],
-                replaceLocalModId:
-                    options.replaceLocalModId ??
-                    runtime.taskMetaMap[currentTask.gid]?.replaceLocalModId,
-                taskStatus: currentTask.status as TaskStatus,
-                updatedAt: new Date().toISOString(),
-            },
-        };
-
         if (currentTask.status === "paused") {
             // Wave 2：恢复走 facade.resume（后端 dl_resume）。
             const { getDownloadFacade } = await import("@/features/download/facade");
             await getDownloadFacade().resume(currentTask.gid);
-            nextTaskMetaMap[currentTask.gid].taskStatus = "waiting";
-            await saveTaskMetaMap(nextTaskMetaMap);
+            // 单键写入：并发建任务/导入链路同时在写整表，整表覆盖会用旧快照洗掉新条目。
+            const resumedMeta = {
+                ...runtime.taskMetaMap[currentTask.gid],
+                replaceLocalModId:
+                    options.replaceLocalModId ??
+                    runtime.taskMetaMap[currentTask.gid]?.replaceLocalModId,
+                taskStatus: "waiting" as TaskStatus,
+                updatedAt: new Date().toISOString(),
+            };
+            await putDownloadMeta(currentTask.gid, resumedMeta);
+            runtime.taskMetaMap = {
+                ...runtime.taskMetaMap,
+                [currentTask.gid]: resumedMeta,
+            };
             return {
                 status: "resumed",
                 gid: currentTask.gid,
@@ -542,7 +557,20 @@ export async function queueGlossModDownload(
             };
         }
 
-        await saveTaskMetaMap(nextTaskMetaMap);
+        // 单键写入：只更新该任务自身状态投影，不用旧快照覆盖整表。
+        const existsMeta = {
+            ...runtime.taskMetaMap[currentTask.gid],
+            replaceLocalModId:
+                options.replaceLocalModId ??
+                runtime.taskMetaMap[currentTask.gid]?.replaceLocalModId,
+            taskStatus: currentTask.status as TaskStatus,
+            updatedAt: new Date().toISOString(),
+        };
+        await putDownloadMeta(currentTask.gid, existsMeta);
+        runtime.taskMetaMap = {
+            ...runtime.taskMetaMap,
+            [currentTask.gid]: existsMeta,
+        };
 
         return {
             status: "exists",
