@@ -1,6 +1,6 @@
 // facade 快照选择器：筛选/排序/分组/倒计时展示语义。
 // retrying 与 error 同组展示，附“x 秒后重试 / 剩余 n 次”；计时字段只读后端投影。
-import type { DownloadStatus, DownloadTask } from "../types";
+import type { DownloadStatus, DownloadTask, TaskProjection } from "../types";
 
 export type TaskGroup = "active" | "attention" | "waiting" | "paused";
 
@@ -50,10 +50,10 @@ export type QueueFilter =
     | "imported"
     | "unimported";
 export function filterTasks(
-    tasks: readonly DownloadTask[],
+    tasks: readonly TaskProjection[],
     filter: QueueFilter,
     isImported: (gid: string) => boolean,
-): DownloadTask[] {
+): TaskProjection[] {
     switch (filter) {
         case "active":
             return tasks.filter((t) => t.status === "active");
@@ -62,9 +62,9 @@ export function filterTasks(
         case "paused":
             return tasks.filter((t) => t.status === "paused");
         case "failed":
-            return tasks.filter((t) => t.status === "error");
-        case "stopped":
             return tasks.filter((t) => t.status === "error" || t.status === "retrying");
+        case "stopped":
+            return tasks.filter((t) => t.status === "complete");
         case "imported":
             return tasks.filter((t) => isImported(t.gid));
         case "unimported":

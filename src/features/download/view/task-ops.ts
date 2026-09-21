@@ -78,7 +78,8 @@ export async function removeTask(
     }
 }
 
-// 清理已结束：逐个忘掉 stopped 桶记录并落盘 meta，单条失败不中断。
+// 清理已结束：facade.purge 清后端注册表 + 前端终局归档，再清对应 meta 落盘，单条失败不中断。
+// deleteFile=true 时一并删本地文件（含 .download.bitcode 断点，后端负责）。
 export async function purgeStoppedTasks(
     stoppedTasks: IDownloaderTask[],
     hooks: TaskOpsHooks & {
@@ -86,14 +87,25 @@ export async function purgeStoppedTasks(
         saveTaskMetaMap: (nextMap: Record<string, IGlossDownloadTaskMeta>) => Promise<void>;
         taskMetaMap: Record<string, IGlossDownloadTaskMeta>;
     },
+    deleteFile = false,
 ): Promise<void> {
     if (stoppedTasks.length === 0) {
         ElMessage.info("当前没有可清理的历史任务。");
         return;
     }
 
-    // Wave 3：历史记录清理走 facade（后端 purge，不碰机内态；失败明细留给后端）。
+    // 真清后端（按 gid 批量）+ 前端终局归档；ghost 记录后端侧直接忽略。
     const tasks = [...stoppedTasks];
+    let backendFailed: Array<[string, string]> = [];
+    try {
+        backendFailed = await getDownloadFacade().purge(
+            tasks.map((task) => task.gid),
+            deleteFile,
+        );
+    } catch (error: unknown) {
+        ElMessage.error(getErrorMessage(error));
+        return;
+    }
     let removed = 0;
     for (const task of tasks) {
         try {
@@ -105,5 +117,9 @@ export async function purgeStoppedTasks(
     }
     await hooks.saveTaskMetaMap(hooks.taskMetaMap);
     await hooks.refreshTaskLists();
-    ElMessage.success(`已清理 ${removed} 条历史任务。`);
+    if (backendFailed.length > 0) {
+        ElMessage.warning(`已清理 ${removed} 条记录，但 ${backendFailed.length} 个文件删失败：${backendFailed[0][1]}${backendFailed.length > 1 ? "…" : ""}`);
+    } else {
+        ElMessage.success(`已清理 ${removed} 条历史任务。`);
+    }
 }

@@ -105,10 +105,10 @@ function toLegacyTask(task: TaskProjection, meta?: IGlossDownloadTaskMeta): IDow
 }
 const activeTasks = computed(() => taskList.value.filter((t) => t.status === "active").map((t) => toLegacyTask(t, taskMetaMap.value[t.gid])));
 const waitingTasks = computed(() => taskList.value.filter((t) => t.status === "waiting" || t.status === "paused").map((t) => toLegacyTask(t, taskMetaMap.value[t.gid])));
-const stoppedTasks = computed(() => taskList.value.filter((t) => t.status === "error").map((t) => toLegacyTask(t, taskMetaMap.value[t.gid])));
+const stoppedTasks = computed(() => taskList.value.filter((t) => t.status === "complete").map((t) => toLegacyTask(t, taskMetaMap.value[t.gid])));
 const allTasks = computed(() => taskList.value.map((t) => toLegacyTask(t, taskMetaMap.value[t.gid])));
 const failedTasks = computed(() => taskList.value.filter((t) => t.status === "error").map((t) => toLegacyTask(t, taskMetaMap.value[t.gid])));
-const finishedTasks = computed(() => taskList.value.filter((t) => t.status === "error").map((t) => toLegacyTask(t, taskMetaMap.value[t.gid])));
+const finishedTasks = computed(() => taskList.value.filter((t) => t.status === "complete").map((t) => toLegacyTask(t, taskMetaMap.value[t.gid])));
 async function refreshTaskLists(silent = false): Promise<void> {
     if (!silent) refreshingTasks.value = true;
     try {
@@ -247,13 +247,36 @@ function pauseAllTasks(): Promise<void> {
 function resumeAllTasks(): Promise<void> {
     return resumeAllTasksCore(() => refreshTaskLists());
 }
-function purgeStoppedTasks(): Promise<void> {
-    return purgeStoppedTasksCore(stoppedTasks.value, {
-        ...taskOpsHooks,
-        removeTaskMeta,
-        saveTaskMetaMap,
-        taskMetaMap: taskMetaMap.value,
-    });
+// 清理确认弹窗：已结束/下载失败共用，额外勾选是否删本地文件。
+const showPurgeConfirmDialog = ref(false);
+const purgeDeleteFile = ref(false);
+const purgeTarget = ref<"stopped" | "failed">("stopped");
+const purgeTargetCount = computed(() =>
+    purgeTarget.value === "failed" ? failedTasks.value.length : stoppedTasks.value.length,
+);
+const purgeTargetLabel = computed(() => (purgeTarget.value === "failed" ? "下载失败" : "已结束"));
+function openPurgeConfirm(target: "stopped" | "failed"): void {
+    if ((target === "failed" ? failedTasks.value : stoppedTasks.value).length === 0) {
+        ElMessage.info("当前没有可清理的历史任务。");
+        return;
+    }
+    purgeTarget.value = target;
+    purgeDeleteFile.value = false;
+    showPurgeConfirmDialog.value = true;
+}
+function confirmPurgeTasks(): Promise<void> {
+    showPurgeConfirmDialog.value = false;
+    const tasks = purgeTarget.value === "failed" ? failedTasks.value : stoppedTasks.value;
+    return purgeStoppedTasksCore(
+        tasks,
+        {
+            ...taskOpsHooks,
+            removeTaskMeta,
+            saveTaskMetaMap,
+            taskMetaMap: taskMetaMap.value,
+        },
+        purgeDeleteFile.value,
+    );
 }
 
 // 去重旧记录清理（同文件归一键）。
@@ -711,9 +734,13 @@ onUnmounted(() => {
                             <IconFileUp />
                             批量导入全部
                         </Button>
-                        <Button size="sm" variant="outline" @click="purgeStoppedTasks">
+                        <Button size="sm" variant="outline" @click="openPurgeConfirm('stopped')">
                             <IconTrash2 />
                             清理已结束
+                        </Button>
+                        <Button size="sm" variant="outline" @click="openPurgeConfirm('failed')">
+                            <IconTrash2 />
+                            清理下载失败
                         </Button>
                     </div>
                 </CardTitle>
@@ -1522,6 +1549,34 @@ onUnmounted(() => {
                     </p>
                 </div>
             </DialogScrollContent>
+        </Dialog>
+
+        <Dialog v-model:open="showPurgeConfirmDialog" modal>
+            <DialogContent class="sm:max-w-md">
+                <DialogHeader>
+                    <DialogTitle>清理{{ purgeTargetLabel }}</DialogTitle>
+                    <DialogDescription>
+                        将清理 {{ purgeTargetCount }} 条{{ purgeTargetLabel }}任务记录。默认只清记录、保留本地文件。
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div class="flex items-center justify-between gap-3 rounded-xl border px-4 py-3">
+                    <div class="text-sm">
+                        <div class="font-medium">同时删除本地文件</div>
+                        <div class="text-xs text-muted-foreground">含未下完的断点文件（.download.bitcode），操作不可撤销。</div>
+                    </div>
+                    <Switch v-model="purgeDeleteFile" />
+                </div>
+
+                <DialogFooter>
+                    <Button variant="outline" @click="showPurgeConfirmDialog = false">
+                        取消
+                    </Button>
+                    <Button variant="destructive" @click="confirmPurgeTasks">
+                        确认清理
+                    </Button>
+                </DialogFooter>
+            </DialogContent>
         </Dialog>
     </div>
 </template>

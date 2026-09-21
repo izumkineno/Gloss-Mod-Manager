@@ -44,7 +44,7 @@ export interface DownloadFacade {
     enqueue(args: EnqueueArgs, options?: BackoffOptions): Promise<string>;
     cancel(gid: string, deleteFile?: boolean): Promise<void>;
     forget(gid: string): Promise<void>;
-    purge(): Promise<void>;
+    purge(gids: string[], deleteFile?: boolean): Promise<Array<[string, string]>>;
     pause(gid: string): Promise<void>;
     pauseAll(): Promise<number>;
     pauseCollection(collectionId: string): Promise<number>;
@@ -219,11 +219,17 @@ export function createFacade(): DownloadFacade {
         emit();
     }
 
-    // purge：清终局归档（含前端终局归档），不碰机内态。
-    async function purge(): Promise<void> {
-        await invoke("dl_purge");
-        store.archive.clear();
+    // purge：批量清已终局任务（后端 dl_purge_stopped + 前端终局归档），不碰机内态。
+    // 返回后端失败明细（跳过/文件删失败），调用方展示。
+    async function purge(gids: string[], deleteFile = false): Promise<Array<[string, string]>> {
+        const [count, failed] =
+            await invoke<[number, Array<[string, string]>]>("dl_purge_stopped", { gids, deleteFile });
+        void count;
+        for (const gid of gids) {
+            settleTerminal(store, gid, "removed");
+        }
         emit();
+        return failed;
     }
 
     async function pause(gid: string): Promise<void> {
