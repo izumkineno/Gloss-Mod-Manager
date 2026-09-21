@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { storeToRefs } from "pinia";
 import { cn } from "@/lib/utils";
+import {
+    filterDownloadFilePickerItems,
+    type TDownloadFilePickerFilter,
+} from "@/lib/download-picker-filter";
 
 const picker = useDownloadFilePickerStore();
 const {
@@ -42,10 +46,12 @@ const validSelectedCount = computed(() => {
 });
 
 
-// 过滤器：全部/必装/可选/未下载/未勾选；禁用的已导入行不受过滤影响（始终可见但不可点）。
-type PickerFilter = "all" | "required" | "optional" | "undownloaded" | "unselected";
-const pickerFilter = ref<PickerFilter>("all");
-const pickerFilterOptions: Array<{ value: PickerFilter; label: string }> = [
+// 过滤器：全部/必装/可选/未下载/未勾选；过滤逻辑在 @/lib/download-picker-filter 里，便于单测。
+const pickerFilter = ref<TDownloadFilePickerFilter>("all");
+const pickerFilterOptions: Array<{
+    value: TDownloadFilePickerFilter;
+    label: string;
+}> = [
     { value: "all", label: "全部" },
     { value: "undownloaded", label: "未下载" },
     { value: "required", label: "必装" },
@@ -53,14 +59,11 @@ const pickerFilterOptions: Array<{ value: PickerFilter; label: string }> = [
     { value: "unselected", label: "未勾选" },
 ];
 const visibleItems = computed(() => {
-    return items.value.filter((item) => {
-        if (pickerFilter.value === "required" && item.badges.includes("可选")) return false;
-        if (pickerFilter.value === "optional" && !item.badges.includes("可选")) return false;
-        // 未下载：去掉已导入/已下载（两者都是 badges 标记，无需任务快照）。
-        if (pickerFilter.value === "undownloaded" && (item.badges.includes("已导入") || item.badges.includes("已下载"))) return false;
-        if (pickerFilter.value === "unselected" && isSelected(item.id)) return false;
-        return true;
-    });
+    return filterDownloadFilePickerItems(
+        items.value,
+        pickerFilter.value,
+        isSelected,
+    );
 });
 watch(open, () => {
     pickerFilter.value = "all";

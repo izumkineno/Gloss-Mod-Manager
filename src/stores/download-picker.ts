@@ -3,6 +3,9 @@ export interface IDownloadFilePickerItem {
     title: string;
     description: string;
     badges: string[];
+    // 分类语义（弹窗"必装/可选"页签按它分桶）：true=可选，false/缺省=必装。
+    // 不能用 badges 文案判断：Nexus 用"可选文件"、Collection 用"可选"，文本匹配会串台。
+    optional?: boolean;
     // 已导入等不可选：禁用勾选，确认时过滤。
     disabled?: boolean;
     disabledReason?: string;
