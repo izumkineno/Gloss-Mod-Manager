@@ -91,8 +91,6 @@ pub(crate) fn dl_meta_list(
             let durl = v.get("downloadUrl").and_then(|x| x.as_str()).unwrap_or("-");
             tracing::warn!(target: "gmm::meta", "[uuid-trace] dl_meta_list orphan gid={} sourceType={} downloadUrl_head={} meta={}", gid, src, &durl[..durl.len().min(80)], v);
         }
-    } else {
-        tracing::debug!(target: "gmm::meta", "[uuid-trace] dl_meta_list total={} missing_name=0", total);
     }
     Ok(map)
 }

@@ -349,13 +349,18 @@ export async function resolveThirdPartyDownloadUrl(
     // 先等水合完成再读，避免空 Cookie 误报"未配置"并回退到无权限的 API 模式。
     const resolveTag = `[resolve] modId=${detail.id} fileId=${fileId ?? ""}`;
     console.debug(`${resolveTag} stage=start mode=${nexusDirect?.mode ?? "api"}`);
+    // apiKey 与 cookie 同源（Stronghold 加密存储），且 cookie 分支的 game_id 解析要打 api.nexusmods.com：
+    // 空 key 必 401，随后回退抓 www 页（CF 域，易被拦）。所以这里一并等水合 + 重读快照。
+    let nexusApiKey = getNexusModsApiKey(nexusUser);
     if (detail.source === "NexusMods" && nexusDirect?.mode === "cookie") {
         console.debug(`${resolveTag} stage=secret-ready-wait`);
-        await SecretStore.ready("nexusModsCookie");
+        await SecretStore.ready("nexusModsCookie", "nexusModsToken");
         // nexusDirect.cookie 是调用时快照：水合后重读，否则刷新后一直空。
         const fresh = (await SecretStore.getSafe("nexusModsCookie")).trim();
         if (fresh && fresh !== nexusDirect.cookie?.trim()) nexusDirect = { ...nexusDirect, cookie: fresh };
-        console.debug(`${resolveTag} stage=secret-ready-done cookieLen=${nexusDirect.cookie?.trim().length ?? 0}`);
+        // nexusUser.key 同样是调用时快照：等完水合必须重读，否则空 key 让 game_id 落到 CF 域回退。
+        if (!nexusApiKey) nexusApiKey = (await SecretStore.getSafe("nexusModsToken")).trim();
+        console.debug(`${resolveTag} stage=secret-ready-done cookieLen=${nexusDirect.cookie?.trim().length ?? 0} apiKeyLen=${nexusApiKey.length}`);
     }
     if (detail.source !== "NexusMods") {
         const targetFile =
@@ -386,7 +391,7 @@ export async function resolveThirdPartyDownloadUrl(
         }
     // 代理未显式传入时读全局下载代理：后端 reqwest 只认显式代理，直连 www.nexusmods.com 会被墙。
     const storedProxy = ((await getDownloadStore<string>("downloadProxy", "")) ?? "").trim();
-    console.debug(`${resolveTag} stage=cookie-invoke game=${gameDomain} proxy=${storedProxy ? "yes" : "no"}`);
+    console.debug(`${resolveTag} stage=cookie-invoke game=${gameDomain} proxy=${storedProxy ? "yes" : "no"} apiKey=${nexusApiKey ? "yes" : "no"}`);
         return invoke<string>("nexus_resolve_direct", {
             gameDomain,
             modId: detail.id,
@@ -394,7 +399,7 @@ export async function resolveThirdPartyDownloadUrl(
             cookie,
             isNmm: false,
             proxy: nexusDirect.proxy ?? (storedProxy || null),
-            apiKey: nexusUser?.key?.trim() ? nexusUser.key.trim() : null,
+            apiKey: nexusApiKey || null,
         });
     }
     console.debug(`${resolveTag} stage=api-fallback`);
@@ -445,17 +450,9 @@ function getModIoBaseUrl() {
     return `https://u-${MOD_IO_UID_KEY}.modapi.io/v1`;
 }
 
-function getNexusModsApiKey(
-    nexusUser?: INexusModsUser | null,
-    required = false,
-) {
-    const apiKey = nexusUser?.key?.trim() ?? "";
-
-    if (!apiKey && required) {
-        throw new NexusModsAuthorizationError();
-    }
-
-    return apiKey;
+// 只读快照里的 key；"必须有 key"的判定放在各自调用点（水合等待之后）。
+function getNexusModsApiKey(nexusUser?: INexusModsUser | null) {
+    return nexusUser?.key?.trim() ?? "";
 }
 
 function normalizePage(page: number) {
@@ -742,14 +739,11 @@ function buildNexusModsWebsite(
     return url.toString();
 }
 
-function getNexusModsHeaders(
-    nexusUser?: INexusModsUser | null,
-    requireAuthorization = false,
-) {
+function getNexusModsHeaders(nexusUser?: INexusModsUser | null) {
     const headers: Record<string, string> = {
         Accept: "application/json",
     };
-    const apiKey = getNexusModsApiKey(nexusUser, requireAuthorization);
+    const apiKey = getNexusModsApiKey(nexusUser);
 
     if (apiKey) {
         headers.apikey = apiKey;
@@ -1257,6 +1251,16 @@ async function resolveNexusModsDownloadUrl(
     nexusUser?: INexusModsUser | null,
     nexusDownloadAuthorization?: INexusModsDownloadAuthorization | null,
 ) {
+    // nexusUser 是调用时快照：Stronghold 水合未完成时 key 为空，直接抛"请先授权"会误导。
+    // 先等水合，等完仍空才是真未授权（默认 api 模式走这条）。
+    let apiKey = getNexusModsApiKey(nexusUser);
+    if (!apiKey) {
+        await SecretStore.ready("nexusModsToken");
+        apiKey = (await SecretStore.getSafe("nexusModsToken")).trim();
+    }
+    if (!apiKey) {
+        throw new NexusModsAuthorizationError();
+    }
     const downloadLinkUrl = new URL(
         `https://api.nexusmods.com/v1/games/${gameDomain}/mods/${modId}/files/${fileId}/download_link.json`,
     );
@@ -1277,7 +1281,7 @@ async function resolveNexusModsDownloadUrl(
 
     const response = await httpFetch(downloadLinkUrl.toString(), {
         method: "GET",
-        headers: getNexusModsHeaders(nexusUser, true),
+        headers: { Accept: "application/json", apikey: apiKey },
     });
     const payload = (await response.json()) as
         | INexusDownloadLinkResponseItem[]

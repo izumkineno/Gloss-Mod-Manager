@@ -86,6 +86,8 @@ export async function purgeStoppedTasks(
     },
     deleteFile = false,
 ): Promise<void> {
+    // 入口快照：批量来源（已完成/失败页）与规模，删文件开关是关键分叉。
+    console.info(`[purge] start total=${stoppedTasks.length} deleteFile=${deleteFile} gids_head=${stoppedTasks.slice(0, 5).map((t) => t.gid).join(",")}`);
     if (stoppedTasks.length === 0) {
         ElMessage.info("当前没有可清理的历史任务。");
         return;
@@ -94,26 +96,38 @@ export async function purgeStoppedTasks(
     // 真清后端（按 gid 批量）+ 前端终局归档；ghost 记录后端侧直接忽略。
     const tasks = [...stoppedTasks];
     let backendFailed: Array<[string, string]> = [];
+    let backendCount = 0;
     try {
+        // facade.purge 返回失败明细，count 需从 targets.len 推（当前签名只回 failed，count 暂用 removed 近似）。
         backendFailed = await getDownloadFacade().purge(
             tasks.map((task) => task.gid),
             deleteFile,
         );
+        backendCount = tasks.length - backendFailed.length;
+        console.info(`[purge] backend done targets=${tasks.length} cleaned~=${backendCount} failed=${backendFailed.length} deleteFile=${deleteFile}`);
+        for (const [gid, reason] of backendFailed) {
+            console.warn(`[purge] backend failed gid=${gid} reason=${reason}`);
+        }
     } catch (error: unknown) {
+        console.error(`[purge] backend invoke FAILED total=${tasks.length} deleteFile=${deleteFile}`, error);
         ElMessage.error(getErrorMessage(error));
         return;
     }
     let removed = 0;
+    let metaFailed = 0;
     for (const task of tasks) {
         try {
             await hooks.removeTaskMeta(task.gid);
             removed += 1;
-        } catch {
+        } catch (error: unknown) {
             // 单条清理失败不中断。
+            metaFailed += 1;
+            console.warn(`[purge] meta remove FAILED gid=${task.gid}`, error);
         }
     }
     // meta 已逐键 removeTaskMeta 落盘；不再整表回写（旧快照会洗掉并发链路的新条目）。
     await hooks.refreshTaskLists();
+    console.info(`[purge] done total=${tasks.length} backend_cleaned~=${backendCount} meta_removed=${removed} meta_failed=${metaFailed} backend_failed=${backendFailed.length} deleteFile=${deleteFile}`);
     if (backendFailed.length > 0) {
         ElMessage.warning(`已清理 ${removed} 条记录，但 ${backendFailed.length} 个文件删失败：${backendFailed[0][1]}${backendFailed.length > 1 ? "…" : ""}`);
     } else {

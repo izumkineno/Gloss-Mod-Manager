@@ -1023,14 +1023,23 @@ pub fn dl_cancel(
 /// 仅遗忘已终局任务，不删文件。
 #[tauri::command]
 pub fn dl_forget(state: tauri::State<DownloaderState>, gid: String) -> Result<(), String> {
+    let (status, in_pending) = {
+        let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let status = inner.tasks.get(&gid).map(|e| e.status.as_status_str().to_string());
+        let in_pending = inner.pending.iter().any(|p| p == &gid);
+        (status, in_pending)
+    };
+    tracing::info!(target: "gmm::dl", "[purge] dl_forget start gid={} status={} in_pending={}", gid, status.as_deref().unwrap_or("ghost"), in_pending);
     let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
     if let Some(entry) = inner.tasks.get(&gid) {
         if entry.status == TaskStatus::Active || entry.status == TaskStatus::Waiting {
+            tracing::warn!(target: "gmm::dl", "[purge] dl_forget reject gid={} status={:?} 任务尚未终局", gid, entry.status);
             return Err("任务尚未终局".to_string());
         }
     }
-    inner.tasks.remove(&gid);
+    let existed = inner.tasks.remove(&gid).is_some();
     inner.pending.retain(|pending| pending != &gid);
+    tracing::info!(target: "gmm::dl", "[purge] dl_forget done gid={} existed={} pending_removed={}", gid, existed, in_pending);
     Ok(())
 }
 /// 批量清理已终局任务：一次锁内定名单，锁外删文件、发事件。返回 (已清理数, 失败明细)。
@@ -1041,12 +1050,14 @@ pub fn dl_purge_stopped(
     gids: Vec<String>,
     delete_file: bool,
 ) -> Result<(usize, Vec<(String, String)>), String> {
-    let (targets, failed): (Vec<(String, String)>, Vec<(String, String)>) = {
+    let (targets, failed): (Vec<(String, String, String)>, Vec<(String, String)>) = {
         let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
         let mut targets = Vec::with_capacity(gids.len());
         let mut failed = Vec::new();
-        for gid in gids {
-            let Some(mut entry) = inner.tasks.remove(&gid) else {
+        let mut ghost = 0usize;
+        for gid in &gids {
+            let Some(mut entry) = inner.tasks.remove(gid) else {
+                ghost += 1;
                 continue;
             };
             if matches!(
@@ -1055,24 +1066,60 @@ pub fn dl_purge_stopped(
             ) {
                 let status = entry.status.as_status_str().to_string();
                 inner.tasks.insert(gid.clone(), entry);
-                failed.push((gid, format!("任务{status}，跳过")));
+                failed.push((gid.clone(), format!("任务{status}，跳过")));
                 continue;
             }
+            let status = entry.status.as_status_str().to_string();
             abort_entry(&mut entry);
-            targets.push((gid, entry.output_path()));
+            targets.push((gid.clone(), status, entry.output_path()));
         }
-        inner.pending.retain(|pending| !targets.iter().any(|(gid, _)| gid == pending));
+        inner.pending.retain(|pending| !targets.iter().any(|(gid, _, _)| gid == pending));
+        tracing::info!(target: "gmm::dl", "[purge] dl_purge_stopped classified total={} delete_file={} targets={} skipped_active={} ghost={}", gids.len(), delete_file, targets.len(), failed.len(), ghost);
+        for (gid, status, _) in &targets {
+            tracing::debug!(target: "gmm::dl", "[purge] dl_purge_stopped target gid={} status={}", gid, status);
+        }
+        for (gid, reason) in &failed {
+            tracing::warn!(target: "gmm::dl", "[purge] dl_purge_stopped skip gid={} reason={}", gid, reason);
+        }
         (targets, failed)
     };
-    for (gid, output) in &targets {
+    let mut file_ok = 0usize;
+    let mut file_failed: Vec<(String, String)> = Vec::new();
+    for (gid, status, output) in &targets {
         if delete_file {
-            let _ = std::fs::remove_file(output);
-            let _ = std::fs::remove_file(format!("{output}.download.bitcode"));
+            // remove_file 返回 Err 即记失败明细返回前端（旧逻辑静默吞错是排查黑洞）。
+            let main = std::fs::remove_file(output).map_err(|e| e.to_string());
+            let bitcode = std::fs::remove_file(format!("{output}.download.bitcode")).map_err(|e| e.to_string());
+            match (&main, &bitcode) {
+                (Ok(()), Ok(())) | (Ok(()), Err(_)) | (Err(_), Ok(())) => {
+                    // 至少删掉一个：断点/主文件其一本就不存在属正常，不记失败。
+                    file_ok += 1;
+                    tracing::info!(target: "gmm::dl", "[purge] dl_purge_stopped file gid={} status={} output={} main={:?} bitcode={:?}", gid, status, output, main.is_ok(), bitcode.is_ok());
+                }
+                (Err(m), Err(b)) => {
+                    // 两者皆不存在也视为已删干净（NotFound 不算失败）；其余记失败。
+                    let m_nf = m.contains("系统找不到指定的文件") || m.contains("No such file") || m.contains("os error 2");
+                    let b_nf = b.contains("系统找不到指定的文件") || b.contains("No such file") || b.contains("os error 2");
+                    if m_nf && b_nf {
+                        file_ok += 1;
+                        tracing::info!(target: "gmm::dl", "[purge] dl_purge_stopped file gid={} status={} output={} already_gone", gid, status, output);
+                    } else {
+                        file_failed.push((gid.clone(), format!("删文件失败：{m} / 断点：{b}")));
+                        tracing::warn!(target: "gmm::dl", "[purge] dl_purge_stopped file FAILED gid={} status={} output={} main={} bitcode={}", gid, status, output, m, b);
+                    }
+                }
+            }
+        } else {
+            tracing::debug!(target: "gmm::dl", "[purge] dl_purge_stopped keep_file gid={} status={} output={}", gid, status, output);
         }
         state.emit_changed(gid, "removed", 0, 0);
     }
+    // 文件删失败同样上报为失败明细（旧签名只报跳过，调用方看不到文件层失败）。
+    let mut failed_all = failed;
+    failed_all.extend(file_failed);
     pump((*state).clone());
-    Ok((targets.len(), failed))
+    tracing::info!(target: "gmm::dl", "[purge] dl_purge_stopped done targets={} file_ok={} failed={} delete_file={}", targets.len(), file_ok, failed_all.len(), delete_file);
+    Ok((targets.len(), failed_all))
 }
 
 /// 更新后续启动（重试/恢复）生效的参数。
@@ -1638,7 +1685,17 @@ async fn nexus_game_id(
     if let Some(id) = nexus_game_id_via_api(game_domain, api_key, proxy).await {
         return Ok(id);
     }
-    nexus_game_id_via_page(game_domain, cookie, proxy).await
+    // API 路径必须有有效 apikey（缺失/无效均 401），失败后只能抓 www 页（CF 域）。
+    // 缺 key 时把原因补进错误，避免"请检查网络或 Cookie"掩盖真正的成因。
+    nexus_game_id_via_page(game_domain, cookie, proxy)
+        .await
+        .map_err(|err| {
+            if api_key.trim().is_empty() {
+                format!("{err}（未配置 NexusMods API key，game_id 已回退抓 www 页面，易被 Cloudflare 拦截；建议在设置页完成 NexusMods 授权）")
+            } else {
+                err
+            }
+        })
 }
 
 /// API 路径：GET /v1/games/{domain}.json 取数字 id；可选 apikey 鉴权（匿名也可查公开游戏）。
@@ -1671,7 +1728,12 @@ async fn nexus_game_id_via_api(
     }
     let resp = req.send().await.ok()?;
     if !resp.status().is_success() {
-        ::tracing::debug!(domain, status = resp.status().as_u16(), "nexus game id api miss, fallback to page");
+        ::tracing::debug!(
+            domain,
+            status = resp.status().as_u16(),
+            has_key = !api_key.trim().is_empty(),
+            "nexus game id api miss, fallback to page"
+        );
         return None;
     }
     let value: serde_json::Value = resp.json().await.ok()?;

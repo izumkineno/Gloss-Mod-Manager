@@ -233,9 +233,10 @@ export function createFacade(): DownloadFacade {
     // purge：批量清已终局任务（后端 dl_purge_stopped + 前端终局归档），不碰机内态。
     // 返回后端失败明细（跳过/文件删失败），调用方展示。
     async function purge(gids: string[], deleteFile = false): Promise<Array<[string, string]>> {
+        console.info(`[purge] facade invoke total=${gids.length} deleteFile=${deleteFile}`);
         const [count, failed] =
             await invoke<[number, Array<[string, string]>]>("dl_purge_stopped", { gids, deleteFile });
-        void count;
+        console.info(`[purge] facade result count=${count} failed=${failed.length} deleteFile=${deleteFile}`);
         for (const gid of gids) {
             settleTerminal(store, gid, "removed");
         }
