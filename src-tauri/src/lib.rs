@@ -358,6 +358,7 @@ pub fn run() {
             fsops::fs_file_hash,
             fsops::fs_hash_string,
             fsops::mod_install_batch,
+            fsops::fs_copy_dir,
             fsops::mod_classify,
             fsops::cfg_upsert,
             fsops::fs_link,

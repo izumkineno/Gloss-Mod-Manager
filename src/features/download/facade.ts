@@ -195,8 +195,16 @@ export function createFacade(): DownloadFacade {
                 dir: args.dir,
             });
             console.info(`[uuid-trace] facade enqueue new gid=${gid} fileName=${args.fileName} collection=${String(args.collectionId ?? "-")}`);
-            // 闸命中直入 paused：经 transition 唯一入口，不直写 status。
-            if (gates.pausedAll || (args.collectionId !== undefined && gates.pausedCollections.has(args.collectionId))) {
+            // 对账：小文件可能在 enterMachine 前已在后端 complete，事件先到被丢弃；
+            // 入机后拉一次真相，终局即归档，修“秒完成任务卡下载中 0/0”。
+            try {
+                await reconcile(gid);
+            } catch {
+                // 后端任务已清（重启/dedupe 归档）则保持本地机内态，不中断入队。
+            }
+            // 对账已终局（入归档）则不再走机内变迁。
+            if (store.archive.has(gid)) {
+            } else if (gates.pausedAll || (args.collectionId !== undefined && gates.pausedCollections.has(args.collectionId))) {
                 transition(store, gid, "paused");
             } else {
                 pump(store, gates);

@@ -1147,12 +1147,61 @@ pub fn dl_change_option(
     });
     Ok(())
 }
+/// 看门狗：active 任务落盘已满（>= total）但 run() 未返回时强制终局。
+/// 根因：CDN 不关流 / writer 未排空时终局到不了，前端卡 100% 下载中。
+/// 以落盘文件长度为金标准；命中则中止句柄、标 complete、发事件、泵队列。
+fn watchdog_settle_finished(state: DownloaderState) {
+    let settled: Vec<String> = {
+        let mut inner = match state.inner.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        // 先收集候选 gid（只读借用），再逐个终局，避免 values_mut + pending 双重可变借用。
+        let candidates: Vec<String> = inner
+            .tasks
+            .values()
+            .filter(|entry| entry.status == TaskStatus::Active && entry.total > 0)
+            .filter(|entry| {
+                std::fs::metadata(entry.output_path())
+                    .map(|meta| meta.len())
+                    .unwrap_or(0)
+                    >= entry.total
+            })
+            .map(|entry| entry.gid.clone())
+            .collect();
+        let mut done = Vec::new();
+        for gid in candidates {
+            if let Some(entry) = inner.tasks.get_mut(&gid) {
+                if entry.status != TaskStatus::Active {
+                    continue;
+                }
+                if let Some(handle) = entry.handle.take() {
+                    handle.abort();
+                }
+                entry.speed = 0.0;
+                entry.downloaded = entry.total;
+                entry.status = TaskStatus::Complete;
+                done.push(gid.clone());
+            }
+            inner.pending.retain(|pending| pending != &gid);
+        }
+        done
+    };
+    for gid in settled {
+        state.emit_snapshot_str(&gid, "complete");
+        tracing::info!(target: "gmm::dl", "[watchdog] on-disk full, force complete gid={}", gid);
+    }
+    if !state.inner.lock().map(|inner| inner.pending.is_empty()).unwrap_or(true) {
+        pump(state.clone());
+    }
+}
 
 #[tauri::command]
 pub fn dl_tell_status(
     state: tauri::State<DownloaderState>,
     gid: String,
 ) -> Result<TaskSnapshot, String> {
+    watchdog_settle_finished((*state).clone());
     let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
     inner
         .tasks
@@ -1165,6 +1214,7 @@ pub fn dl_tell_status(
 /// 含机内 5 态任务与终局归档（complete 保留在后端注册表中，语义与 aria2 stopped 一致）。
 #[tauri::command]
 pub fn dl_list(state: tauri::State<DownloaderState>) -> Result<Vec<TaskSnapshot>, String> {
+    watchdog_settle_finished((*state).clone());
     let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
     Ok(inner.tasks.values().map(snapshot_of).collect())
 }

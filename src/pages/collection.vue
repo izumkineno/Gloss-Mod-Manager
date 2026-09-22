@@ -47,14 +47,25 @@ const COLLECTION_PAGE_SIZE = 10;
 const COLLECTION_ITEM_PAGE_SIZE = 20;
 const collectionPage = ref(1);
 const collectionItemPages = ref<Record<string, number>>({});
-// 重试进度：按条目 id 记录 { done, total, cancelled }，循环每建完一个 +1；取消即停。
-const retryProgressMap = ref<Record<string, { done: number; total: number; cancelled: boolean }>>({});
+// 重试进度走 Pinia store（跨页保持）：entryId → { total, queuedGids, cancelled }。
+// 注意：禁止解构 store action（旧包曾因此报 $setup.getRetryProgress is not a function），一律 downloadTasksStore 直调。
 function getRetryProgress(entryId: string) {
-    return retryProgressMap.value[entryId] ?? null;
+    return downloadTasksStore.getRetryProgress(entryId);
+}
+// 重试条 done = 真完成数：queuedGids 里 status complete 的 + 已安装兜底（imported 无 gid 按完成计）。
+// 与合集 done 口径（installed || complete）对齐，入队只记 gid 不涨数。
+function getRetryDoneCount(entryId: string): number {
+    const prog = downloadTasksStore.getRetryProgress(entryId);
+    if (!prog) return 0;
+    let done = 0;
+    for (const gid of prog.queuedGids) {
+        if (gid === "") { done += 1; continue; }
+        if (allTasks.value.some((t) => t.gid === gid && t.status === "complete")) done += 1;
+    }
+    return done;
 }
 function cancelRetryEntry(entryId: string) {
-    const prog = retryProgressMap.value[entryId];
-    if (prog) prog.cancelled = true;
+    downloadTasksStore.cancelRetryProgress(entryId);
 }
 // 本地 mod 列表 + 设置（状态识别/建任务用）。
 const manager = useManager();
@@ -261,13 +272,14 @@ function isPendingItemDownloading(item: INexusCollectionPendingItem): boolean {
 type CollectionFilter = "all" | "pending" | "queued" | "downloading" | "failed" | "done" | "undownloaded" | "imported" | "unimported";
  const collectionFilterOptions: Array<{ value: CollectionFilter; label: string }> = [
      { value: "all", label: "全部" },
-     { value: "undownloaded", label: "未下载" },
      { value: "pending", label: "待处理" },
      { value: "queued", label: "已建任务" },
     { value: "downloading", label: "下载中" },
      { value: "failed", label: "失败" },
-    { value: "imported", label: "已下载" },
-    { value: "unimported", label: "未下载" },
+     { value: "done", label: "已下载" },
+     { value: "undownloaded", label: "未下载" },
+     { value: "imported", label: "已导入" },
+     { value: "unimported", label: "未导入" },
 ];
 // 未下载：非 done 即未下载（pending/queued/downloading/failed 统收）。条目/明细匹配时特殊处理。
 function isItemUndownloaded(item: INexusCollectionPendingItem): boolean {
@@ -377,9 +389,9 @@ function getErrorMessage(error: unknown): string {
 }
 // 建任务 in-flight 锁：同 modId:fileId 同时只允许一个建任务流程（并发 batch + 用户连点重试都会撞上），否则同资源建出重复任务。
 const queueInflightKeys = new Set<string>();
-async function queueSinglePendingItem(entry: INexusCollectionPending, item: INexusCollectionPendingItem) {
+async function queueSinglePendingItem(entry: INexusCollectionPending, item: INexusCollectionPendingItem): Promise<string | null> {
     const queueKey = `${item.modId}:${item.fileId}`;
-    if (queueInflightKeys.has(queueKey)) return;
+    if (queueInflightKeys.has(queueKey)) return null;
     queueInflightKeys.add(queueKey);
     const { updateCollectionPendingItem } = await import("@/lib/nexus-collection-pending");
     console.debug(`[auth] queueSingle modId=${item.modId} userNull=${settings.nexusModsUser == null} keyLen=${settings.nexusModsUser?.key?.trim().length ?? 0} mode=${settings.nexusModsDownloadMode}`);
@@ -408,38 +420,40 @@ async function queueSinglePendingItem(entry: INexusCollectionPending, item: INex
             await updateCollectionPendingItem(entry.id, item.modId, item.fileId, "failed", reason);
             await refreshCollectionPending();
             ElMessage.warning(reason);
-            return;
+            return null;
         }
         // 已在本地管理列表：不建任务，无需标 queued（行级已按 installed 显示“已完成”），明示即可。
         if (result.status === "imported") {
             console.debug(`${singleTag} stage=already-installed`);
             await refreshCollectionPending();
             ElMessage.info(result.message);
-            return;
+            // 已安装即真完成：返回空哨兵，调用方按“无需任务”计 done。
+            return "";
         }
         // 复用存量任务（exists：已完成/已暂停/进行中）：不标 queued 造幽灵态，提示用户去向。
         if (result.status === "exists") {
             console.debug(`${singleTag} stage=reused gid=${result.gid ?? "null"}`);
             await refreshTaskSnapshot();
             ElMessage.info(result.message);
-            return;
+            return result.gid;
         }
         await updateCollectionPendingItem(entry.id, item.modId, item.fileId, "queued", undefined);
         console.debug(`${singleTag} stage=marked-queued`);
         await refreshCollectionPending();
         await refreshTaskSnapshot();
         ElMessage.success(result.message);
+        return result.gid;
     } catch (error: unknown) {
         // B：授权错不标失败（凭据问题修好后可重试），提示去设置页授权。
         const rawReason = error instanceof Error ? error.message : typeof error === "string" && error.trim() ? error : "下载建任务失败。";
         console.debug(`${singleTag} stage=thrown err=${rawReason.slice(0, 120)}`);
         if (error instanceof Error && error.name === "NexusModsAuthorizationError") {
-            ElMessage.warning("NexusMods 授权缺失或已过期，请到设置页重新授权后再重试。");
-            return;
+            return null;
         }
         await updateCollectionPendingItem(entry.id, item.modId, item.fileId, "failed", rawReason);
         await refreshCollectionPending();
         ElMessage.error(rawReason);
+        return null;
     } finally {
         queueInflightKeys.delete(queueKey);
     }
@@ -453,7 +467,7 @@ function waitForQueueSlot(entryId: string): Promise<void> {
     return new Promise((resolve) => {
         const limit = Math.max(1, Number(settings.collectionQueueLimit) || 10);
         const check = () => {
-            if (retryProgressMap.value[entryId]?.cancelled) {
+            if (downloadTasksStore.getRetryProgress(entryId)?.cancelled) {
                 resolve();
                 return;
             }
@@ -482,26 +496,33 @@ async function retryPendingEntry(entry: INexusCollectionPending) {
     } catch {
         // 关闸失败不中断，继续建任务。
     }
-    retryProgressMap.value = { ...retryProgressMap.value, [entry.id]: { done: 0, total: todo.length, cancelled: false } };
+    downloadTasksStore.startRetryProgress(entry.id, todo.length);
     const batchSize = Math.max(1, Math.floor(Number(settings.collectionPushBatch) || 1));
     const batchInterval = Math.max(0, Number(settings.collectionPushInterval) || 0);
     for (let i = 0; i < todo.length; i += batchSize) {
-        if (retryProgressMap.value[entry.id]?.cancelled) break;
+        if (downloadTasksStore.getRetryProgress(entry.id)?.cancelled) break;
         // 背压：等待中任务达上限即暂停塞入，setTimeout 隔 5s 检查一次，直到有空位或取消。
         await waitForQueueSlot(entry.id);
-        if (retryProgressMap.value[entry.id]?.cancelled) break;
+        if (downloadTasksStore.getRetryProgress(entry.id)?.cancelled) break;
         const batch = todo.slice(i, i + batchSize);
-        await Promise.all(batch.map((item) => queueSinglePendingItem(entry, item)));
-        const prog = retryProgressMap.value[entry.id];
-        if (prog) retryProgressMap.value = { ...retryProgressMap.value, [entry.id]: { ...prog, done: Math.min(todo.length, prog.done + batch.length) } };
+        const gids = await Promise.all(batch.map((item) => queueSinglePendingItem(entry, item)));
+        // 入队只记 gid，done 由 getRetryDoneCount 按实时任务状态算，直到 complete 才涨。
+        downloadTasksStore.addRetryQueuedGids(entry.id, gids.filter((gid): gid is string => gid !== null));
         // 批次间隔：给 Nexus API 限流留气口，下批前等待。
         if (batchInterval > 0 && i + batchSize < todo.length) {
             await new Promise((resolve) => setTimeout(resolve, batchInterval));
         }
     }
-    const wasCancelled = retryProgressMap.value[entry.id]?.cancelled ?? false;
-    const { [entry.id]: _dropped, ...rest } = retryProgressMap.value;
-    retryProgressMap.value = rest;
+    // 入队结束不立即清条：转入“等完成”阶段——轮询真完成直到全部 complete/用户取消。
+    // 进度条此后由 getRetryDoneCount 驱动，与合集 done 同口径；轮询退出后才 finish。
+    for (;;) {
+        await refreshTaskSnapshot();
+        const prog = downloadTasksStore.getRetryProgress(entry.id);
+        if (!prog || prog.cancelled) break;
+        if (getRetryDoneCount(entry.id) >= prog.total) break;
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+    const wasCancelled = downloadTasksStore.finishRetryProgress(entry.id);
     await refreshTaskSnapshot();
     const refreshed = (await listCollectionPending()).find((e) => e.id === entry.id);
     const success = refreshed?.items.filter((item) => item.status === "queued").length ?? 0;
@@ -619,10 +640,10 @@ onUnmounted(() => {
                                         class="flex items-center gap-2 text-xs text-muted-foreground">
                                         <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                                             <div class="h-full rounded-full bg-primary transition-all"
-                                                :style="{ width: `${Math.round((getRetryProgress(entry.id)!.done / Math.max(1, getRetryProgress(entry.id)!.total)) * 100)}%` }">
+                                                :style="{ width: `${Math.round((getRetryDoneCount(entry.id) / Math.max(1, getRetryProgress(entry.id)!.total)) * 100)}%` }">
                                             </div>
                                         </div>
-                                        <span>重试中 {{ getRetryProgress(entry.id)!.done }}/{{
+                                        <span>下载中 {{ getRetryDoneCount(entry.id) }}/{{
                                             getRetryProgress(entry.id)!.total }}</span>
                                     </div>
                                     <div v-else class="h-2 overflow-hidden rounded-full bg-muted flex"

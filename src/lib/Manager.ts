@@ -6,7 +6,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ElMessage } from "element-plus-message";
 import { FileHandler } from "@/lib/FileHandler";
-import { basename, dirname, join } from "@tauri-apps/api/path";
+import { Log } from "@/lib/log";
+import { dirname, join } from "@tauri-apps/api/path";
 
 // 后端批量安装条目（src-tauri/src/fsops.rs InstallItem，camelCase）
 interface IInstallItem {
@@ -89,6 +90,8 @@ export class Manager {
         if (items.length === 0) {
             return states;
         }
+        const caller = new Error().stack?.split("\n")[2]?.trim() ?? "unknown";
+        const startedAt = Date.now();
         try {
             const result = await invoke<IInstallFileState[]>(
                 "mod_install_batch",
@@ -105,12 +108,19 @@ export class Manager {
             for (const item of result) {
                 states.set(item.file, { ok: item.ok, error: item.error });
             }
+            const failed = result.filter((item) => !item.ok).length;
+            void Log.info(`[安装] batch 完成：调用方=${caller} 总数=${items.length} 失败=${failed} 耗时=${Date.now() - startedAt}ms`);
+            const firstFailed = result.find((item) => !item.ok);
+            if (firstFailed) {
+                void Log.warn(`[安装] 首个失败项：file=${firstFailed.file} error=${firstFailed.error ?? "unknown"}`);
+            }
         } catch (error) {
             // 后端不可达等整批异常：每项记 false，并带上整批异常原话
             const message = error instanceof Error ? error.message : String(error);
             for (const item of items) {
                 states.set(item.file, { ok: false, error: message });
             }
+            void Log.error(`[安装] batch 整批异常：调用方=${caller} 总数=${items.length} 耗时=${Date.now() - startedAt}ms error=${message}`);
         }
         return states;
     }
@@ -118,19 +128,6 @@ export class Manager {
 
     private static context: Partial<IManagerContext> = {};
 
-    private static normalizeExtensionName(extension: string) {
-        return extension.replace(/^\./u, "").toLowerCase();
-    }
-
-    private static async matchFileExtension(
-        filePath: string,
-        extension: string,
-    ) {
-        return (
-            (await FileHandler.getFileExtension(filePath)) ===
-            Manager.normalizeExtensionName(extension)
-        );
-    }
 
     private static async getStoreContext(): Promise<Partial<IManagerContext>> {
         const manager = useManager();
@@ -279,6 +276,8 @@ export class Manager {
         keepPath: boolean = false,
         inGameStorage: boolean = true,
     ): Promise<IState[]> {
+        const startedAt = Date.now();
+        void Log.info(`[安装] generalInstall 开始：mod=${mod.modName} 文件数=${mod.modFiles.length} keepPath=${keepPath}`);
         const modStorage = await Manager.resolveModStorage(mod.id);
 
         if (modStorage === null) {
@@ -317,6 +316,8 @@ export class Manager {
             [modStorage, targetRoot],
             false,
         );
+        const okCount = slots.filter((slot) => states.get(slot.file)?.ok).length;
+        void Log.info(`[安装] generalInstall 完成：mod=${mod.modName} 成功=${okCount}/${slots.length} 总耗时=${Date.now() - startedAt}ms`);
         return slots.map((slot) => {
             const entry = states.get(slot.file);
             return {
@@ -334,6 +335,8 @@ export class Manager {
         keepPath: boolean = false,
         inGameStorage: boolean = true,
     ): Promise<IState[]> {
+        const startedAt = Date.now();
+        void Log.info(`[卸载] generalUninstall 开始：mod=${mod.modName} 文件数=${mod.modFiles.length}`);
         const modStorage = await Manager.resolveModStorage(mod.id);
 
         if (modStorage === null) {
@@ -383,10 +386,10 @@ export class Manager {
             const entry = states.get(slot.file);
             result.push({ file: slot.file, state: entry?.ok ?? false, error: entry?.error });
             if (entry?.ok) {
-                try {
-                    cleanupDirs.add(await dirname(slot.item.dst));
-                } catch {
-                    // 路径解析失败跳过，不影响主流程。
+                // 纯字符串 dirname：dst 去尾段
+                const dir = slot.item.dst.split(/[/\\]/).slice(0, -1).join(usep);
+                if (dir) {
+                    cleanupDirs.add(dir);
                 }
             }
         }
@@ -401,6 +404,8 @@ export class Manager {
                 }
             })();
         }
+        const okCount = result.filter((item) => item.state).length;
+        void Log.info(`[卸载] generalUninstall 完成：mod=${mod.modName} 成功=${okCount}/${result.length} 总耗时=${Date.now() - startedAt}ms 后台收尾目录=${cleanupDirs.size}`);
         return result;
     }
 
@@ -444,19 +449,23 @@ export class Manager {
         }
 
         // 注意：resolveInstallRoot(installPath, true) 写死 inGameStorage=true 是既有特例，照搬
-        // 编排在 TS（锚匹配/passFiles 跳过/spare 兜底），执行一次 invoke；缺失与未命中项直接跳过（不入 result，照搬）
+        // 编排零 IPC：mod.modFiles 即存在性来源（导入时 collectRelative 登记），不再逐文件 join/fileExists；
+        // basename/dirname/join 全换纯字符串拼接，分隔符用 /（后端 lexical 归一），与 generalInstall 同模式
+        const fsep = modStorage.includes("\\") || targetRoot.includes("\\") ? "\\" : "/";
+        const ftrim = (p: string) => (p.endsWith("/") || p.endsWith("\\") ? p.slice(0, -1) : p);
+        const fbase = (p: string) => p.split(/[/\\]/).pop() ?? p;
+        const froot = ftrim(modStorage);
+        const fout = ftrim(targetRoot);
+        const toOut = (rel: string) => `${fout}${fsep}${rel.replace(/\//g, fsep)}`;
         const slots: Array<{ file: string; item: IInstallItem | null; target: string }> = [];
         for (const item of mod.modFiles) {
             try {
-                if (Manager.passFiles.includes(await basename(item))) {
+                if (Manager.passFiles.includes(fbase(item))) {
                     continue;
                 }
 
-                const source = await join(modStorage, item);
-
-                if (!(await FileHandler.fileExists(source))) {
-                    continue;
-                }
+                const rel = item.replace(/^[/\\]+/, "");
+                const source = `${froot}${fsep}${rel.replace(/\//g, fsep)}`;
 
                 let relativeInstallPath: string | null = null;
 
@@ -482,9 +491,9 @@ export class Manager {
                 }
 
                 const target = relativeInstallPath
-                    ? await join(targetRoot, relativeInstallPath)
+                    ? toOut(relativeInstallPath)
                     : spare
-                      ? await join(targetRoot, item)
+                      ? toOut(rel)
                       : "";
 
                 if (!target) {
@@ -514,8 +523,12 @@ export class Manager {
         for (const slot of slots) {
             const entry = states.get(slot.file);
             result.push({ file: slot.file, state: entry?.ok ?? false, error: entry?.error });
-            if (!isInstall) {
-                await Manager.deleteEmptyFolders(await dirname(slot.target));
+            // 空目录收尾丢后台：deleteEmptyFolders 每层 4 次串行 IPC，前台 await 会堵死进度事件
+            if (!isInstall && entry?.ok) {
+                const dir = slot.target.split(/[/\\]/).slice(0, -1).join(fsep);
+                if (dir) {
+                    void Manager.deleteEmptyFolders(dir).catch(() => {});
+                }
             }
         }
         return result;
@@ -559,15 +572,28 @@ export class Manager {
 
         const { closeSoftLinks } = await Manager.getContext();
 
+        // 零 IPC 编排：字符串匹配代替 compareFileName/basename IPC，dirname/join 纯字符串拼接
+        const normExt = fileName.replace(/^\./u, "").toLowerCase();
+        const wantBase = fileName.toLowerCase();
+        const tailOf = (p: string) => p.split(/[/\\]/).pop() ?? p;
+        const extOf = (p: string) => {
+            const tail = tailOf(p);
+            const dot = tail.lastIndexOf(".");
+            return dot > 0 && dot < tail.length - 1 ? tail.slice(dot + 1).toLowerCase() : "";
+        };
+        const fsep2 = modStorage.includes("\\") || targetRoot.includes("\\") ? "\\" : "/";
+        const ftrim2 = (p: string) => (p.endsWith("/") || p.endsWith("\\") ? p.slice(0, -1) : p);
+        const sroot = ftrim2(modStorage);
+        const sout = ftrim2(targetRoot);
         let folders: string[] = [];
 
         for (const item of mod.modFiles) {
-            const matched = isExtname
-                ? await Manager.matchFileExtension(item, fileName)
-                : await FileHandler.compareFileName(item, fileName);
+            const matched = isExtname ? extOf(item) === normExt : tailOf(item).toLowerCase() === wantBase;
 
             if (matched) {
-                folders.push(await dirname(await join(modStorage, item)));
+                // dirname(modStorage/item) 纯字符串：modStorage + item 去尾段
+                const dirRel = item.split(/[/\\]/).slice(0, -1).join("/");
+                folders.push(dirRel ? `${sroot}${fsep2}${dirRel.replace(/\//g, fsep2)}` : sroot);
             }
         }
 
@@ -582,19 +608,28 @@ export class Manager {
         // 返回值照搬旧语义：逐项失败忽略，整体恒 true（异常才抛）。
         const items: IInstallItem[] = [];
         const linkMode = isLink && !closeSoftLinks;
+        const pendingCleanup: string[] = [];
         for (const folder of folders) {
-            const target = await join(targetRoot, await basename(folder));
+            const target = `${sout}${fsep2}${tailOf(folder)}`;
             if (isInstall) {
                 if (linkMode) {
                     items.push({ file: folder, src: folder, dst: target, op: "link", backup: "linkback" });
                 } else {
                     const entries = await FileHandler.getAllFilesInFolder(folder, true, true);
+                    // entries 为 folder 下全路径：纯字符串切前缀代替 relativePath/join IPC
+                    const nprefix = `${folder.replace(/[/\\]+$/u, "")}${fsep2}`;
+                    const nprefixAlt = folder.replace(/[/\\]+$/u, "").replace(/\\/g, "/") + "/";
                     for (const entry of entries) {
-                        const relative = await FileHandler.relativePath(folder, entry);
+                        const normEntry = entry.replace(/\\/g, "/");
+                        let relative = normEntry.startsWith(nprefixAlt)
+                            ? normEntry.slice(nprefixAlt.length)
+                            : entry.startsWith(nprefix)
+                              ? entry.slice(nprefix.length)
+                              : tailOf(entry);
                         items.push({
                             file: `${folder}/${relative}`,
                             src: entry,
-                            dst: await join(target, relative),
+                            dst: `${target}${fsep2}${relative.replace(/\//g, fsep2)}`,
                             op: "copy",
                             backup: "gmmback",
                         });
@@ -607,11 +642,17 @@ export class Manager {
                     await FileHandler.deleteFolder(target);
                 }
                 if (closeSoftLinks) {
-                    await Manager.deleteEmptyFolders(await dirname(target));
+                    pendingCleanup.push(target.split(/[/\\]/).slice(0, -1).join(fsep2));
                 }
             }
         }
         await Manager.runInstallBatch(items, [modStorage, targetRoot], closeSoftLinks);
+        // 卸载空目录收尾丢后台，不堵主流程
+        for (const dir of new Set(pendingCleanup)) {
+            if (dir) {
+                void Manager.deleteEmptyFolders(dir).catch(() => {});
+            }
+        }
         return true;
     }
 
@@ -650,63 +691,70 @@ export class Manager {
             return false;
         }
 
-        let folders: Array<{
-            folder: string;
-            files: string[];
-        }> = [];
-
+        // 零 IPC：匹配/dirname 全纯字符串；去重照搬旧语义（files 内容 toString 比较）
+        const sibExt = fileName.replace(/^\./u, "").toLowerCase();
+        const sibWant = fileName.toLowerCase();
+        const sibTail = (p: string) => p.split(/[/\\]/).pop() ?? p;
+        const sibExtOf = (p: string) => {
+            const tail = sibTail(p);
+            const dot = tail.lastIndexOf(".");
+            return dot > 0 && dot < tail.length - 1 ? tail.slice(dot + 1).toLowerCase() : "";
+        };
+        const sibSep = modStorage.includes("\\") || targetRoot.includes("\\") ? "\\" : "/";
+        const sibTrim = (p: string) => (p.endsWith("/") || p.endsWith("\\") ? p.slice(0, -1) : p);
+        const sibRoot = sibTrim(modStorage);
+        let folders: Array<{ folder: string; files: string[] }> = [];
         for (const item of mod.modFiles) {
-            const matched = isExtname
-                ? await Manager.matchFileExtension(item, fileName)
-                : await FileHandler.compareFileName(item, fileName);
+            const matched = isExtname ? sibExtOf(item) === sibExt : sibTail(item).toLowerCase() === sibWant;
 
             if (!matched) {
                 continue;
             }
 
-            if (pass.includes((await basename(item)).toLowerCase())) {
+            if (pass.includes(sibTail(item).toLowerCase())) {
                 continue;
             }
 
-            const folder = await dirname(await join(modStorage, item));
-
+            const dirRel = item.split(/[/\\]/).slice(0, -1).join("/");
+            const folder = dirRel ? `${sibRoot}${sibSep}${dirRel.replace(/\//g, sibSep)}` : sibRoot;
             folders.push({
                 folder,
-                files: await FileHandler.getAllFilesInFolder(
-                    folder,
-                    true,
-                    true,
-                ),
+                files: await FileHandler.getAllFilesInFolder(folder, true, true),
             });
         }
 
-        folders = folders.filter((item, index) => {
+        folders = folders.filter((entry, index) => {
             const matchedIndex = folders.findIndex(
-                (folder) => folder.files.toString() === item.files.toString(),
+                (other) => other.files.toString() === entry.files.toString(),
             );
-
             return matchedIndex === index;
         });
+
 
         if (folders.length === 0) {
             ElMessage.error(`未找到文件: ${fileName}, 请不要随意修改MOD类型!`);
             return false;
         }
-
-        // 锚定位/去重/未找到报错在 TS；搬运一次 invoke（卸载附带逐项清空调，照搬）
+        // 锚定位/去重/未找到报错在 TS；搬运一次 invoke（卸载清空调丢后台，照搬）
+        const sibOut = sibTrim(targetRoot);
         const items: IInstallItem[] = [];
         const targets: string[] = [];
         for (const folder of folders) {
+            // folder.files 为 folder 下全路径：纯字符串切前缀
+            const fprefix = `${folder.folder.replace(/[/\\]+$/u, "")}${sibSep}`;
+            const fprefixAlt = folder.folder.replace(/[/\\]+$/u, "").replace(/\\/g, "/") + "/";
             for (const file of folder.files) {
-                if (Manager.passFiles.includes(await basename(file))) {
+                if (Manager.passFiles.includes(sibTail(file))) {
                     continue;
                 }
 
-                const relativeFile = await FileHandler.relativePath(
-                    folder.folder,
-                    file,
-                );
-                const target = await join(targetRoot, relativeFile);
+                const normFile = file.replace(/\\/g, "/");
+                const relativeFile = normFile.startsWith(fprefixAlt)
+                    ? normFile.slice(fprefixAlt.length)
+                    : file.startsWith(fprefix)
+                      ? file.slice(fprefix.length)
+                      : sibTail(file);
+                const target = `${sibOut}${sibSep}${relativeFile.replace(/\//g, sibSep)}`;
 
                 items.push({
                     file: `${folder.folder}/${relativeFile}`,
@@ -723,7 +771,10 @@ export class Manager {
         await Manager.runInstallBatch(items, [modStorage, targetRoot], false);
         if (!isInstall) {
             for (const target of targets) {
-                await Manager.deleteEmptyFolders(await dirname(target));
+                const dir = target.split(/[/\\]/).slice(0, -1).join(sibSep);
+                if (dir) {
+                    void Manager.deleteEmptyFolders(dir).catch(() => {});
+                }
             }
         }
         return true;
@@ -760,6 +811,10 @@ export class Manager {
             return false;
         }
 
+        const psep = modStorage.includes("\\") || targetRoot.includes("\\") ? "\\" : "/";
+        const ptrim = (p: string) => (p.endsWith("/") || p.endsWith("\\") ? p.slice(0, -1) : p);
+        const proot = ptrim(modStorage);
+        const pout = ptrim(targetRoot);
         let folders: string[] = [];
 
         for (const item of mod.modFiles) {
@@ -770,7 +825,7 @@ export class Manager {
 
             if (index !== -1) {
                 const targetPath = parts.slice(0, index).join("/");
-                folders.push(await join(modStorage, targetPath));
+                folders.push(targetPath ? `${proot}${psep}${targetPath.replace(/\//g, psep)}` : proot);
             }
         }
 
@@ -780,7 +835,8 @@ export class Manager {
         const items: IInstallItem[] = [];
         const targets: string[] = [];
         for (const folder of folders) {
-            const target = await join(targetRoot, await basename(folder));
+            const tail = folder.split(/[/\\]/).pop() ?? folder;
+            const target = `${pout}${psep}${tail}`;
             items.push({
                 file: folder,
                 src: folder,
@@ -796,7 +852,10 @@ export class Manager {
         await Manager.runInstallBatch(items, [modStorage, targetRoot], false);
         if (!isInstall) {
             for (const target of targets) {
-                await Manager.deleteEmptyFolders(await dirname(target));
+                const dir = target.split(/[/\\]/).slice(0, -1).join(psep);
+                if (dir) {
+                    void Manager.deleteEmptyFolders(dir).catch(() => {});
+                }
             }
         }
         return true;
@@ -806,18 +865,21 @@ export class Manager {
         modStorage: string,
         paths: string[],
     ) {
-        const relativePaths = await Promise.all(
-            paths.map((item) => FileHandler.relativePath(modStorage, item)),
-        );
-        const topLevelFolderNames = relativePaths
-            .map((item) => FileHandler.pathToArray(item)[0])
-            .filter((item): item is string => Boolean(item));
-
-        return Promise.all(
-            [...new Set(topLevelFolderNames)].map(
-                async (item) => await join(modStorage, item),
-            ),
-        );
+        // 纯字符串：paths 恒为 modStorage 下全路径，切前缀取顶层目录名
+        const normRoot = modStorage.replace(/[/\\]+$/u, "").replace(/\\/g, "/").toLowerCase();
+        const csep = modStorage.includes("\\") ? "\\" : "/";
+        const croot = modStorage.replace(/[/\\]+$/u, "");
+        const topNames = new Set<string>();
+        for (const item of paths) {
+            const norm = item.replace(/\\/g, "/");
+            const lower = norm.toLowerCase();
+            const rel = lower.startsWith(`${normRoot}/`) ? norm.slice(normRoot.length + 1) : norm.replace(/^\/+/u, "");
+            const top = rel.split("/")[0];
+            if (top) {
+                topNames.add(top);
+            }
+        }
+        return [...topNames].map((name) => `${croot}${csep}${name.replace(/\//g, csep)}`);
     }
 
     // 删除空文件夹

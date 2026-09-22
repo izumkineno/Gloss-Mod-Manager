@@ -308,20 +308,8 @@ export class FileHandler {
      */
     public static async copyFolder(srcPath: string, target: string) {
         try {
-            await FileHandler.createDirectory(target);
-            const entries = await FileHandler.getDirectoryEntries(srcPath);
-
-            for (const entry of entries) {
-                const sourcePath = await join(srcPath, entry.name);
-                const targetPath = await join(target, entry.name);
-
-                if (entry.isDirectory) {
-                    await FileHandler.copyFolder(sourcePath, targetPath);
-                } else if (entry.isFile) {
-                    await FileHandler.copyFile(sourcePath, targetPath);
-                }
-            }
-
+            // 整目录后端原生并行拷贝：一次 invoke 代替逐文件 readDir/join/copy IPC（导入文件夹主凶）
+            await invoke<number>("fs_copy_dir", { src: srcPath, dst: target });
             return true;
         } catch (error) {
             FileHandler.writeLog(String(error), true);

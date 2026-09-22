@@ -3,6 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // vi.mock 必须先于模块求值，静态 import 会被提升故此处用动态导入。
 vi.mock("@tauri-apps/api/core", () => ({
     invoke: vi.fn(),
+    isTauri: () => false,
+}));
+
+vi.mock("@tauri-apps/plugin-fs", () => ({
+    readDir: vi.fn(async () => []),
+    readTextFile: vi.fn(async () => ""),
+    stat: vi.fn(async () => null),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({

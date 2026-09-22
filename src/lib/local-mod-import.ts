@@ -281,12 +281,14 @@ async function collectRelativeModFiles(targetFolder: string) {
         return [] as string[];
     }
 
-    return Promise.all(
-        absoluteFiles.map(
-            async (filePath) =>
-                await FileHandler.relativePath(targetFolder, filePath),
-        ),
-    );
+    // 纯字符串切前缀：getAllFilesInFolder 已返回 targetFolder 下全路径，一次 fs_walk 后零 IPC
+    const normBase = targetFolder.replace(/[/\\]+$/u, "").replace(/\\/g, "/");
+    const prefix = `${normBase}/`;
+    return absoluteFiles.map((filePath) => {
+        const norm = filePath.replace(/\\/g, "/");
+        const rel = norm.startsWith(prefix) ? norm.slice(prefix.length) : norm.replace(/^\/+/u, "");
+        return rel;
+    });
 }
 
 async function buildImportedMod(

@@ -182,8 +182,17 @@ fn run_batch(app: &tauri::AppHandle, req: InstallBatch) -> Result<Vec<FileState>
     use std::sync::atomic::{AtomicU32, Ordering};
     use tauri::Emitter;
 
-    let roots: Vec<String> = req.allowed_roots.iter().map(|root| lexical(root)).collect();
+    let started_at = std::time::Instant::now();
     let total = req.items.len() as u32;
+    let ops = {
+        let mut counts = std::collections::HashMap::new();
+        for item in &req.items {
+            *counts.entry(item.op.as_str()).or_insert(0u32) += 1;
+        }
+        counts
+    };
+    tracing::info!(target: "backend", "[安装] batch 开始：id={} 总数={} 操作分布={:?}", req.batch_id, total, ops);
+    let roots: Vec<String> = req.allowed_roots.iter().map(|root| lexical(root)).collect();
     // 首个事件让前端及时建进度条（done=0）
     let _ = app.emit(
         "mod-install-progress",
@@ -200,7 +209,13 @@ fn run_batch(app: &tauri::AppHandle, req: InstallBatch) -> Result<Vec<FileState>
         .items
         .par_iter()
         .map(|item| {
+            let item_started = std::time::Instant::now();
             let state = apply_item(item, &roots, req.link_fallback_copy);
+            // 单项超 5s 才记（慢盘/大文件定位用，不刷屏）
+            let elapsed = item_started.elapsed();
+            if elapsed.as_secs() >= 5 {
+                tracing::warn!(target: "backend", "[安装] 慢项：file={} op={} 耗时={:?}", item.file, item.op, elapsed);
+            }
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n == total || n % 20 == 0 {
                 let _ = app.emit(
@@ -215,6 +230,11 @@ fn run_batch(app: &tauri::AppHandle, req: InstallBatch) -> Result<Vec<FileState>
             state
         })
         .collect();
+    let failed = states.iter().filter(|state| !state.ok).count();
+    tracing::info!(target: "backend", "[安装] batch 完成：id={} 总数={} 失败={} 耗时={:?}", req.batch_id, total, failed, started_at.elapsed());
+    if let Some(first) = states.iter().find(|state| !state.ok) {
+        tracing::warn!(target: "backend", "[安装] 首个失败项：file={} error={}", first.file, first.error.as_deref().unwrap_or("unknown"));
+    }
     let _ = app.emit(
         "mod-install-progress",
         InstallProgress {
@@ -292,7 +312,7 @@ fn ensure_parent(dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// 对齐 FileHandler.copyFile：dst 存在则先拷到 `dst.gmmback`，再真拷贝。
+/// 对齐 FileHandler.copyFile：dst 存在则先迁到 `dst.gmmback`（rename 同盘 O(1)，跨盘回退拷贝），再真拷贝。
 fn op_copy(item: &InstallItem) -> Result<(), String> {
     let src = PathBuf::from(&item.src);
     let dst = PathBuf::from(&item.dst);
@@ -302,7 +322,11 @@ fn op_copy(item: &InstallItem) -> Result<(), String> {
     ensure_parent(&dst).map_err(|error| format!("复制文件失败：{error}"))?;
     if item.backup == "gmmback" && dst.exists() {
         let back = PathBuf::from(format!("{}.gmmback", item.dst));
-        std::fs::copy(&dst, &back).map_err(|error| format!("复制文件失败：{error}"))?;
+        // 同盘 rename O(1) 代替全量 copy 双写；跨盘 rename 失败时回退拷贝
+        if std::fs::rename(&dst, &back).is_err() {
+            std::fs::copy(&dst, &back).map_err(|error| format!("复制文件失败：{error}"))?;
+            let _ = std::fs::remove_file(&dst);
+        }
     }
     std::fs::copy(&src, &dst).map_err(|error| format!("复制文件失败：{error}"))?;
     Ok(())
@@ -437,7 +461,60 @@ fn op_remove(item: &InstallItem) -> Result<(), String> {
             std::fs::rename(&back, &dst).map_err(|error| format!("删除文件失败：{error}"))?;
         }
     }
+
     Ok(())
+}
+/// 整目录原生拷贝：对齐 FileHandler.copyFolder，一次 invoke 代替逐文件 plugin-fs IPC。
+/// 后端 walk + rayon 并行 copy，目录不存在 → Err（对齐旧实现抛错分支）。
+#[tauri::command]
+pub async fn fs_copy_dir(src: String, dst: String) -> Result<u64, String> {
+    tauri::async_runtime::spawn_blocking(move || copy_dir_native(&src, &dst))
+        .await
+        .map_err(|error| format!("复制目录失败：{error}"))?
+}
+
+fn copy_dir_native(src: &str, dst: &str) -> Result<u64, String> {
+    use rayon::prelude::*;
+    let started_at = std::time::Instant::now();
+    let src_path = PathBuf::from(src);
+    if !src_path.is_dir() {
+        return Err(format!("目录不存在：{src}"));
+    }
+    std::fs::create_dir_all(dst).map_err(|error| format!("复制目录失败：{error}"))?;
+    let dst_path = PathBuf::from(dst);
+    // 先同步建好全部目录，再并行拷文件（避免 rayon 内 create_dir_all 竞争）
+    let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let walker = walkdir::WalkDir::new(&src_path).follow_links(false).into_iter();
+    for entry in walker {
+        let entry = entry.map_err(|error| format!("复制目录失败：{error}"))?;
+        if entry.depth() == 0 {
+            continue;
+        }
+        if entry.file_type().is_symlink() {
+            continue;
+        }
+        let rel = entry.path().strip_prefix(&src_path).map_err(|error| format!("复制目录失败：{error}"))?;
+        let target = dst_path.join(rel);
+        if entry.file_type().is_dir() {
+            std::fs::create_dir_all(&target).map_err(|error| format!("复制目录失败：{error}"))?;
+        } else if entry.file_type().is_file() {
+            files.push((entry.path().to_path_buf(), target));
+        }
+    }
+    // 父目录已建好（walk 按序建目录），并行只拷文件
+    let failed = std::sync::Mutex::new(Vec::<String>::new());
+    files.par_iter().for_each(|(from, to)| {
+        if std::fs::copy(from, to).is_err() {
+            failed.lock().map(|mut guard| guard.push(to.to_string_lossy().into_owned())).ok();
+        }
+    });
+    let guard = failed.lock().map_err(|_| "复制目录失败：锁异常".to_string())?;
+    if !guard.is_empty() {
+        tracing::warn!(target: "backend", "[导入] 目录拷贝失败：src={} 文件数={} 失败={} 耗时={:?} 首项={}", src, files.len(), guard.len(), started_at.elapsed(), guard.first().map(String::as_str).unwrap_or("unknown"));
+        return Err(format!("复制目录失败：{} 个文件", guard.len()));
+    }
+    tracing::info!(target: "backend", "[导入] 目录拷贝完成：src={} 文件数={} 耗时={:?}", src, files.len(), started_at.elapsed());
+    Ok(files.len() as u64)
 }
 
 /// 类型判定规则：规则内 OR，规则按序首个命中返回；无命中回 `default`（调用方传 99）。
@@ -710,6 +787,22 @@ mod batch_tests {
         let roots = roots_for(&src, &dst);
         let state = apply_item(&item("m.txt", &src.join("m.txt"), &dst.join("m.txt"), "copy", "gmmback"), &roots, false);
         assert!(!state.ok);
+    }
+    #[test]
+    fn copy_dir_mirrors_tree() {
+        let (src, dst) = batch_dir("copydir");
+        fs::create_dir_all(src.join("sub").join("deep")).unwrap();
+        fs::write(src.join("a.txt"), "a").unwrap();
+        fs::write(src.join("sub").join("b.txt"), "b").unwrap();
+        fs::write(src.join("sub").join("deep").join("c.txt"), "c").unwrap();
+        let target = dst.join("mirror");
+        let count = copy_dir_native(&src.to_string_lossy(), &target.to_string_lossy()).unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(fs::read_to_string(target.join("a.txt")).unwrap(), "a");
+        assert_eq!(fs::read_to_string(target.join("sub").join("b.txt")).unwrap(), "b");
+        assert_eq!(fs::read_to_string(target.join("sub").join("deep").join("c.txt")).unwrap(), "c");
+        // 源缺失 → Err（对齐 copyFolder 抛错分支）
+        assert!(copy_dir_native(&src.join("nope").to_string_lossy(), &target.to_string_lossy()).is_err());
     }
 }
 

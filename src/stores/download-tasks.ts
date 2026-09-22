@@ -39,6 +39,32 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
     const taskList = ref<TaskProjection[]>([]);
     const taskOperatingIds = ref<string[]>([]);
     const taskMetaMap = ref<Record<string, IGlossDownloadTaskMeta>>({});
+    // 合集重试进度（跨页保持）：entryId → { total, queuedGids, cancelled }。
+    // done 不再入队即 +1，而是由调用方按 gid 实时任务状态算真完成，避免与合集 done 口径脱节。
+    const retryProgressMap = ref<Record<string, { total: number; queuedGids: string[]; cancelled: boolean }>>({});
+    function getRetryProgress(entryId: string) {
+        return retryProgressMap.value[entryId] ?? null;
+    }
+    function startRetryProgress(entryId: string, total: number) {
+        retryProgressMap.value = { ...retryProgressMap.value, [entryId]: { total, queuedGids: [], cancelled: false } };
+    }
+    function addRetryQueuedGids(entryId: string, gids: string[]) {
+        const prog = retryProgressMap.value[entryId];
+        if (!prog) return;
+        const merged = [...prog.queuedGids];
+        for (const gid of gids) if (gid && !merged.includes(gid)) merged.push(gid);
+        retryProgressMap.value = { ...retryProgressMap.value, [entryId]: { ...prog, queuedGids: merged } };
+    }
+    function cancelRetryProgress(entryId: string) {
+        const prog = retryProgressMap.value[entryId];
+        if (prog) prog.cancelled = true;
+    }
+    function finishRetryProgress(entryId: string): boolean {
+        const wasCancelled = retryProgressMap.value[entryId]?.cancelled ?? false;
+        const { [entryId]: _dropped, ...rest } = retryProgressMap.value;
+        retryProgressMap.value = rest;
+        return wasCancelled;
+    }
 
     const completedHandlers = new Set<NewlyCompletedHandler>();
     let releaseSubscribe: (() => void) | null = null;
@@ -171,6 +197,11 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
         finishedTasks,
         taskOperatingIds,
         taskMetaMap,
+        getRetryProgress,
+        startRetryProgress,
+        addRetryQueuedGids,
+        cancelRetryProgress,
+        finishRetryProgress,
         refreshTaskLists,
         refreshTaskSnapshot,
         setTaskMeta,
