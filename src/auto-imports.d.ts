@@ -55,6 +55,12 @@ declare global {
   const autoImportCompletedDownloadTasks: typeof import('./lib/gloss-download-monitor').autoImportCompletedDownloadTasks
   const autoImportCompletedGlossTasks: typeof import('./lib/gloss-download-monitor').autoImportCompletedGlossTasks
   const autoResetRef: typeof import('@vueuse/core').autoResetRef
+  const backendImportBatch: typeof import('./lib/backend-import').backendImportBatch
+  const backendImportCommit: typeof import('./lib/backend-import').backendImportCommit
+  const backendImportDuplicates: typeof import('./lib/backend-import').backendImportDuplicates
+  const backendImportPrepare: typeof import('./lib/backend-import').backendImportPrepare
+  const backendImportSyncStatus: typeof import('./lib/backend-import').backendImportSyncStatus
+  const backendImportTask: typeof import('./lib/backend-import').backendImportTask
   const bbcodeToHtml: typeof import('./lib/bbcode').bbcodeToHtml
   const buildAiChatAttachmentPromptText: typeof import('./lib/ai-chat-attachments').buildAiChatAttachmentPromptText
   const buildBundledAiChatSkillsPrompt: typeof import('./lib/ai-chat-skills').buildBundledAiChatSkillsPrompt
@@ -509,6 +515,9 @@ declare global {
   // @ts-ignore
   export type { AutoStart } from './lib/auto-start'
   import('./lib/auto-start')
+  // @ts-ignore
+  export type { BackendImportSource, BackendImportMetadata, BackendImportPrepareResult, BackendImportCommitResult, BackendImportTaskResult, BackendImportSyncEntry, BackendImportSyncResult, BackendImportDuplicateMatch, BackendImportBatchItem, BackendImportBatchItemResult } from './lib/backend-import'
+  import('./lib/backend-import')
   // @ts-ignore
   export type { TCustomGameModTypeTemplate, TCustomGameCheckTypeTemplate } from './lib/custom-definition-utils'
   import('./lib/custom-definition-utils')

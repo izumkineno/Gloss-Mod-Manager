@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ElMessage } from "element-plus-message";
@@ -442,6 +443,61 @@ async function batchInstall(install: boolean) {
         batchFileDone.value = progress.done;
         batchFileTotal.value = progress.total;
     });
+    // 卸载走后端批量（一次 invoke 全并行）；安装保持逐 mod（覆盖语义需顺序，后装覆盖先装）。
+    if (!install) {
+        try {
+            const batch = targets.map((mod) => {
+                const type = getTypeDefinition(mod);
+                if (!type) throw new Error(`${mod.modName}：没有可用的类型定义，请先检查类型设置。`);
+                const cfg = install ? type.install : type.uninstall;
+                const resolved = typeof cfg === "function" ? null : cfg;
+                return { mod, type, resolved };
+            });
+            // generalUninstall 全进批量；特殊函数（installByFolder 等）回退逐个。
+            const general = batch.filter((b) => b.resolved === null || b.resolved.UseFunction === "generalUninstall");
+            const special = batch.filter((b) => !(b.resolved === null || b.resolved.UseFunction === "generalUninstall"));
+            batchCurrent.value = `批量卸载 ${general.length} 个…`;
+            batchFileTotal.value = general.reduce((n, b) => n + b.mod.modFiles.length, 0);
+            const grouped = await Manager.generalBatchUninstall(general.map((b) => ({
+                mod: b.mod,
+                installPath: b.type.installPath,
+                keepPath: b.resolved?.keepPath,
+                inGameStorage: b.resolved?.inGameStorage,
+            })));
+            for (const b of general) {
+                const states = grouped.get(Number(b.mod.id)) ?? [];
+                const ok = states.length > 0 && states.every((s) => s.state);
+                if (ok) b.mod.isInstalled = false;
+                batchResultItems.value.push({ name: b.mod.modName, ok, error: ok ? undefined : (states.find((s) => !s.state)?.error ?? "卸载失败") });
+                batchModDone.value += 1;
+            }
+            for (const b of special) {
+                batchCurrent.value = b.mod.modName;
+                startAction(b.mod.id);
+                try {
+                    await toggleInstallSilent(b.mod, install);
+                    b.mod.isInstalled = install;
+                    batchResultItems.value.push({ name: b.mod.modName, ok: true });
+                } catch (error: unknown) {
+                    batchResultItems.value.push({ name: b.mod.modName, ok: false, error: error instanceof Error ? error.message : String(error) });
+                } finally {
+                    finishAction(b.mod.id);
+                }
+                batchModDone.value += 1;
+            }
+            batchFileDone.value = batchFileTotal.value;
+        } catch (error: unknown) {
+            batchResultItems.value.push({ name: "批量卸载", ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+        await manager.saveManagerData();
+        offProgress();
+        batchRunning.value = false;
+        selectionIds.value = [];
+        manager.selectionMode = false;
+        batchResultTitle.value = `${batchTitle.value}完成：成功 ${batchResultItems.value.filter((i) => i.ok).length} / ${targets.length}`;
+        showBatchResultDialog.value = true;
+        return;
+    }
     try {
         for (const mod of targets) {
             batchCurrent.value = mod.modName;
@@ -499,30 +555,34 @@ async function batchRemove() {
     batchModDone.value = 0;
     batchModTotal.value = ids.length;
     batchResultItems.value = [];
-    const removedIds: number[] = [];
+    // 一次拼路径 + 一次后端 rayon 并行删（原来每 mod 4 IPC 串行：getModStoragePath×2 + fileExists + remove）。
     try {
-        for (const id of ids) {
+        const root = manager.managerRoot;
+        if (!root) {
+            batchResultItems.value = ids.map((id) => ({ name: String(id), ok: false, error: "请先配置储存路径并选择游戏。" }));
+            return;
+        }
+        const sep = root.includes("\\") ? "\\" : "/";
+        const base = root.endsWith("/") || root.endsWith("\\") ? root.slice(0, -1) : root;
+        const paths = ids.map((id) => `${base}${sep}${id}`);
+        batchCurrent.value = `批量删除 ${ids.length} 个目录…`;
+        batchFileDone.value = 0;
+        batchFileTotal.value = ids.length;
+        const states = await invoke<Array<{ path: string; ok: boolean; error?: string }>>("fs_remove_dirs", { paths });
+        const okByPath = new Map<string, { path: string; ok: boolean; error?: string }>(states.map((s: { path: string; ok: boolean; error?: string }) => [s.path, s]));
+        const removedIds: number[] = [];
+        ids.forEach((id, index) => {
             const mod = manager.managerModList.find((m) => m.id === id);
-            batchCurrent.value = mod?.modName ?? String(id);
-            batchFileDone.value = batchModDone.value;
-            batchFileTotal.value = ids.length;
-            try {
-                const modPath = await manager.getModStoragePath(id);
-                if (modPath) {
-                    const deleted = await FileHandler.deleteFolder(modPath);
-                    if (!deleted) throw new Error("删除 Mod 目录失败，请检查文件占用或权限。");
-                }
+            const st = okByPath.get(paths[index]);
+            if (st?.ok) {
                 removedIds.push(id);
                 batchResultItems.value.push({ name: mod?.modName ?? String(id), ok: true });
-            } catch (error: unknown) {
-                batchResultItems.value.push({
-                    name: mod?.modName ?? String(id),
-                    ok: false,
-                    error: error instanceof Error ? error.message : String(error),
-                });
+            } else {
+                batchResultItems.value.push({ name: mod?.modName ?? String(id), ok: false, error: st?.error ?? "删除 Mod 目录失败，请检查文件占用或权限。" });
             }
-            batchModDone.value += 1;
-        }
+            batchModDone.value = index + 1;
+            batchFileDone.value = index + 1;
+        });
         if (removedIds.length > 0) {
             const removedSet = new Set(removedIds);
             manager.managerModList = manager.managerModList.filter((m) => !removedSet.has(m.id));

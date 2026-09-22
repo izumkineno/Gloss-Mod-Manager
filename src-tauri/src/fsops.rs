@@ -473,6 +473,10 @@ pub async fn fs_copy_dir(src: String, dst: String) -> Result<u64, String> {
         .map_err(|error| format!("复制目录失败：{error}"))?
 }
 
+/// 导入模块复用：同步版目录复制（与 fs_copy_dir 同实现，供 mod_import 直接调用）。
+pub(crate) fn copy_dir_sync(src: &str, dst: &str) -> Result<u64, String> {
+    copy_dir_native(src, dst)
+}
 fn copy_dir_native(src: &str, dst: &str) -> Result<u64, String> {
     use rayon::prelude::*;
     let started_at = std::time::Instant::now();
@@ -539,7 +543,6 @@ pub struct Matcher {
 /// - `ext` ＝尾段扩展名去点小写相等（对齐 getFileExtension：无点/首点/尾点皆不命中）；
 /// - `segment` ＝任一路径段精确相等（对齐 installByFolder 锚切分与 Unreal Scripts 大小写敏感）；
 /// - `segment_ci` ＝任一段小写相等（对齐 REEngine pathParts 小写）；
-/// - `contains` ＝尾段小写子串（对齐 Unity plugins 判定）；
 /// - `suffix` ＝整路径小写后缀。
 #[tauri::command]
 pub fn mod_classify(files: Vec<String>, rules: Vec<ClassifyRule>, default: i32) -> Result<i32, String> {
@@ -553,6 +556,38 @@ pub fn mod_classify(files: Vec<String>, rules: Vec<ClassifyRule>, default: i32) 
         }
     }
     Ok(default)
+}
+
+/// 批量删目录：rayon 并行（不存在算成功，与前端 deleteFolder 语义一致）。
+/// 返回每项 {path, ok, error}，调用方按需汇总。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveDirState {
+    pub path: String,
+    pub ok: bool,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub fn fs_remove_dirs(paths: Vec<String>) -> Vec<RemoveDirState> {
+    use rayon::prelude::*;
+    let started = std::time::Instant::now();
+    let states: Vec<RemoveDirState> = paths
+        .par_iter()
+        .map(|path| {
+            let p = std::path::Path::new(path);
+            if !p.exists() {
+                return RemoveDirState { path: path.clone(), ok: true, error: None };
+            }
+            match remove_path(p) {
+                Ok(()) => RemoveDirState { path: path.clone(), ok: true, error: None },
+                Err(err) => RemoveDirState { path: path.clone(), ok: false, error: Some(err.to_string()) },
+            }
+        })
+        .collect();
+    let failed = states.iter().filter(|s| !s.ok).count();
+    tracing::info!(target: "backend", "[移除] 批量删目录：总数={} 失败={} 耗时={:?}", states.len(), failed, started.elapsed());
+    states
 }
 
 fn tail_segment(normalized: &str) -> &str {

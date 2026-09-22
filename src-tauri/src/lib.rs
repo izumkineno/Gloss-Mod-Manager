@@ -5,6 +5,7 @@ mod explore;
 mod fsops;
 mod mcp_server;
 mod nexus_collection;
+mod mod_import;
 mod thunderstore;
 
 use std::io;
@@ -359,6 +360,7 @@ pub fn run() {
             fsops::fs_hash_string,
             fsops::mod_install_batch,
             fsops::fs_copy_dir,
+            fsops::fs_remove_dirs,
             fsops::mod_classify,
             fsops::cfg_upsert,
             fsops::fs_link,
@@ -395,6 +397,12 @@ pub fn run() {
             downloader::dl_resume_all,
             downloader::dl_pause_collection,
             downloader::dl_resume_collection,
+            mod_import::mod_import_prepare,
+            mod_import::mod_import_commit,
+            mod_import::mod_import_task,
+            mod_import::mod_import_batch,
+            mod_import::mod_import_sync_status,
+            mod_import::mod_import_duplicates,
             thunderstore::thunderstore_list,
             thunderstore::thunderstore_cache_status,
             thunderstore::thunderstore_refresh,

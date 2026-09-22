@@ -328,6 +328,73 @@ export class Manager {
         });
     }
 
+    // 多 mod 批量卸载：一次 context + 纯字符串拼全量 slots + 一次 batch invoke。
+    // file key 用 `modId/rel` 隔离（同名文件跨 mod 不冲突），返回按 mod 分组。
+    public static async generalBatchUninstall(
+        mods: Array<{ mod: IModInfo; installPath: string; keepPath?: boolean; inGameStorage?: boolean }>,
+    ): Promise<Map<number, IState[]>> {
+        const startedAt = Date.now();
+        const grouped = new Map<number, IState[]>();
+        if (mods.length === 0) return grouped;
+        void Log.info(`[卸载] batch卸载开始：mods=${mods.length} 文件总数=${mods.reduce((n, m) => n + m.mod.modFiles.length, 0)}`);
+        const { modStorage, gameStorage } = await Manager.getContext();
+        if (!modStorage) {
+            ElMessage.warning("未设置 Mod 储存目录，无法执行安装或卸载。请先选择当前游戏并配置储存路径。");
+            for (const { mod } of mods) grouped.set(Number(mod.id), Manager.createFailureState(mod));
+            return grouped;
+        }
+        if (!gameStorage) {
+            ElMessage.warning("未设置游戏目录，无法执行安装或卸载。请先选择当前游戏并确认游戏路径。");
+        }
+        // 按 (installPath, inGameStorage) 分组算 targetRoot：同组共享，减少 getContext 调用（已一次取好，纯字符串）。
+        const rootCache = new Map<string, string | null>();
+        const rootOf = (installPath: string, inGame: boolean): string | null => {
+            // 绝对路径（盘符/前导斜杠）直接用，与 tauri join 语义一致；相对才拼 gameStorage。
+            if (/^[a-zA-Z]:[/\\]/.test(installPath) || installPath.startsWith("/") || installPath.startsWith("\\")) {
+                return installPath;
+            }
+            const key = `${inGame ? "g" : "p"}:${installPath}`;
+            if (!rootCache.has(key)) {
+                rootCache.set(key, !inGame ? installPath : gameStorage ? `${gameStorage.replace(/[/\\]+$/, "")}/${installPath.replace(/^[/\\]+/, "")}` : null);
+            }
+            return rootCache.get(key) ?? null;
+        };
+        const usep = modStorage.includes("\\") ? "\\" : "/";
+        const utrim = (p: string) => (p.endsWith("/") || p.endsWith("\\") ? p.slice(0, -1) : p);
+        const ubase = (p: string) => p.split(/[/\\]/).pop() ?? p;
+        const uroot = utrim(modStorage);
+        const items: IInstallItem[] = [];
+        const allowedRoots = new Set<string>([modStorage]);
+        const keyOf = (modId: number | string, file: string) => `${modId}/${file}`;
+        for (const { mod, installPath, keepPath = false, inGameStorage = true } of mods) {
+            const targetRoot = rootOf(installPath, inGameStorage);
+            if (targetRoot === null) {
+                grouped.set(Number(mod.id), Manager.createFailureState(mod));
+                continue;
+            }
+            allowedRoots.add(targetRoot);
+            const uout = utrim(targetRoot);
+            const mroot = `${uroot}${usep}${mod.id}`;
+            for (const file of mod.modFiles) {
+                const rel = file.replace(/^[/\\]+/, "");
+                const norm = rel.replace(/\//g, usep);
+                const target = keepPath ? `${uout}${usep}${norm}` : `${uout}${usep}${ubase(file)}`;
+                items.push({ file: keyOf(mod.id, file), src: `${mroot}${usep}${norm}`, dst: target, op: "remove", backup: "gmmback" });
+            }
+        }
+        const states = await Manager.runInstallBatch(items, [...allowedRoots], false);
+        for (const { mod } of mods) {
+            if (grouped.has(Number(mod.id))) continue;
+            grouped.set(Number(mod.id), mod.modFiles.map((file) => {
+                const entry = states.get(keyOf(mod.id, file));
+                return { file, state: entry?.ok ?? false, error: entry?.error };
+            }));
+        }
+        const okMods = [...grouped.values()].filter((list) => list.every((s) => s.state)).length;
+        void Log.info(`[卸载] batch卸载完成：mods=${mods.length} 全成功=${okMods} 总耗时=${Date.now() - startedAt}ms`);
+        return grouped;
+    }
+
     // 一般卸载
     public static async generalUninstall(
         mod: IModInfo,

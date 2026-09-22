@@ -8,7 +8,7 @@ import { ElMessage } from "element-plus-message";
 import { FileHandler } from "@/lib/FileHandler";
 import { autoImportCompletedDownloadTasks } from "@/lib/gloss-download-monitor";
 import type { IGlossDownloadTaskMeta } from "@/lib/gloss-download";
-import { useFomodWizardStore } from "@/stores/fomod-wizard";
+import type { FomodConfig } from "@/lib/fomod-parser";
 import { getDownloadFacade } from "@/features/download/facade";
 import type {
     IDownloaderTask,
@@ -52,6 +52,7 @@ import {
     useTaskImportState,
     type ImportDeps,
 } from "@/features/download/view/task-import";
+import { refreshImportStatus as refreshImportStatusCore } from "@/features/download/view/task-import-sync";
 import {
     retryAllFailedTasks as retryAllFailedTasksCore,
     retryTask as retryTaskCore,
@@ -341,7 +342,7 @@ function buildImportDeps(): ImportDeps {
         canImportToLocalManager: canImportToLocalManager.value,
         allTasks: allTasks.value,
         promptDuplicateDecision: dedupe.promptDuplicateDecision,
-        startWizard: (config: never) => useFomodWizardStore().startWizard(config) as never,
+        startWizard: (config: FomodConfig) => useFomodWizardStore().startWizard(config),
     };
 }
 const canImportToLocalManager = computed(() =>
@@ -352,6 +353,16 @@ function importTaskToLocalManager(task?: IDownloaderTask | null): Promise<void> 
 }
 function importAllCompletedTasks(): Promise<void> {
     return importAllCompletedTasksCore(buildImportDeps(), importState);
+}
+// 刷新导入状态：重读本地 mod 列表，与 meta.localModId 对账（管理器删 mod/别处导入后校准 imported/unimported）。
+function refreshImportStatusView(): Promise<unknown> {
+    return refreshImportStatusCore({
+        allTasks: allTasks.value,
+        taskMetaMap: taskMetaMap.value,
+        setTaskMeta,
+        refreshTaskLists,
+        managerRoot: manager.managerRoot,
+    });
 }
 
 // 资源建任务转发。
@@ -773,6 +784,13 @@ onUnmounted(() => {
                             <IconFileUp />
                             批量导入全部
                         </Button>
+                        <Button
+                            v-if="queueFilter === 'stopped' || queueFilter === 'imported' || queueFilter === 'unimported' || queueFilter === 'all'"
+                            size="sm" variant="outline" :disabled="!canImportToLocalManager"
+                            @click="refreshImportStatusView">
+                            <IconRefreshCw />
+                            刷新导入状态
+                        </Button>
                         <Button size="sm" variant="outline" @click="openPurgeConfirm('stopped')">
                             <IconTrash2 />
                             清理已结束
@@ -781,6 +799,13 @@ onUnmounted(() => {
                             <IconTrash2 />
                             清理下载失败
                         </Button>
+                    </div>
+                    <!-- 批量导入进度：分片 batch 按片推进（20个一片），后端单次 invoke 无更细粒度 -->
+                    <div v-if="importState.batchProgress.value.running || importState.batchProgress.value.done > 0" class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                        <span class="shrink-0">导入 {{ importState.batchProgress.value.done }}/{{ importState.batchProgress.value.total }}</span>
+                        <div class="h-1.5 min-w-24 flex-1 overflow-hidden rounded-full bg-muted">
+                            <div class="h-full rounded-full bg-primary transition-all" :style="{ width: `${importState.batchProgress.value.total > 0 ? Math.round((importState.batchProgress.value.done / importState.batchProgress.value.total) * 100) : 0}%` }" />
+                        </div>
                     </div>
                 </CardTitle>
             </CardHeader>

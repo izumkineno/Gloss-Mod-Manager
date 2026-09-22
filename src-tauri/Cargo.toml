@@ -47,6 +47,7 @@ walkdir = "2"
 md5 = "0.7"
 # 批量安装并行：IO 密集型文件拷贝/删除用 rayon 并行
 rayon = "1"
+tokio = { version = "1", features = ["sync"] }
 fs_extra = "1"
 junction = "1"
 # P1 配置原子写：跨进程文件锁（防并发丢条目）+ tmp 写再 rename（防半截文件）

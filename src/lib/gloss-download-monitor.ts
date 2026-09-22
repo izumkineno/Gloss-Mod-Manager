@@ -2,15 +2,9 @@ import { ElMessage } from "element-plus-message";
 
 import type { IDownloaderTask } from "@/features/download/types";
 import { FileHandler } from "@/lib/FileHandler";
-import {
-    findGlossDuplicateLocalMods,
-    type IGlossDownloadTaskMeta,
-} from "@/lib/gloss-download";
+import type { IGlossDownloadTaskMeta } from "@/lib/gloss-download";
+import { backendImportCommit, backendImportDuplicates, backendImportTask } from "@/lib/backend-import";
 import { resolveGlossDownloadImportSourceType } from "@/features/download/meta/import-source";
-import {
-    importLocalModSources,
-    type ILocalModImportSource,
-} from "@/lib/local-mod-import";
 import { useManager } from "@/stores/manager";
 import { listDownloadMeta, putDownloadMeta } from "@/lib/download-meta";
 
@@ -159,32 +153,19 @@ export async function autoImportCompletedDownloadTasks(
 
         importingTaskGids.add(gid);
 
+        const started = Date.now();
         try {
-            await manager.refreshRuntimeData({
-                storagePath: settings.storagePath,
-                closeSoftLinks: settings.closeSoftLinks,
-            });
-
             if (!manager.managerGame || !manager.managerRoot) {
                 continue;
             }
-
             const primaryFile = getTaskPrimaryFile(task);
-
-            if (!primaryFile?.path) {
-                continue;
-            }
-
-            if (!(await FileHandler.fileExists(primaryFile.path))) {
-                continue;
-            }
-
-            const importMetadata = {
-                modName:
-                    metadata.modTitle ||
-                    metadata.resourceName ||
-                    getBaseName(primaryFile.path),
-                fileName: metadata.fileName || getBaseName(primaryFile.path),
+            if (!primaryFile?.path) continue;
+            if (!(await FileHandler.fileExists(primaryFile.path))) continue;
+            const modName = metadata.modTitle || metadata.resourceName || getBaseName(primaryFile.path);
+            const fileName = metadata.fileName || getBaseName(primaryFile.path);
+            const backendMeta = {
+                modName,
+                fileName,
                 modVersion: metadata.version || "1.0.0",
                 modAuthor: metadata.author || "",
                 modWebsite: metadata.sourceUrl || "",
@@ -193,75 +174,40 @@ export async function autoImportCompletedDownloadTasks(
                 from: getTaskSourceType(metadata),
                 webId: getTaskExternalId(metadata),
                 gameID: manager.managerGame.GlossGameId,
-                other: {
-                    downloadTaskGid: task.gid,
-                    sourceUrl: metadata.sourceUrl || "",
-                },
+                other: { downloadTaskGid: task.gid, sourceUrl: metadata.sourceUrl || "" },
             };
-            const duplicateLocalMods = findGlossDuplicateLocalMods(
-                manager.managerModList,
-                {
-                    sourceType: getTaskSourceType(metadata),
-                    externalId: getTaskExternalId(metadata),
-                    modId: metadata.modId,
-                    fileName: importMetadata.fileName,
-                    modTitle: importMetadata.modName,
-                },
-            );
-            const overwriteTargetMod =
-                metadata.replaceLocalModId !== undefined
-                    ? (duplicateLocalMods.find((item) => {
-                          return (
-                              Number(item.mod.id) ===
-                              Number(metadata.replaceLocalModId)
-                          );
-                      })?.mod ?? null)
-                    : null;
-
-            const importSource: ILocalModImportSource = {
-                path: primaryFile.path,
-                sourceType: await resolveGlossDownloadImportSourceType(
-                    primaryFile.path,
-                    metadata,
-                ),
-                metadata: importMetadata,
-            };
-
-            if (duplicateLocalMods.length > 0) {
-                if (overwriteTargetMod) {
-                    importSource.duplicateStrategy = "overwrite";
-                    importSource.targetMod = overwriteTargetMod;
-                } else {
-                    const targetLocalMod = duplicateLocalMods[0].mod;
-
-                    await updateTaskMeta(gid, {
-                        localModId: targetLocalMod.id,
-                        importedAt: new Date().toISOString(),
-                    });
+            // 判重走后端：命中身份重复直接回填跳过；replaceLocalModId 指定覆盖目标。
+            const duplicates = await backendImportDuplicates(manager.managerRoot, {
+                sourceType: getTaskSourceType(metadata),
+                externalId: getTaskExternalId(metadata),
+                modId: metadata.modId,
+                fileName,
+                modTitle: modName,
+            });
+            if (metadata.replaceLocalModId === undefined) {
+                const hit = duplicates.find((item) => item.score >= 100) ?? null;
+                if (hit && "id" in hit.modData && typeof hit.modData.id === "number") {
+                    await updateTaskMeta(gid, { localModId: hit.modData.id, importedAt: new Date().toISOString() });
                     continue;
                 }
             }
-
-            const result = await importLocalModSources([importSource]);
-            const importedMod = result.importedMods[0];
-
-            if (!importedMod) {
+            const overwriteModId = metadata.replaceLocalModId !== undefined ? Number(metadata.replaceLocalModId) : undefined;
+            const sourceType = await resolveGlossDownloadImportSourceType(primaryFile.path, metadata);
+            const result = await backendImportTask(primaryFile.path, sourceType, manager.managerRoot, backendMeta, Number.isFinite(overwriteModId) ? overwriteModId : undefined);
+            // 自动导入不弹窗：FOMOD 包按全量提交（prepare 已解压，直接 commit 全量）。
+            let modId = result.modId;
+            let modNameFinal = result.modName;
+            if (result.needFomod && result.stagingDir && result.targetDir) {
+                const committed = await backendImportCommit(result.stagingDir, result.modId, result.targetDir, manager.managerRoot, backendMeta, overwriteModId != null, []);
+                modId = committed.modId;
+                modNameFinal = committed.modName;
+            }
+            console.debug(`[导入] 自动导入完成：gid=${gid} modId=${modId} 后端耗时=${result.elapsedMs}ms 前端总耗时=${Date.now() - started}ms`);
+            await updateTaskMeta(gid, { localModId: modId, importedAt: new Date().toISOString() });
+            if (overwriteModId != null) {
+                ElMessage.success(`已自动更新本地 Mod：${modNameFinal}`);
                 continue;
             }
-
-            // collection 已安装识别依赖自动导入写入的 webId（externalId）。
-
-            await updateTaskMeta(gid, {
-                localModId: importedMod.id,
-                importedAt: new Date().toISOString(),
-            });
-
-            if (overwriteTargetMod) {
-                ElMessage.success(`已自动更新本地 Mod：${importedMod.modName}`);
-                continue;
-            }
-
-            ElMessage.success(`已自动导入到管理器：${importedMod.modName}`);
         } catch (error: unknown) {
             console.error("自动导入下载任务失败");
             console.error(error);
