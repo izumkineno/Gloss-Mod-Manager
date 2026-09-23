@@ -90,7 +90,7 @@ jobs:
             - name: Verify release version
               shell: bash
               run: |
-                  node <<'NODE'
+                  bun <<'NODE'
                   const fs = require("node:fs");
 
                   const packageJson = JSON.parse(
