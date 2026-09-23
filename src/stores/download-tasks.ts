@@ -1,6 +1,6 @@
 // 下载任务共享 Pinia store（Wave 3 薄包装）：状态一律走 facade 单例，禁止自有状态机。
 // 数据经 facade.snapshot()/subscribe 读取；操作经 facade 方法透传；meta 真相源在后端 download_meta.json。
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { ElMessage } from "element-plus-message";
 import { getDownloadFacade } from "@/features/download/facade";
 import type { TaskProjection } from "@/features/download/types";
@@ -57,7 +57,7 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
     }
     function cancelRetryProgress(entryId: string) {
         const prog = retryProgressMap.value[entryId];
-        if (prog) prog.cancelled = true;
+        if (prog) retryProgressMap.value = { ...retryProgressMap.value, [entryId]: { ...prog, cancelled: true } };
     }
     function finishRetryProgress(entryId: string): boolean {
         const wasCancelled = retryProgressMap.value[entryId]?.cancelled ?? false;
@@ -77,9 +77,32 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
     const allTasks = computed(() => taskList.value.map(toLegacyTask));
     const failedTasks = computed(() => taskList.value.filter((t) => t.status === "error").map(toLegacyTask));
     const finishedTasks = computed(() => taskList.value.filter((t) => t.status === "complete").map(toLegacyTask));
-
     function pullSnapshot(): void {
         taskList.value = facade.snapshot();
+    }
+
+    // 通用事件驱动等待：先同步 pullSnapshot（纯内存无 IPC）再求值；否则 watch
+    // taskList + retryProgressMap 变化求值，setInterval 低频兜底。
+    function waitForTaskCondition(check: () => boolean, fallbackMs = 5000): Promise<void> {
+        pullSnapshot();
+        if (check()) return Promise.resolve();
+        return new Promise((resolve) => {
+            let settled = false;
+            const stop = watch([taskList, retryProgressMap], () => {
+                if (check()) settle();
+            });
+            const timer = setInterval(() => {
+                pullSnapshot();
+                if (check()) settle();
+            }, fallbackMs);
+            function settle(): void {
+                if (settled) return;
+                settled = true;
+                stop();
+                clearInterval(timer);
+                resolve();
+            }
+        });
     }
 
     async function refreshTaskLists(silent = false): Promise<void> {
@@ -186,6 +209,8 @@ export const useDownloadTasksStore = defineStore("DownloadTasks", () => {
 
     return {
         tasksLoading,
+        pullSnapshot,
+        waitForTaskCondition,
         tasksErrorMessage,
         refreshingTasks,
         globalStat,

@@ -267,8 +267,32 @@ function isPendingItemDownloading(item: INexusCollectionPendingItem): boolean {
     if (states.includes("downloading")) return "downloading";
      if (states.includes("queued")) return "queued";
      if (states.includes("pending")) return "pending";
-     return "all";
- }
+    return "all";
+}
+// 条目状态计数：done/downloading/总数（Badge 文案用，与 getEntryFilterState 同口径）。
+function getEntryStatusCounts(entry: INexusCollectionPending): { done: number; downloading: number; total: number } {
+    let done = 0;
+    let downloading = 0;
+    for (const item of entry.items) {
+        const state = getItemFilterState(item);
+        if (state === "done") done += 1;
+        else if (state === "downloading") downloading += 1;
+    }
+    return { done, downloading, total: entry.items.length };
+}
+// 页头全局汇总：全部合集明细的 done/downloading/总数。
+const collectionStatusSummary = computed(() => {
+    let done = 0;
+    let downloading = 0;
+    let total = 0;
+    for (const entry of collectionPendingList.value) {
+        const counts = getEntryStatusCounts(entry);
+        done += counts.done;
+        downloading += counts.downloading;
+        total += counts.total;
+    }
+    return { done, downloading, total };
+});
 type CollectionFilter = "all" | "pending" | "queued" | "downloading" | "failed" | "done" | "undownloaded" | "imported" | "unimported";
  const collectionFilterOptions: Array<{ value: CollectionFilter; label: string }> = [
      { value: "all", label: "全部" },
@@ -459,26 +483,16 @@ async function queueSinglePendingItem(entry: INexusCollectionPending, item: INex
     }
 }
 
-// 背压等待：等待中（active/waiting/paused 非完成态实时任务）达上限即每 5s 检查一次。
+// 背压等待：等待中（active/waiting/paused 非完成态实时任务）达上限即暂停塞入，任务状态变化即检查（兜底 5 秒）。
 function getWaitingTaskCount(): number {
     return allTasks.value.filter((t) => ["active", "waiting", "paused"].includes(t.status)).length;
 }
 function waitForQueueSlot(entryId: string): Promise<void> {
-    return new Promise((resolve) => {
-        const limit = Math.max(1, Number(settings.collectionQueueLimit) || 10);
-        const check = () => {
-            if (downloadTasksStore.getRetryProgress(entryId)?.cancelled) {
-                resolve();
-                return;
-            }
-            if (getWaitingTaskCount() < limit) {
-                resolve();
-                return;
-            }
-            setTimeout(check, 5000);
-        };
-        check();
-    });
+    const limit = Math.max(1, Number(settings.collectionQueueLimit) || 10);
+    return downloadTasksStore.waitForTaskCondition(
+        () => downloadTasksStore.getRetryProgress(entryId)?.cancelled === true || getWaitingTaskCount() < limit,
+        5000,
+    );
 }
 
 async function retryPendingEntry(entry: INexusCollectionPending) {
@@ -501,7 +515,7 @@ async function retryPendingEntry(entry: INexusCollectionPending) {
     const batchInterval = Math.max(0, Number(settings.collectionPushInterval) || 0);
     for (let i = 0; i < todo.length; i += batchSize) {
         if (downloadTasksStore.getRetryProgress(entry.id)?.cancelled) break;
-        // 背压：等待中任务达上限即暂停塞入，setTimeout 隔 5s 检查一次，直到有空位或取消。
+        // 背压：等待中任务达上限即暂停塞入，任务状态变化即检查（兜底 5s），直到有空位或取消。
         await waitForQueueSlot(entry.id);
         if (downloadTasksStore.getRetryProgress(entry.id)?.cancelled) break;
         const batch = todo.slice(i, i + batchSize);
@@ -513,15 +527,12 @@ async function retryPendingEntry(entry: INexusCollectionPending) {
             await new Promise((resolve) => setTimeout(resolve, batchInterval));
         }
     }
-    // 入队结束不立即清条：转入“等完成”阶段——轮询真完成直到全部 complete/用户取消。
-    // 进度条此后由 getRetryDoneCount 驱动，与合集 done 同口径；轮询退出后才 finish。
-    for (;;) {
-        await refreshTaskSnapshot();
+    // 入队结束不立即清条：转入“等完成”阶段——事件驱动等真完成直到全部 complete/用户取消。
+    // 进度条此后由 getRetryDoneCount 驱动，与合集 done 同口径；等待退出后才 finish。
+    await downloadTasksStore.waitForTaskCondition(() => {
         const prog = downloadTasksStore.getRetryProgress(entry.id);
-        if (!prog || prog.cancelled) break;
-        if (getRetryDoneCount(entry.id) >= prog.total) break;
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-    }
+        return !prog || prog.cancelled || getRetryDoneCount(entry.id) >= prog.total;
+    }, 5000);
     const wasCancelled = downloadTasksStore.finishRetryProgress(entry.id);
     await refreshTaskSnapshot();
     const refreshed = (await listCollectionPending()).find((e) => e.id === entry.id);
@@ -595,6 +606,9 @@ onUnmounted(() => {
                         <Badge variant="outline" class="rounded-full ml-4">
                             {{ collectionPendingList.length }}
                         </Badge>
+                        <Badge variant="outline" class="rounded-full ml-2">
+                            已下载 {{ collectionStatusSummary.done }}/{{ collectionStatusSummary.total }} · 下载中 {{ collectionStatusSummary.downloading }}
+                        </Badge>
                     </span>
                     <div class="flex flex-wrap gap-2">
                         <Button size="sm" variant="outline" :disabled="collectionPendingLoading"
@@ -608,7 +622,6 @@ onUnmounted(() => {
                         </Button>
                     </div>
                 </CardTitle>
-                <CardDescription>勾选后即持久化保存，中断或重启后可在此重试未建任务的文件。</CardDescription>
             </CardHeader>
             <CardContent class="flex flex-col gap-3">
                 <div class="flex flex-wrap gap-2">
@@ -634,6 +647,9 @@ onUnmounted(() => {
                                             共 {{ getEntryCounts(entry).total }} 个 Mod · 必装 {{
                                                 getEntryCounts(entry).required }} · 可选 {{ getEntryCounts(entry).optional }}
                                             · 已下载 {{ getEntryCounts(entry).done }}
+                                        </Badge>
+                                        <Badge class="rounded-full" variant="outline">
+                                            已完成 {{ getEntryStatusCounts(entry).done }}/{{ getEntryStatusCounts(entry).total }} · 下载中 {{ getEntryStatusCounts(entry).downloading }}
                                         </Badge>
                                     </div>
                                     <div v-if="getRetryProgress(entry.id)"

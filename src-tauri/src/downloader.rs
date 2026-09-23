@@ -1121,6 +1121,34 @@ pub fn dl_purge_stopped(
     tracing::info!(target: "gmm::dl", "[purge] dl_purge_stopped done targets={} file_ok={} failed={} delete_file={}", targets.len(), file_ok, failed_all.len(), delete_file);
     Ok((targets.len(), failed_all))
 }
+/// 按路径删残留文件：purge 遇 ghost（重启后注册表已清）时前端 fallback 用。
+/// 后端只删文件 + 断点，不碰注册表；NotFound 视为已干净，不算失败。
+#[tauri::command]
+pub fn dl_delete_files(paths: Vec<String>) -> Result<(usize, Vec<(String, String)>), String> {
+    let mut ok = 0usize;
+    let mut failed = Vec::new();
+    for output in &paths {
+        let main = std::fs::remove_file(output).map_err(|e| e.to_string());
+        let bitcode = std::fs::remove_file(format!("{output}.download.bitcode")).map_err(|e| e.to_string());
+        let is_nf = |m: &str| m.contains("系统找不到指定的文件") || m.contains("No such file") || m.contains("os error 2");
+        match (&main, &bitcode) {
+            (Ok(()), _) | (_, Ok(())) => {
+                ok += 1;
+                tracing::info!(target: "gmm::dl", "[purge] dl_delete_files ok output={}", output);
+            }
+            (Err(m), Err(b)) if is_nf(m) && is_nf(b) => {
+                ok += 1;
+                tracing::info!(target: "gmm::dl", "[purge] dl_delete_files already_gone output={}", output);
+            }
+            (Err(m), Err(b)) => {
+                failed.push((output.clone(), format!("删文件失败：{m} / 断点：{b}")));
+                tracing::warn!(target: "gmm::dl", "[purge] dl_delete_files FAILED output={} main={} bitcode={}", output, m, b);
+            }
+        }
+    }
+    tracing::info!(target: "gmm::dl", "[purge] dl_delete_files done ok={} failed={}", ok, failed.len());
+    Ok((ok, failed))
+}
 
 /// 更新后续启动（重试/恢复）生效的参数。
 #[tauri::command]

@@ -1,11 +1,11 @@
-mod download_store;
 mod download_meta;
+mod download_store;
 mod downloader;
 mod explore;
 mod fsops;
 mod mcp_server;
-mod nexus_collection;
 mod mod_import;
+mod nexus_collection;
 mod thunderstore;
 
 use std::io;
@@ -375,6 +375,7 @@ pub fn run() {
             downloader::dl_cancel,
             downloader::dl_forget,
             downloader::dl_purge_stopped,
+            downloader::dl_delete_files,
             download_meta::dl_meta_list,
             download_meta::dl_meta_save,
             download_meta::dl_meta_put,

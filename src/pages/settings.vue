@@ -507,7 +507,7 @@ watch(
                                             Collection 排队上限
                                         </div>
                                         <p class="text-xs text-muted-foreground">
-                                            等待中任务达上限即暂停塞入，每 5 秒检查一次，有空位再续。
+                                            等待中任务达上限即暂停塞入，任务状态变化即检查（兜底 5 秒），有空位再续。
                                         </p>
                                     </div>
                                     <Input

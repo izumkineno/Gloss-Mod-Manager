@@ -1,6 +1,7 @@
 // 任务操作编排（Wave 3.6 机械抽取）：单任务暂停/继续/移除 + 批量暂停/继续/清理。
 // 与 download.vue 原实现逐行一致，只挪位置；操作前后走调用方传入的 operation 守卫与刷新。
 import { ElMessage } from "element-plus-message";
+import { invoke } from "@tauri-apps/api/core";
 import { getDownloadFacade } from "../facade";
 import type { IDownloaderTask } from "../types";
 import { getErrorMessage } from "./task-display";
@@ -98,12 +99,34 @@ export async function purgeStoppedTasks(
     let backendFailed: Array<[string, string]> = [];
     let backendCount = 0;
     try {
-        // facade.purge 返回失败明细，count 需从 targets.len 推（当前签名只回 failed，count 暂用 removed 近似）。
-        backendFailed = await getDownloadFacade().purge(
+        // facade.purge 返回后端真实命中数；ghost（重启后注册表已清）count=0 时按路径删文件。
+        const result = await getDownloadFacade().purge(
             tasks.map((task) => task.gid),
             deleteFile,
         );
-        backendCount = tasks.length - backendFailed.length;
+        backendFailed = result.failed;
+        backendCount = result.count;
+        if (deleteFile && backendCount === 0) {
+            // ghost fallback：从任务 dir + files[].path 拼输出路径，后端按路径删。
+            const paths = tasks
+                .map((task) => {
+                    const file = task.files?.find((f) => f.path) ?? task.files?.[0];
+                    if (!task.dir || !file?.path) return undefined;
+                    const dir = task.dir.replace(/[/\\]+$/, "");
+                    const name = file.path.split(/[/\\]/).pop();
+                    return name ? `${dir}/${name}` : undefined;
+                })
+                .filter((p): p is string => !!p);
+            console.info(`[purge] ghost fallback deleteFile paths=${paths.length}`);
+            if (paths.length > 0) {
+                const [ok, failed] = await invoke<[number, Array<[string, string]>]>("dl_delete_files", { paths });
+                backendCount = ok;
+                backendFailed = [...backendFailed, ...failed];
+                console.info(`[purge] ghost fallback done ok=${ok} failed=${failed.length}`);
+            }
+        } else {
+            backendCount = tasks.length - backendFailed.length;
+        }
         console.info(`[purge] backend done targets=${tasks.length} cleaned~=${backendCount} failed=${backendFailed.length} deleteFile=${deleteFile}`);
         for (const [gid, reason] of backendFailed) {
             console.warn(`[purge] backend failed gid=${gid} reason=${reason}`);

@@ -261,26 +261,40 @@ function pauseAllTasks(): Promise<void> {
 function resumeAllTasks(): Promise<void> {
     return resumeAllTasksCore(() => refreshTaskLists());
 }
-// 清理确认弹窗：已结束/下载失败共用，额外勾选是否删本地文件。
+// 清理确认弹窗：下载中/已完成/下载失败三项共用，额外勾选是否删本地文件。
+// 下载中任务后端 purge 会跳过（Active/Waiting/Retrying），确认时先逐个 cancel 再清记录。
 const showPurgeConfirmDialog = ref(false);
 const purgeDeleteFile = ref(false);
-const purgeTarget = ref<"stopped" | "failed">("stopped");
-const purgeTargetCount = computed(() =>
-    purgeTarget.value === "failed" ? failedTasks.value.length : stoppedTasks.value.length,
+const purgeTarget = ref<"downloading" | "stopped" | "failed">("stopped");
+const downloadingTasks = computed(() => [...activeTasks.value, ...waitingTasks.value]);
+const purgeTargetTasks = computed(() =>
+    purgeTarget.value === "downloading" ? downloadingTasks.value : purgeTarget.value === "failed" ? failedTasks.value : stoppedTasks.value,
 );
-const purgeTargetLabel = computed(() => (purgeTarget.value === "failed" ? "下载失败" : "已结束"));
-function openPurgeConfirm(target: "stopped" | "failed"): void {
-    if ((target === "failed" ? failedTasks.value : stoppedTasks.value).length === 0) {
-        ElMessage.info("当前没有可清理的历史任务。");
+const purgeTargetCount = computed(() => purgeTargetTasks.value.length);
+const purgeTargetLabel = computed(() => (purgeTarget.value === "downloading" ? "下载中" : purgeTarget.value === "failed" ? "下载失败" : "已完成"));
+function openPurgeConfirm(target: "downloading" | "stopped" | "failed"): void {
+    const list = target === "downloading" ? downloadingTasks.value : target === "failed" ? failedTasks.value : stoppedTasks.value;
+    if (list.length === 0) {
+        ElMessage.info("当前没有可清理的任务。");
         return;
     }
     purgeTarget.value = target;
     purgeDeleteFile.value = false;
     showPurgeConfirmDialog.value = true;
 }
-function confirmPurgeTasks(): Promise<void> {
+async function confirmPurgeTasks(): Promise<void> {
     showPurgeConfirmDialog.value = false;
-    const tasks = purgeTarget.value === "failed" ? failedTasks.value : stoppedTasks.value;
+    if (purgeTarget.value === "downloading") {
+        // 先取消下载中任务（deleteFile 透传），再按停止态清记录。
+        for (const task of [...downloadingTasks.value]) {
+            try {
+                await facade.cancel(task.gid, purgeDeleteFile.value);
+            } catch (error: unknown) {
+                console.warn(`[purge] cancel downloading FAILED gid=${task.gid}`, error);
+            }
+        }
+    }
+    const tasks = purgeTarget.value === "downloading" ? [...downloadingTasks.value] : purgeTargetTasks.value;
     return purgeStoppedTasksCore(
         tasks,
         {
@@ -777,6 +791,25 @@ onUnmounted(() => {
                             <IconRefreshCw />
                             全部重试
                         </Button>
+                        <DropdownMenu>
+                            <DropdownMenuTrigger as-child>
+                                <Button size="sm" variant="outline">
+                                    <IconTrash2 />
+                                    清理
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" class="w-40">
+                                <DropdownMenuItem @click="openPurgeConfirm('downloading')">
+                                    清理下载中
+                                </DropdownMenuItem>
+                                <DropdownMenuItem @click="openPurgeConfirm('stopped')">
+                                    清理已完成
+                                </DropdownMenuItem>
+                                <DropdownMenuItem @click="openPurgeConfirm('failed')">
+                                    清理下载失败
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
                         <Button
                             v-if="queueFilter === 'stopped' || queueFilter === 'unimported' || queueFilter === 'all'"
                             size="sm" variant="outline" :disabled="!canImportToLocalManager"
@@ -790,14 +823,6 @@ onUnmounted(() => {
                             @click="refreshImportStatusView">
                             <IconRefreshCw />
                             刷新导入状态
-                        </Button>
-                        <Button size="sm" variant="outline" @click="openPurgeConfirm('stopped')">
-                            <IconTrash2 />
-                            清理已结束
-                        </Button>
-                        <Button size="sm" variant="outline" @click="openPurgeConfirm('failed')">
-                            <IconTrash2 />
-                            清理下载失败
                         </Button>
                     </div>
                     <!-- 批量导入进度：分片 batch 按片推进（20个一片），后端单次 invoke 无更细粒度 -->
@@ -1620,7 +1645,7 @@ onUnmounted(() => {
                 <DialogHeader>
                     <DialogTitle>清理{{ purgeTargetLabel }}</DialogTitle>
                     <DialogDescription>
-                        将清理 {{ purgeTargetCount }} 条{{ purgeTargetLabel }}任务记录。默认只清记录、保留本地文件。
+                        将清理 {{ purgeTargetCount }} 条{{ purgeTargetLabel }}任务记录{{ purgeTarget === "downloading" ? "（先取消下载再清记录）" : "" }}。默认只清记录、保留本地文件。
                     </DialogDescription>
                 </DialogHeader>
 

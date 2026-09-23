@@ -44,7 +44,7 @@ export interface DownloadFacade {
     enqueue(args: EnqueueArgs, options?: BackoffOptions): Promise<string>;
     cancel(gid: string, deleteFile?: boolean): Promise<void>;
     forget(gid: string): Promise<void>;
-    purge(gids: string[], deleteFile?: boolean): Promise<Array<[string, string]>>;
+    purge(gids: string[], deleteFile?: boolean): Promise<{ count: number; failed: Array<[string, string]> }>;
     pause(gid: string): Promise<void>;
     pauseAll(): Promise<number>;
     pauseCollection(collectionId: string): Promise<number>;
@@ -239,8 +239,8 @@ export function createFacade(): DownloadFacade {
     }
 
     // purge：批量清已终局任务（后端 dl_purge_stopped + 前端终局归档），不碰机内态。
-    // 返回后端失败明细（跳过/文件删失败），调用方展示。
-    async function purge(gids: string[], deleteFile = false): Promise<Array<[string, string]>> {
+    // 返回后端真实命中数 + 失败明细；count=0 说明全是 ghost（重启后注册表已清），调用方按路径删文件。
+    async function purge(gids: string[], deleteFile = false): Promise<{ count: number; failed: Array<[string, string]> }> {
         console.info(`[purge] facade invoke total=${gids.length} deleteFile=${deleteFile}`);
         const [count, failed] =
             await invoke<[number, Array<[string, string]>]>("dl_purge_stopped", { gids, deleteFile });
@@ -249,7 +249,7 @@ export function createFacade(): DownloadFacade {
             settleTerminal(store, gid, "removed");
         }
         emit();
-        return failed;
+        return { count, failed };
     }
 
     // 自愈：后端是真相源；complete 等终局经 settleTerminal 出机入归档，机内变迁走 transition。
