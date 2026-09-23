@@ -2189,7 +2189,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "gloss-mod-manager"
-version = "2.3.1"
+version = "2.3.2"
 dependencies = [
  "fs2",
  "fs_extra",
@@ -5514,7 +5514,9 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "simple_downloader"
-version = "0.7.2"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50a932f22487ef6d1cf0a50bdf0a51af64cf91d9de2dbe0c9ca1528c92732d3d"
 dependencies = [
  "bitcode",
  "bytes",

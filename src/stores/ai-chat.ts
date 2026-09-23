@@ -321,22 +321,12 @@ export const useAiChatStore = defineStore("AiChat", () => {
         return !configurationErrorMessage.value;
     });
 
+    // 本地 Ollama 等通道无需 API Key：只要求 Base URL；key 为空时请求头省略鉴权。
     const configurationErrorMessage = computed(() => {
-        const missingItems: string[] = [];
-
         if (!baseUrl.value.trim()) {
-            missingItems.push("AI Base URL");
+            return "请先在设置页配置 AI Base URL。";
         }
-
-        if (!apiKey.value.trim()) {
-            missingItems.push("API Key");
-        }
-
-        if (missingItems.length === 0) {
-            return "";
-        }
-
-        return `请先在设置页配置${missingItems.join(" 和 ")}。`;
+        return "";
     });
 
     const messages = computed<IAiChatUIMessage[]>(() => {

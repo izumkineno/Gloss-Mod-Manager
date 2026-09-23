@@ -1,6 +1,6 @@
 [package]
 name = "gloss-mod-manager"
-version = "2.3.1"
+version = "2.3.2"
 description = "Gloss Mod Manager is a comprehensive modern game mod manager"
 authors = ["小莫"]
 edition = "2021"
@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset",'tray-icon'] }
+tauri = { version = "2", features = ["protocol-asset", 'tray-icon'] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-fs = "2"
@@ -34,14 +34,22 @@ serde_json = "1"
 tauri-plugin-dialog = "2"
 tauri-plugin-http = "2"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "local-time", "time"] }
+tracing-subscriber = { version = "0.3", features = [
+    "fmt",
+    "env-filter",
+    "local-time",
+    "time",
+] }
 tracing-appender = "0.2"
 tracing-log = "0.2"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
 # MCP 服务鉴权令牌需要密码学安全的随机源。
 uuid = { version = "1", features = ["v4"] }
 # 本地下载器：替代 aria2 sidecar，单源多线程 + 断点续传 + 进度回调
-simple_downloader = { path = "E:/Code/sdownload/simple_downloader", default-features = false, features = ["resume", "progress"] }
+simple_downloader = { version = "0.7.3", default-features = false, features = [
+    "resume",
+    "progress",
+] }
 # P0 后端化：目录遍历 / MD5 流式哈希 / 批量文件搬运 / Junction 回退
 walkdir = "2"
 md5 = "0.7"
@@ -53,7 +61,10 @@ junction = "1"
 # P1 配置原子写：跨进程文件锁（防并发丢条目）+ tmp 写再 rename（防半截文件）
 fs2 = "0.4"
 # 游览页后端化：列表转发 + 判重（rustls 手动 roots，体积最小）
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-manual-roots"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls-manual-roots",
+] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-autostart = "2"

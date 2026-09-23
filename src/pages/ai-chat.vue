@@ -851,7 +851,7 @@ async function stopLocalServer() {
 </script>
 
 <template>
-    <div class="flex h-[calc(100vh-3rem)] min-h-0 flex-col">
+    <div class="flex h-full min-h-0 flex-1 flex-col">
         <header
             class="flex shrink-0 items-center justify-between gap-3 pb-3"
         >
