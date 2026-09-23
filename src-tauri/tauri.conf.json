@@ -4,9 +4,8 @@
     "version": "2.3.3",
     "identifier": "gmm2.aoe.top",
     "build": {
-        "beforeDevCommand": "yarn dev",
-        "devUrl": "http://localhost:1420",
-        "beforeBuildCommand": "yarn build",
+        "beforeDevCommand": "bun dev",
+        "beforeBuildCommand": "bun run build",
         "frontendDist": "../dist"
     },
     "app": {

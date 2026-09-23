@@ -28,21 +28,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: lts/*
-          cache: yarn
-          cache-dependency-path: yarn.lock
+          bun-version: latest
 
       - name: Install frontend dependencies
-        run: yarn install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Typecheck
-        run: npx vue-tsc --noEmit
+        run: bunx vue-tsc --noEmit
 
       - name: Unit tests
-        run: yarn test
+        run: bun test
 
       - name: Frontend build
-        run: yarn build
+        run: bun run build

@@ -50,12 +50,10 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v6
 
-            - name: Setup Node.js
-              uses: actions/setup-node@v6
+            - name: Setup Bun
+              uses: oven-sh/setup-bun@v2
               with:
-                  node-version: lts/*
-                  cache: yarn
-                  cache-dependency-path: yarn.lock
+                  bun-version: latest
 
             - name: Install Rust stable
               uses: dtolnay/rust-toolchain@stable
@@ -87,10 +85,7 @@ jobs:
                   fi
 
             - name: Install frontend dependencies
-              run: yarn install --frozen-lockfile
-
-            - name: Verify release version
-              shell: bash
+              run: bun install --frozen-lockfile
               run: |
                   node <<'NODE'
                   const fs = require("node:fs");
@@ -235,7 +230,7 @@ jobs:
                       (github.ref_type == 'tag' && contains(github.ref_name,
                       '-')) }}
                   projectPath: ./
-                  tauriScript: yarn tauri
+                  tauriScript: bun tauri
                   args: ${{ format('{0} --config src-tauri/tauri.release.conf.json', matrix.args) }}
                   retryAttempts: 2
-                  includeUpdaterJson: true
+                  includeUpdaterJson: false

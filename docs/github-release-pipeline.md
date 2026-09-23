@@ -91,7 +91,7 @@ git push origin v2.0.1
 仓库已额外提供 `src-tauri/tauri.microsoftstore.conf.json`，用于 Microsoft Store 场景下切换到 `offlineInstaller` 模式。后续如果要接入商店发布，可以在单独 job 中执行：
 
 ```bash
-yarn tauri build -- --bundles nsis,msi --config src-tauri/tauri.microsoftstore.conf.json
+bun tauri build -- --bundles nsis,msi --config src-tauri/tauri.microsoftstore.conf.json
 ```
 
 如果要真正上架 Microsoft Store，还需要额外确认：
@@ -102,12 +102,10 @@ yarn tauri build -- --bundles nsis,msi --config src-tauri/tauri.microsoftstore.c
 
 ## 备注
 
-- 当前工作流使用 `actions/checkout@v6` 与 `actions/setup-node@v6`，以避免 GitHub Actions 对 Node.js 20 runtime 的弃用告警
-- 当前工作流继续使用 `tauri-apps/tauri-action@v0`，对应 updater 配置项为 `includeUpdaterJson`
-- macOS 依赖安装步骤仅在 Homebrew 缺少对应 formula 时才执行，避免 `already installed and up-to-date` 警告注解
-- 当前工作流显式使用 `macos-13` 与 `macos-14`，避免 sidecar 在交叉构建时生成错误架构的内嵌二进制
-- 当前工作流已启用 `includeUpdaterJson: true`，并通过附加配置 `src-tauri/tauri.release.conf.json` 仅在 CI 发布时开启 `createUpdaterArtifacts`
-- 默认的 `yarn tauri build` 不会生成 updater 签名产物，因此不会因为本地缺少 `TAURI_SIGNING_PRIVATE_KEY` 而失败
+- 当前工作流使用 `actions/checkout@v6` 与 `oven-sh/setup-bun@v2`（不再用 setup-node + yarn）
+- 当前工作流继续使用 `tauri-apps/tauri-action@v0`，`tauriScript` 为 `bun tauri`，`includeUpdaterJson: false`
+- updater 签名工件已关闭（`createUpdaterArtifacts: false`）：无 `TAURI_SIGNING_PRIVATE_KEY` 也能出包；如需恢复自动更新，把 release conf 改回 `true` 并在 Secrets 配好私钥
+- 默认的 `bun tauri build` 不会生成 updater 签名产物，因此不会因为本地缺少 `TAURI_SIGNING_PRIVATE_KEY` 而失败
 - GitHub Releases 静态 JSON 端点使用 `https://github.com/GlossMod/Gloss-Mod-Manager/releases/latest/download/latest.json`
 - updater 公钥当前在 `src-tauri/src/lib.rs` 中通过 Rust builder 注入，仓库内仍使用显式占位符，正式发布前必须替换为真实的 Tauri 公钥 PEM 文本
-- 只有在发布构建环境中提供 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 时，`latest.json` 和对应签名构件才能被正确生成
+- 只有在发布构建环境中提供 `TAURI_SIGNING_PRIVATE_KEY` 与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，并重新开启 `createUpdaterArtifacts` 时，`latest.json` 和对应签名构件才能被正确生成
