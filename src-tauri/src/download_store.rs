@@ -38,8 +38,10 @@ fn write_map(
     use fs2::FileExt;
     let path = store_file_path(app)?;
     let lock_path = path.with_extension("lock");
+    // 锁文件仅用于 fs2 排他锁，内容无关：存在即复用，不截断。
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .open(&lock_path)
         .map_err(|err| format!("获取下载存储锁失败：{err}"))?;

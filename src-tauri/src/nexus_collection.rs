@@ -60,7 +60,10 @@ async fn post_graphql(
         .await
         .map_err(|err| format!("获取 NexusMods Collection 信息失败：{err}"))?;
     if !response.status().is_success() {
-        return Err(format!("获取 NexusMods Collection 信息失败：{}", response.status()));
+        return Err(format!(
+            "获取 NexusMods Collection 信息失败：{}",
+            response.status()
+        ));
     }
     response
         .json::<serde_json::Value>()
@@ -69,7 +72,9 @@ async fn post_graphql(
 }
 
 fn get_i64(value: &serde_json::Value) -> Option<i64> {
-    value.as_i64().or_else(|| value.as_u64().and_then(|v| i64::try_from(v).ok()))
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|v| i64::try_from(v).ok()))
 }
 
 #[tauri::command]
@@ -113,7 +118,7 @@ pub(crate) async fn nexus_collection_info(
             })
         })
         .collect();
-    revisions.sort_by(|a, b| b.revision_number.cmp(&a.revision_number));
+    revisions.sort_by_key(|item| std::cmp::Reverse(item.revision_number));
     Ok(CollectionInfo {
         name: collection
             .get("name")
@@ -187,7 +192,10 @@ pub(crate) async fn nexus_collection_files(
                 file_id: file_id.to_string(),
                 name,
                 version,
-                optional: item.get("optional").and_then(|v| v.as_bool()).unwrap_or(false),
+                optional: item
+                    .get("optional")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             })
         })
         .collect())
@@ -255,12 +263,17 @@ fn read_map(app: &tauri::AppHandle) -> Result<HashMap<String, CollectionPending>
 }
 
 /// 原子写：同目录 tmp 写后 rename；fs2 跨进程文件锁防并发丢条目。
-fn write_map(app: &tauri::AppHandle, map: &HashMap<String, CollectionPending>) -> Result<(), String> {
+fn write_map(
+    app: &tauri::AppHandle,
+    map: &HashMap<String, CollectionPending>,
+) -> Result<(), String> {
     use fs2::FileExt;
     let path = pending_file_path(app)?;
     let lock_path = path.with_extension("lock");
+    // 锁文件仅用于 fs2 排他锁，内容无关：存在即复用，不截断。
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .open(&lock_path)
         .map_err(|err| format!("获取待下载清单锁失败：{err}"))?;
@@ -268,8 +281,8 @@ fn write_map(app: &tauri::AppHandle, map: &HashMap<String, CollectionPending>) -
         .lock_exclusive()
         .map_err(|err| format!("获取待下载清单锁失败：{err}"))?;
     let result = (|| -> Result<(), String> {
-        let content =
-            serde_json::to_string_pretty(map).map_err(|err| format!("序列化待下载清单失败：{err}"))?;
+        let content = serde_json::to_string_pretty(map)
+            .map_err(|err| format!("序列化待下载清单失败：{err}"))?;
         let tmp = path.with_extension("tmp");
         std::fs::write(&tmp, content).map_err(|err| format!("写入待下载清单失败：{err}"))?;
         std::fs::rename(&tmp, &path).map_err(|err| format!("写入待下载清单失败：{err}"))?;
@@ -285,7 +298,7 @@ pub(crate) fn collection_pending_list(
 ) -> Result<Vec<CollectionPending>, String> {
     let map = read_map(&app)?;
     let mut entries: Vec<CollectionPending> = map.into_values().collect();
-    entries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.updated_at));
     Ok(entries)
 }
 
@@ -325,10 +338,7 @@ pub(crate) fn collection_pending_update_item(
 }
 
 #[tauri::command]
-pub(crate) fn collection_pending_remove(
-    app: tauri::AppHandle,
-    id: String,
-) -> Result<(), String> {
+pub(crate) fn collection_pending_remove(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let mut map = read_map(&app)?;
     map.remove(&id);
     write_map(&app, &map)?;

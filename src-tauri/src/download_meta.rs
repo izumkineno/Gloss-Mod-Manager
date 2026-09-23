@@ -56,8 +56,10 @@ fn write_map(
     use fs2::FileExt;
     let path = meta_file_path(app)?;
     let lock_path = path.with_extension("lock");
+    // 锁文件仅用于 fs2 排他锁，内容无关：存在即复用，不截断。
     let lock_file = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .open(&lock_path)
         .map_err(|err| format!("获取下载元信息锁失败：{err}"))?;
@@ -83,7 +85,10 @@ pub(crate) fn dl_meta_list(
 ) -> Result<HashMap<String, serde_json::Value>, String> {
     let map = read_map(&app)?;
     let total = map.len();
-    let missing = map.iter().filter(|(_, v)| meta_display_name(v) == "-").count();
+    let missing = map
+        .iter()
+        .filter(|(_, v)| meta_display_name(v) == "-")
+        .count();
     if missing > 0 {
         tracing::warn!(target: "gmm::meta", "[uuid-trace] dl_meta_list total={} missing_name={} — 存在无名 meta（会回退为 gid/uuid 展示）", total, missing);
         for (gid, v) in map.iter().filter(|(_, v)| meta_display_name(v) == "-") {
@@ -108,7 +113,10 @@ pub(crate) fn dl_meta_save(
         return Ok(());
     }
     let incoming = map.len();
-    let incoming_missing = map.iter().filter(|(_, v)| meta_display_name(v) == "-").count();
+    let incoming_missing = map
+        .iter()
+        .filter(|(_, v)| meta_display_name(v) == "-")
+        .count();
     if incoming_missing > 0 {
         tracing::warn!(target: "gmm::meta", "[uuid-trace] dl_meta_save incoming={} missing_name={} — 入参已含无名条目，会直接产生 uuid 展示", incoming, incoming_missing);
         for (gid, v) in map.iter().filter(|(_, v)| meta_display_name(v) == "-") {
@@ -138,9 +146,20 @@ pub(crate) fn dl_meta_put(
     meta: serde_json::Value,
 ) -> Result<(), String> {
     let name = meta_display_name(&meta);
-    let src = meta.get("sourceType").and_then(|v| v.as_str()).unwrap_or("-");
-    let has_file = meta.get("fileName").and_then(|v| v.as_str()).map(|s| !s.trim().is_empty()).unwrap_or(false);
-    let has_res = meta.get("resourceName").and_then(|v| v.as_str()).map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let src = meta
+        .get("sourceType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let has_file = meta
+        .get("fileName")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let has_res = meta
+        .get("resourceName")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
     if name == "-" {
         tracing::warn!(target: "gmm::meta", "[uuid-trace] dl_meta_put gid={} sourceType={} fileName_empty={} resourceName_empty={} — 无名写入，前端将回退 gid/uuid！ meta={}", gid, src, !has_file, !has_res, meta);
     } else {

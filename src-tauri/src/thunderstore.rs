@@ -114,10 +114,7 @@ async fn fetch_upstream_list(community: &str) -> Result<serde_json::Value, Strin
         .map_err(|err| format!("请求 Thunderstore 列表失败：{err}"))?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "获取 Thunderstore 列表失败：{}",
-            response.status()
-        ));
+        return Err(format!("获取 Thunderstore 列表失败：{}", response.status()));
     }
 
     response
@@ -136,10 +133,7 @@ async fn cached_payload(
         if let Ok(cache) = state.list_cache.lock() {
             if let Some(entry) = cache.get(community) {
                 if entry.fetched_at.elapsed() < CACHE_TTL {
-                    return Ok((
-                        entry.payload.clone(),
-                        entry.fetched_at.elapsed().as_secs(),
-                    ));
+                    return Ok((entry.payload.clone(), entry.fetched_at.elapsed().as_secs()));
                 }
             }
         }
@@ -177,10 +171,7 @@ fn i64_of(value: &serde_json::Value, key: &str) -> i64 {
 }
 
 fn bool_of(value: &serde_json::Value, key: &str) -> bool {
-    value
-        .get(key)
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
+    value.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
 /// 上游包归一化为前端卡片（与前端 normalizeThunderstoreMod 对齐）。
@@ -191,13 +182,11 @@ fn bool_of(value: &serde_json::Value, key: &str) -> bool {
 fn normalize_item(item: &serde_json::Value) -> Option<ThunderstoreModItem> {
     let owner = str_of(item, "owner").if_empty_then(&str_of(item, "namespace"));
     let name = str_of(item, "name");
-    let uuid = str_of(item, "uuid4").if_empty_then(
-        &format!(
-            "{}-{}",
-            if owner.is_empty() { "unknown" } else { &owner },
-            if name.is_empty() { "unknown" } else { &name },
-        ),
-    );
+    let uuid = str_of(item, "uuid4").if_empty_then(&format!(
+        "{}-{}",
+        if owner.is_empty() { "unknown" } else { &owner },
+        if name.is_empty() { "unknown" } else { &name },
+    ));
     if name.is_empty() {
         return None;
     }
@@ -234,7 +223,11 @@ fn normalize_item(item: &serde_json::Value) -> Option<ThunderstoreModItem> {
     route_query.insert("name".to_string(), name.clone());
 
     let full_name = str_of(item, "full_name");
-    let title = if full_name.is_empty() { name.clone() } else { full_name };
+    let title = if full_name.is_empty() {
+        name.clone()
+    } else {
+        full_name
+    };
     let categories: Vec<String> = item
         .get("categories")
         .and_then(|v| v.as_array())
@@ -356,7 +349,7 @@ pub(crate) async fn thunderstore_list(
     // 排序（与前端 sortThirdPartyListItems 语义对齐：downloads/updatedAt/createdAt）。
     match params.sort.as_deref().unwrap_or("default") {
         "createdAt" => items.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
-        "downloads" | "default" => items.sort_by(|a, b| b.downloads.cmp(&a.downloads)),
+        "downloads" | "default" => items.sort_by_key(|item| std::cmp::Reverse(item.downloads)),
         _ => items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
     }
 
@@ -457,9 +450,8 @@ pub(crate) async fn thunderstore_detail(
     }
 
     let client = thunderstore_client()?;
-    let detail_url = format!(
-        "https://thunderstore.io/api/experimental/package/{namespace}/{name}/"
-    );
+    let detail_url =
+        format!("https://thunderstore.io/api/experimental/package/{namespace}/{name}/");
     let detail: serde_json::Value = client
         .get(&detail_url)
         .header("Accept", "application/json")
@@ -477,9 +469,7 @@ pub(crate) async fn thunderstore_detail(
     let mut merged = detail.clone();
 
     // latest 缺失时补拉版本接口。
-    let latest_missing = merged
-        .get("latest")
-        .is_none_or(|v| v.is_null());
+    let latest_missing = merged.get("latest").is_none_or(|v| v.is_null());
     if latest_missing {
         if let Some(first) = merged
             .get("versions")

@@ -24,7 +24,9 @@ pub struct ImportSource {
 }
 
 /// 导入元数据：对齐前端 importMetadata（buildImportedMod 所需字段子集）。
+/// 部分字段当前后端未读但属前端传入 API 形状，保留反序列化兼容。
 #[derive(Debug, Clone, Default, Deserialize)]
+#[allow(dead_code)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportMetadata {
     pub mod_name: Option<String>,
@@ -108,7 +110,9 @@ pub struct ImportTaskResult {
 }
 
 /// 对账请求：download_meta 全表（gid→meta 片段）+ 本地 mod.json 全表一次传入，后端算 diff。
+/// 部分字段当前后端未读但属前端传入 API 形状，保留反序列化兼容。
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportSyncEntry {
     pub gid: String,
@@ -170,14 +174,26 @@ async fn extract_archive_native(
     if output.status.code() != Some(0) {
         let detail = format!("{stderr}\n{stdout}").to_lowercase();
         // 错误分类对齐前端 getArchiveImportErrorMessage。
-        if detail.contains("cannot open the file as archive") || detail.contains("can not open the file as archive") {
+        if detail.contains("cannot open the file as archive")
+            || detail.contains("can not open the file as archive")
+        {
             return Err("下载文件不是有效压缩包，可能下载源返回了网页/错误内容，或文件已损坏。请删除该下载任务和文件后重新下载；如果仍失败，请在浏览器手动下载正确压缩包后导入。".to_string());
         }
         if detail.contains("wrong password") || detail.contains("encrypt") {
-            return Err("压缩包已加密或需要密码，无法自动导入。请先手动解压，再以文件夹方式导入。".to_string());
+            return Err(
+                "压缩包已加密或需要密码，无法自动导入。请先手动解压，再以文件夹方式导入。"
+                    .to_string(),
+            );
         }
         tracing::warn!(target: "backend", "[导入] 解压失败：archive={} 耗时={:?} code={:?} stderr={} stdout={}", archive, started.elapsed(), output.status.code(), stderr.chars().take(500).collect::<String>(), stdout.chars().take(300).collect::<String>());
-        return Err(format!("解压压缩包失败：{}", stderr.lines().next().filter(|l| !l.is_empty()).unwrap_or("未知错误")));
+        return Err(format!(
+            "解压压缩包失败：{}",
+            stderr
+                .lines()
+                .next()
+                .filter(|l| !l.is_empty())
+                .unwrap_or("未知错误")
+        ));
     }
     tracing::info!(target: "backend", "[导入] 解压完成：archive={} 耗时={:?}", archive, started.elapsed());
     Ok(())
@@ -186,7 +202,11 @@ async fn extract_archive_native(
 /// 路径穿越校验：对齐前端 SevenZip.assertSafeEntryPaths（绝对路径/.. 段拒绝）。
 fn assert_safe_rel(rel: &str) -> Result<(), String> {
     let normalized = rel.replace('\\', "/");
-    if normalized.starts_with('/') || (normalized.len() >= 2 && normalized.as_bytes()[1] == b':' && normalized.as_bytes()[0].is_ascii_alphabetic()) {
+    if normalized.starts_with('/')
+        || (normalized.len() >= 2
+            && normalized.as_bytes()[1] == b':'
+            && normalized.as_bytes()[0].is_ascii_alphabetic())
+    {
         return Err(format!("压缩包内存在绝对路径条目，已阻止解压：{rel}"));
     }
     if normalized.split('/').any(|seg| seg == "..") {
@@ -237,7 +257,12 @@ fn next_mod_id(manager_root: &Path) -> Result<i64, String> {
     let mods = read_mod_list(manager_root)?;
     let max_id = mods
         .iter()
-        .filter_map(|m| m.get("id").and_then(|v| v.as_i64().or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))))
+        .filter_map(|m| {
+            m.get("id").and_then(|v| {
+                v.as_i64()
+                    .or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))
+            })
+        })
         .max()
         .unwrap_or(0);
     Ok(max_id + 1)
@@ -252,7 +277,8 @@ fn read_mod_list(manager_root: &Path) -> Result<Vec<serde_json::Value>, String> 
     if !path.is_file() {
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(&path).map_err(|err| format!("读取 mod.json 失败：{err}"))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|err| format!("读取 mod.json 失败：{err}"))?;
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -270,10 +296,6 @@ fn write_mod_list(manager_root: &Path, mods: &[serde_json::Value]) -> Result<(),
     std::fs::write(&tmp, text).map_err(|err| format!("写 mod.json 临时文件失败：{err}"))?;
     std::fs::rename(&tmp, &path).map_err(|err| format!("mod.json 原子替换失败：{err}"))?;
     Ok(())
-}
-
-fn json_str(value: Option<&serde_json::Value>) -> Option<String> {
-    value.and_then(|v| v.as_str().map(|s| s.to_string()))
 }
 
 /// 下一 weight：现有最大 weight + 1（对齐前端 managerModList.length + 1 语义，覆盖时沿用原 weight）。
@@ -303,7 +325,13 @@ pub async fn mod_import_prepare(
     let target_dir = root.join(mod_id.to_string());
     // 暂存目录：覆盖走 .gmm-import-<id>-<ts>（对齐前端），否则直写目标目录。
     let staging_dir = if overwrite_mod_id.is_some() {
-        root.join(format!(".gmm-import-{mod_id}-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)))
+        root.join(format!(
+            ".gmm-import-{mod_id}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        ))
     } else {
         target_dir.clone()
     };
@@ -315,12 +343,15 @@ pub async fn mod_import_prepare(
         let source = source.clone();
         move || {
             if staging_dir.exists() {
-                std::fs::remove_dir_all(&staging_dir).map_err(|err| format!("清理临时导入目录失败：{err}"))?;
+                std::fs::remove_dir_all(&staging_dir)
+                    .map_err(|err| format!("清理临时导入目录失败：{err}"))?;
             }
-            std::fs::create_dir_all(&staging_dir).map_err(|err| format!("创建导入目录失败：{err}"))?;
+            std::fs::create_dir_all(&staging_dir)
+                .map_err(|err| format!("创建导入目录失败：{err}"))?;
             match source.source_type.as_str() {
                 "folder" => {
-                    let copied = crate::fsops::copy_dir_sync(&source.path, &staging_dir.to_string_lossy())?;
+                    let copied =
+                        crate::fsops::copy_dir_sync(&source.path, &staging_dir.to_string_lossy())?;
                     tracing::info!(target: "backend", "[导入] 文件夹复制完成：files={}", copied);
                 }
                 "archive" => {}
@@ -332,7 +363,8 @@ pub async fn mod_import_prepare(
                             .unwrap_or_else(|| "file".to_string())
                     });
                     let dst = staging_dir.join(&name);
-                    std::fs::copy(&source.path, &dst).map_err(|err| format!("复制文件失败：{err}"))?;
+                    std::fs::copy(&source.path, &dst)
+                        .map_err(|err| format!("复制文件失败：{err}"))?;
                 }
             }
             Ok::<(), String>(())
@@ -344,7 +376,7 @@ pub async fn mod_import_prepare(
         extract_archive_native(&app, &source.path, &staging_dir.to_string_lossy()).await?;
     }
     let prepare_result = tauri::async_runtime::spawn_blocking(move || {
-        let mut files = walk_relative_files(&staging_dir)?;
+        let files = walk_relative_files(&staging_dir)?;
         // 解压包穿越校验：清单级复查（7z 已解压但仍需确认无穿越写入）。
         for rel in &files {
             assert_safe_rel(rel)?;
@@ -372,9 +404,21 @@ pub async fn mod_import_prepare(
 }
 
 /// 组装 mod.json 条目（字段对齐前端 normalizeMod/buildImportedMod），纯函数供单/批量复用。
-fn build_mod_entry(mod_id: i64, weight: i64, metadata: &ImportMetadata, files: &[String], target: &Path) -> serde_json::Value {
-    let mod_name = metadata.mod_name.clone().unwrap_or_else(|| format!("Mod {mod_id}"));
-    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+fn build_mod_entry(
+    mod_id: i64,
+    weight: i64,
+    metadata: &ImportMetadata,
+    files: &[String],
+    target: &Path,
+) -> serde_json::Value {
+    let mod_name = metadata
+        .mod_name
+        .clone()
+        .unwrap_or_else(|| format!("Mod {mod_id}"));
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     serde_json::json!({
         "id": mod_id,
         "modName": mod_name,
@@ -501,10 +545,28 @@ fn pick_cover(cover: &Option<String>, files: &[String], target: &Path) -> Option
             return Some(c.clone());
         }
     }
-    let lower: Vec<(String, String)> = files.iter().map(|f| (f.clone(), f.to_lowercase())).collect();
-    let hit = lower.iter().find(|(_, n)| ["image", "cover", "logo", "icon"].iter().any(|k| n.contains(k))).map(|(o, _)| o.clone()).or_else(|| {
-        lower.iter().find(|(_, n)| [".jpg", ".png", ".jpeg", ".webp"].iter().any(|e| n.ends_with(e))).map(|(o, _)| o.clone())
-    });
+    let lower: Vec<(String, String)> = files
+        .iter()
+        .map(|f| (f.clone(), f.to_lowercase()))
+        .collect();
+    let hit = lower
+        .iter()
+        .find(|(_, n)| {
+            ["image", "cover", "logo", "icon"]
+                .iter()
+                .any(|k| n.contains(k))
+        })
+        .map(|(o, _)| o.clone())
+        .or_else(|| {
+            lower
+                .iter()
+                .find(|(_, n)| {
+                    [".jpg", ".png", ".jpeg", ".webp"]
+                        .iter()
+                        .any(|e| n.ends_with(e))
+                })
+                .map(|(o, _)| o.clone())
+        });
     hit.map(|rel| target.join(&rel).to_string_lossy().into_owned())
 }
 
@@ -519,7 +581,11 @@ pub async fn mod_import_task(
     let prepared = mod_import_prepare(
         app,
         req.manager_root.clone(),
-        ImportSource { path: req.file_path.clone(), source_type: req.source_type.clone(), file_name: req.metadata.file_name.clone() },
+        ImportSource {
+            path: req.file_path.clone(),
+            source_type: req.source_type.clone(),
+            file_name: req.metadata.file_name.clone(),
+        },
         req.overwrite_mod_id,
     )
     .await?;
@@ -593,30 +659,6 @@ pub struct ModTypeRule {
 }
 
 /// 按规则匹配 modType（对齐前端 detectModType：inPath/basename/扩展名三路）。
-/// 调试版：返回 (type_id, 命中的规则下标, 命中的文件)，日志用。
-fn detect_mod_type_debug(files: &[String], rules: &[ModTypeRule]) -> (i64, Option<usize>, Option<String>) {
-    for (index, rule) in rules.iter().enumerate() {
-        let hit_file = files.iter().find(|file| {
-            let norm = file.replace('\\', "/").to_lowercase();
-            rule.keyword.iter().any(|keyword| {
-                let key = keyword.to_lowercase();
-                match rule.use_function.as_str() {
-                    "inPath" => norm.contains(&key),
-                    "basename" => norm.rsplit('/').next().unwrap_or(&norm) == key,
-                    _ => {
-                        let ext = norm.rsplit('.').next().unwrap_or("");
-                        ext == key || format!(".{ext}") == format!(".{key}")
-                    }
-                }
-            })
-        });
-        if let Some(file) = hit_file {
-            return (rule.type_id.unwrap_or(99), Some(index), Some(file.clone()));
-        }
-    }
-    (99, None, None)
-}
-/// 按规则匹配 modType（对齐前端 detectModType：inPath/basename/扩展名三路）。
 fn detect_mod_type(files: &[String], rules: &[ModTypeRule]) -> i64 {
     for rule in rules {
         let hit = files.iter().any(|file| {
@@ -674,6 +716,9 @@ fn builtin_mod_type(game_id: &str, files: &[String]) -> Option<i64> {
     }
     if archive {
         return Some(2);
+    }
+    if lua {
+        return Some(3);
     }
     Some(5)
 }
@@ -750,7 +795,11 @@ async fn import_one_batch_item(
     let root = PathBuf::from(manager_root);
     let target = root.join(mod_id.to_string());
     let staging = root.join(format!(".gmm-batch-{mod_id}"));
-    let source = ImportSource { path: item.file_path.clone(), source_type: item.source_type.clone(), file_name: item.metadata.file_name.clone() };
+    let source = ImportSource {
+        path: item.file_path.clone(),
+        source_type: item.source_type.clone(),
+        file_name: item.metadata.file_name.clone(),
+    };
     // 清暂存 + 物化（blocking 做文件 IO；解压 async 在外）。
     let staging_path = staging.clone();
     let staging_str = staging.to_string_lossy().into_owned();
@@ -758,7 +807,8 @@ async fn import_one_batch_item(
     let source2 = source.clone();
     tauri::async_runtime::spawn_blocking(move || {
         if staging_path.exists() {
-            std::fs::remove_dir_all(&staging_path).map_err(|e| format!("清理临时导入目录失败：{e}"))?;
+            std::fs::remove_dir_all(&staging_path)
+                .map_err(|e| format!("清理临时导入目录失败：{e}"))?;
         }
         std::fs::create_dir_all(&staging_path).map_err(|e| format!("创建导入目录失败：{e}"))?;
         match source2.source_type.as_str() {
@@ -768,9 +818,13 @@ async fn import_one_batch_item(
             "archive" => {}
             _ => {
                 let name = source2.file_name.clone().unwrap_or_else(|| {
-                    Path::new(&source2.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".to_string())
+                    Path::new(&source2.path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "file".to_string())
                 });
-                std::fs::copy(&source2.path, staging_path.join(&name)).map_err(|e| format!("复制文件失败：{e}"))?;
+                std::fs::copy(&source2.path, staging_path.join(&name))
+                    .map_err(|e| format!("复制文件失败：{e}"))?;
             }
         }
         Ok::<(), String>(())
@@ -779,14 +833,21 @@ async fn import_one_batch_item(
     .map_err(|e| err(format!("导入准备失败：{e}")))
     .and_then(|r| r.map_err(err))?;
     if source.source_type == "archive" {
-        extract_archive_native(app, &source.path, &staging_str).await.map_err(err)?;
+        extract_archive_native(app, &source.path, &staging_str)
+            .await
+            .map_err(err)?;
     }
     let item_owned = item.clone();
     let rules_owned = type_rules.to_vec();
-    let game_id_owned = item.metadata.game_id.clone().map(|v| v.to_string()).unwrap_or_default();
+    let game_id_owned = item
+        .metadata
+        .game_id
+        .clone()
+        .map(|v| v.to_string())
+        .unwrap_or_default();
     let (files, entry) = tauri::async_runtime::spawn_blocking(move || {
         let staging = PathBuf::from(&staging_str2);
-        let mut files = walk_relative_files(&staging)?;
+        let files = walk_relative_files(&staging)?;
         for rel in &files {
             assert_safe_rel(rel)?;
         }
@@ -846,9 +907,17 @@ pub async fn mod_import_batch(
         let items = req.items.clone();
         move || {
             let mods = read_mod_list(&root)?;
-            let max_id = mods.iter().filter_map(|m| m.get("id").and_then(|v| v.as_i64().or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok())))).max().unwrap_or(0);
+            let max_id = mods
+                .iter()
+                .filter_map(|m| {
+                    m.get("id").and_then(|v| {
+                        v.as_i64()
+                            .or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))
+                    })
+                })
+                .max()
+                .unwrap_or(0);
             let mut skipped: Vec<ImportBatchItemResult> = Vec::new();
-            let mut live = 0usize;
             for item in &items {
                 let dup_req = ImportDuplicatesRequest {
                     manager_root: String::new(),
@@ -858,22 +927,39 @@ pub async fn mod_import_batch(
                     file_name: item.metadata.file_name.clone(),
                     mod_title: item.metadata.mod_name.clone(),
                 };
-                let hit = mods.iter().filter_map(|m| {
-                    let (score, _) = local_mod_match_score(m, &dup_req);
-                    if score >= 100 { m.get("id").and_then(|v| v.as_i64()) } else { None }
-                }).next();
-                if hit.is_some() {
-                    skipped.push(ImportBatchItemResult { gid: item.gid.clone(), ok: true, mod_id: hit, file_count: Some(0), error: Some("skipped".to_string()) });
-                } else {
-                    live += 1;
+                let hit = mods
+                    .iter()
+                    .filter_map(|m| {
+                        let (score, _) = local_mod_match_score(m, &dup_req);
+                        if score >= 100 {
+                            m.get("id").and_then(|v| v.as_i64())
+                        } else {
+                            None
+                        }
+                    })
+                    .next();
+                if let Some(hit) = hit {
+                    skipped.push(ImportBatchItemResult {
+                        gid: item.gid.clone(),
+                        ok: true,
+                        mod_id: Some(hit),
+                        file_count: Some(0),
+                        error: Some("skipped".to_string()),
+                    });
                 }
             }
-            Ok::<(Vec<ImportBatchItemResult>, i64, i64), String>((skipped, max_id + 1, next_weight(&mods)))
+            Ok::<(Vec<ImportBatchItemResult>, i64, i64), String>((
+                skipped,
+                max_id + 1,
+                next_weight(&mods),
+            ))
         }
     })
     .await
     .map_err(|err| format!("批量导入准备失败：{err}"))??;
-    let limit = std::thread::available_parallelism().map(|n| (n.get() / 2).clamp(2, 8)).unwrap_or(4);
+    let limit = std::thread::available_parallelism()
+        .map(|n| (n.get() / 2).clamp(2, 8))
+        .unwrap_or(4);
     let sem = Arc::new(Semaphore::new(limit));
     tracing::info!(target: "backend", "[导入] 批量开始：n={} 跳过={} base_id={} 并发={} 规则数={} 首规则={:?}", req.items.len(), skipped.len(), base_id, limit, req.type_rules.len(), req.type_rules.first());
     // 首项 metadata 回显：确认 gameID/modType/tags 进没进后端（前端漏传在此现形）。
@@ -882,7 +968,8 @@ pub async fn mod_import_batch(
     }
     // 函数式规则（赛博朋克等）前端传不过来：规则为空时按游戏 ID 回退内置识别。
     let mut results: Vec<ImportBatchItemResult> = skipped;
-    let skipped_gids: std::collections::HashSet<String> = results.iter().map(|r| r.gid.clone()).collect();
+    let skipped_gids: std::collections::HashSet<String> =
+        results.iter().map(|r| r.gid.clone()).collect();
     let mut live_index = 0usize;
     let type_rules = req.type_rules.clone();
     let mut handles = Vec::new();
@@ -899,7 +986,10 @@ pub async fn mod_import_batch(
         live_index += 1;
         handles.push(tauri::async_runtime::spawn(async move {
             let gid = item.gid.clone();
-            let _permit = sem.acquire_owned().await.map_err(|e| format!("批量导入信号量已关闭：{e}"))?;
+            let _permit = sem
+                .acquire_owned()
+                .await
+                .map_err(|e| format!("批量导入信号量已关闭：{e}"))?;
             match import_one_batch_item(&app, &manager_root, mod_id, weight, &item, &rules).await {
                 Ok((file_count, entry)) => Ok((gid, mod_id, file_count, entry)),
                 Err((_, msg)) => Err(format!("{gid}|||{msg}")),
@@ -909,19 +999,40 @@ pub async fn mod_import_batch(
     // 收敛：成功项一次合并写 mod.json（单次读-改-写，无丢失更新）。
     let mut ok_entries: Vec<(String, i64, usize, serde_json::Value)> = Vec::new();
     for handle in handles {
-        match handle.await.map_err(|err| format!("批量导入任务 panic：{err}"))? {
+        match handle
+            .await
+            .map_err(|err| format!("批量导入任务 panic：{err}"))?
+        {
             Ok((gid, mod_id, file_count, entry)) => {
                 ok_entries.push((gid.clone(), mod_id, file_count, entry));
-                results.push(ImportBatchItemResult { gid, ok: true, mod_id: Some(mod_id), file_count: Some(file_count), error: None });
+                results.push(ImportBatchItemResult {
+                    gid,
+                    ok: true,
+                    mod_id: Some(mod_id),
+                    file_count: Some(file_count),
+                    error: None,
+                });
             }
             Err(combined) => {
-                let (gid, msg) = combined.split_once("|||").map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or_else(|| (String::new(), combined));
-                results.push(ImportBatchItemResult { gid, ok: false, mod_id: None, file_count: None, error: Some(msg) });
+                let (gid, msg) = combined
+                    .split_once("|||")
+                    .map(|(a, b)| (a.to_string(), b.to_string()))
+                    .unwrap_or_else(|| (String::new(), combined));
+                results.push(ImportBatchItemResult {
+                    gid,
+                    ok: false,
+                    mod_id: None,
+                    file_count: None,
+                    error: Some(msg),
+                });
             }
         }
     }
     if !ok_entries.is_empty() {
-        let entries = ok_entries.iter().map(|(_, _, _, e)| e.clone()).collect::<Vec<_>>();
+        let entries = ok_entries
+            .iter()
+            .map(|(_, _, _, e)| e.clone())
+            .collect::<Vec<_>>();
         let root2 = root.clone();
         tauri::async_runtime::spawn_blocking(move || {
             let mut mods = read_mod_list(&root2)?;
@@ -953,17 +1064,16 @@ fn identity_hit(mods: &[serde_json::Value], req: &ImportSyncEntry) -> Option<i64
         return None;
     }
     for m in mods {
-        let id = m.get("id").and_then(|v| v.as_i64().or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok())));
-        let candidates: Vec<String> = [
-            m.get("webId"),
-            m.get("externalId"),
-            m.get("modId"),
-        ]
-        .into_iter()
-        .flatten()
-        .map(json_val_to_key)
-        .filter(|s| !s.is_empty())
-        .collect();
+        let id = m.get("id").and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))
+        });
+        let candidates: Vec<String> = [m.get("webId"), m.get("externalId"), m.get("modId")]
+            .into_iter()
+            .flatten()
+            .map(json_val_to_key)
+            .filter(|s| !s.is_empty())
+            .collect();
         if candidates.iter().any(|c| want.iter().any(|w| c == w)) {
             return id;
         }
@@ -997,18 +1107,31 @@ pub async fn mod_import_sync_status(req: ImportSyncRequest) -> Result<ImportSync
         let mods = read_mod_list(&root)?;
         let local_ids: std::collections::HashSet<i64> = mods
             .iter()
-            .filter_map(|m| m.get("id").and_then(|v| v.as_i64().or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))))
+            .filter_map(|m| {
+                m.get("id").and_then(|v| {
+                    v.as_i64()
+                        .or_else(|| v.as_u64().and_then(|u| i64::try_from(u).ok()))
+                })
+            })
             .collect();
         let mut changes = Vec::new();
         for entry in &req.entries {
             match entry.local_mod_id {
                 Some(id) if local_ids.contains(&id) => {}
                 Some(_) => {
-                    changes.push(ImportSyncChange { gid: entry.gid.clone(), action: "to-unimported".to_string(), hit_mod_id: None });
+                    changes.push(ImportSyncChange {
+                        gid: entry.gid.clone(),
+                        action: "to-unimported".to_string(),
+                        hit_mod_id: None,
+                    });
                 }
                 None => {
                     if let Some(hit) = identity_hit(&mods, entry) {
-                        changes.push(ImportSyncChange { gid: entry.gid.clone(), action: "to-imported".to_string(), hit_mod_id: Some(hit) });
+                        changes.push(ImportSyncChange {
+                            gid: entry.gid.clone(),
+                            action: "to-imported".to_string(),
+                            hit_mod_id: Some(hit),
+                        });
                     }
                 }
             }
@@ -1052,7 +1175,12 @@ pub struct ImportDuplicateMatch {
 }
 
 fn normalize_compare_text(value: &str) -> String {
-    value.trim().to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+    value
+        .trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn is_same_id(left: &serde_json::Value, right: &serde_json::Value) -> bool {
@@ -1062,7 +1190,10 @@ fn is_same_id(left: &serde_json::Value, right: &serde_json::Value) -> bool {
 }
 
 /// 本地 mod 打分：逐字对齐前端 getLocalModMatchScore（100 同源/60 文件名/40 标题）。
-fn local_mod_match_score(mod_data: &serde_json::Value, req: &ImportDuplicatesRequest) -> (i64, String) {
+fn local_mod_match_score(
+    mod_data: &serde_json::Value,
+    req: &ImportDuplicatesRequest,
+) -> (i64, String) {
     let file_name = normalize_compare_text(req.file_name.as_deref().unwrap_or(""));
     let title = normalize_compare_text(req.mod_title.as_deref().unwrap_or(""));
     let source_type = req.source_type.as_deref().map(str::trim).unwrap_or("");
@@ -1105,7 +1236,9 @@ fn local_mod_match_score(mod_data: &serde_json::Value, req: &ImportDuplicatesReq
 
 /// 判重查询：读 mod.json 打分排序，前端弹窗用。日志记候选数与耗时。
 #[tauri::command]
-pub async fn mod_import_duplicates(req: ImportDuplicatesRequest) -> Result<Vec<ImportDuplicateMatch>, String> {
+pub async fn mod_import_duplicates(
+    req: ImportDuplicatesRequest,
+) -> Result<Vec<ImportDuplicateMatch>, String> {
     let started = Instant::now();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let root = PathBuf::from(&req.manager_root);
@@ -1115,13 +1248,17 @@ pub async fn mod_import_duplicates(req: ImportDuplicatesRequest) -> Result<Vec<I
             .filter_map(|m| {
                 let (score, reason) = local_mod_match_score(&m, &req);
                 if score > 0 {
-                    Some(ImportDuplicateMatch { mod_data: m, reason, score })
+                    Some(ImportDuplicateMatch {
+                        mod_data: m,
+                        reason,
+                        score,
+                    })
                 } else {
                     None
                 }
             })
             .collect();
-        hits.sort_by(|a, b| b.score.cmp(&a.score));
+        hits.sort_by_key(|hit| std::cmp::Reverse(hit.score));
         Ok::<Vec<ImportDuplicateMatch>, String>(hits)
     })
     .await

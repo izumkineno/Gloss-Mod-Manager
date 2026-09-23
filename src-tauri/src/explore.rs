@@ -205,17 +205,16 @@ fn build_status_map(
         if mod_id.is_empty() || mod_id == "null" {
             continue;
         }
-        let resources = item
-            .get("mods_resource")
-            .and_then(|value| value.as_array());
+        let resources = item.get("mods_resource").and_then(|value| value.as_array());
         let latest = resources.and_then(|list| {
-            list.iter().find(|resource| {
-                resource
-                    .get("mods_resource_latest_version")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-            })
-            .or_else(|| list.first())
+            list.iter()
+                .find(|resource| {
+                    resource
+                        .get("mods_resource_latest_version")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false)
+                })
+                .or_else(|| list.first())
         });
         let Some(latest) = latest else {
             status_map.insert(
@@ -258,18 +257,15 @@ fn build_status_map(
         }
 
         // 任务判重：url 优先，文件名次之。
-        let matched = url_index
-            .get(&url)
-            .cloned()
-            .or_else(|| {
-                let name = file_name_of_url(&url);
-                let normalized = normalize_compare(&name);
-                if normalized.is_empty() {
-                    None
-                } else {
-                    name_index.get(&normalized).cloned()
-                }
-            });
+        let matched = url_index.get(&url).cloned().or_else(|| {
+            let name = file_name_of_url(&url);
+            let normalized = normalize_compare(&name);
+            if normalized.is_empty() {
+                None
+            } else {
+                name_index.get(&normalized).cloned()
+            }
+        });
 
         let entry = if let Some((gid, task_status, progress)) = matched {
             ExploreItemStatus {
@@ -309,7 +305,14 @@ fn build_status_map(
 
 fn is_cloud_drive_url(url: &str) -> bool {
     let lower = url.to_lowercase();
-    ["pan.baidu.com", "alipan.com", "aliyundrive.com", "cloud.189.cn", "pan.xunlei.com", "lanzou"]
-        .iter()
-        .any(|domain| lower.contains(domain))
+    [
+        "pan.baidu.com",
+        "alipan.com",
+        "aliyundrive.com",
+        "cloud.189.cn",
+        "pan.xunlei.com",
+        "lanzou",
+    ]
+    .iter()
+    .any(|domain| lower.contains(domain))
 }

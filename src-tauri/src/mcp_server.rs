@@ -549,9 +549,7 @@ fn write_unauthorized_response(
     write_json_response(
         stream,
         401,
-        Some(
-            json!({ "error": "MCP 请求未通过鉴权，请携带正确的访问令牌。" }).to_string(),
-        ),
+        Some(json!({ "error": "MCP 请求未通过鉴权，请携带正确的访问令牌。" }).to_string()),
         allowed_origin,
     )
 }
@@ -685,7 +683,7 @@ Connection: close\r\n\
 Content-Length: {}\r\n",
         status_code,
         status_text(status_code),
-        body_string.as_bytes().len(),
+        body_string.len(),
     );
 
     // 只回显已通过 is_allowed_origin 校验的来源，不使用通配符：

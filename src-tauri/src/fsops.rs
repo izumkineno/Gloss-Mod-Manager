@@ -217,7 +217,7 @@ fn run_batch(app: &tauri::AppHandle, req: InstallBatch) -> Result<Vec<FileState>
                 tracing::warn!(target: "backend", "[安装] 慢项：file={} op={} 耗时={:?}", item.file, item.op, elapsed);
             }
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-            if n == total || n % 20 == 0 {
+            if n == total || n.is_multiple_of(20) {
                 let _ = app.emit(
                     "mod-install-progress",
                     InstallProgress {
@@ -266,9 +266,9 @@ fn check_scope(path: &str, roots: &[String]) -> Result<(), String> {
     if normalized.is_empty() {
         return Err(format!("路径越界：{path}"));
     }
-    let scoped = roots
-        .iter()
-        .any(|root| !root.is_empty() && (normalized == *root || normalized.starts_with(&format!("{root}/"))));
+    let scoped = roots.iter().any(|root| {
+        !root.is_empty() && (normalized == *root || normalized.starts_with(&format!("{root}/")))
+    });
     if scoped {
         Ok(())
     } else {
@@ -396,7 +396,12 @@ fn copy_dir_or_file(src: &Path, dst: &Path, src_is_dir: bool, backup: &str) -> R
             src: src.to_string_lossy().into_owned(),
             dst: dst.to_string_lossy().into_owned(),
             op: "copy".to_string(),
-            backup: if backup == "gmmback" { "gmmback" } else { "none" }.to_string(),
+            backup: if backup == "gmmback" {
+                "gmmback"
+            } else {
+                "none"
+            }
+            .to_string(),
             content: None,
         });
     }
@@ -407,7 +412,10 @@ fn copy_dir_or_file(src: &Path, dst: &Path, src_is_dir: bool, backup: &str) -> R
         if entry.depth() == 0 {
             continue;
         }
-        let rel = entry.path().strip_prefix(src).map_err(|error| format!("复制文件失败：{error}"))?;
+        let rel = entry
+            .path()
+            .strip_prefix(src)
+            .map_err(|error| format!("复制文件失败：{error}"))?;
         let target = dst.join(rel);
         if entry.file_type().is_dir() {
             std::fs::create_dir_all(&target).map_err(|error| format!("复制文件失败：{error}"))?;
@@ -416,7 +424,8 @@ fn copy_dir_or_file(src: &Path, dst: &Path, src_is_dir: bool, backup: &str) -> R
                 let back = PathBuf::from(format!("{}.gmmback", target.to_string_lossy()));
                 std::fs::copy(&target, &back).map_err(|error| format!("复制文件失败：{error}"))?;
             }
-            std::fs::copy(entry.path(), &target).map_err(|error| format!("复制文件失败：{error}"))?;
+            std::fs::copy(entry.path(), &target)
+                .map_err(|error| format!("复制文件失败：{error}"))?;
         }
     }
     Ok(())
@@ -488,7 +497,9 @@ fn copy_dir_native(src: &str, dst: &str) -> Result<u64, String> {
     let dst_path = PathBuf::from(dst);
     // 先同步建好全部目录，再并行拷文件（避免 rayon 内 create_dir_all 竞争）
     let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let walker = walkdir::WalkDir::new(&src_path).follow_links(false).into_iter();
+    let walker = walkdir::WalkDir::new(&src_path)
+        .follow_links(false)
+        .into_iter();
     for entry in walker {
         let entry = entry.map_err(|error| format!("复制目录失败：{error}"))?;
         if entry.depth() == 0 {
@@ -497,7 +508,10 @@ fn copy_dir_native(src: &str, dst: &str) -> Result<u64, String> {
         if entry.file_type().is_symlink() {
             continue;
         }
-        let rel = entry.path().strip_prefix(&src_path).map_err(|error| format!("复制目录失败：{error}"))?;
+        let rel = entry
+            .path()
+            .strip_prefix(&src_path)
+            .map_err(|error| format!("复制目录失败：{error}"))?;
         let target = dst_path.join(rel);
         if entry.file_type().is_dir() {
             std::fs::create_dir_all(&target).map_err(|error| format!("复制目录失败：{error}"))?;
@@ -509,10 +523,15 @@ fn copy_dir_native(src: &str, dst: &str) -> Result<u64, String> {
     let failed = std::sync::Mutex::new(Vec::<String>::new());
     files.par_iter().for_each(|(from, to)| {
         if std::fs::copy(from, to).is_err() {
-            failed.lock().map(|mut guard| guard.push(to.to_string_lossy().into_owned())).ok();
+            failed
+                .lock()
+                .map(|mut guard| guard.push(to.to_string_lossy().into_owned()))
+                .ok();
         }
     });
-    let guard = failed.lock().map_err(|_| "复制目录失败：锁异常".to_string())?;
+    let guard = failed
+        .lock()
+        .map_err(|_| "复制目录失败：锁异常".to_string())?;
     if !guard.is_empty() {
         tracing::warn!(target: "backend", "[导入] 目录拷贝失败：src={} 文件数={} 失败={} 耗时={:?} 首项={}", src, files.len(), guard.len(), started_at.elapsed(), guard.first().map(String::as_str).unwrap_or("unknown"));
         return Err(format!("复制目录失败：{} 个文件", guard.len()));
@@ -545,11 +564,17 @@ pub struct Matcher {
 /// - `segment_ci` ＝任一段小写相等（对齐 REEngine pathParts 小写）；
 /// - `suffix` ＝整路径小写后缀。
 #[tauri::command]
-pub fn mod_classify(files: Vec<String>, rules: Vec<ClassifyRule>, default: i32) -> Result<i32, String> {
+pub fn mod_classify(
+    files: Vec<String>,
+    rules: Vec<ClassifyRule>,
+    default: i32,
+) -> Result<i32, String> {
     for rule in &rules {
         let hit = files.iter().any(|file| {
             let normalized = file.replace('\\', "/");
-            rule.any_of.iter().any(|matcher| classify_one(&normalized, matcher))
+            rule.any_of
+                .iter()
+                .any(|matcher| classify_one(&normalized, matcher))
         });
         if hit {
             return Ok(rule.id);
@@ -577,11 +602,23 @@ pub fn fs_remove_dirs(paths: Vec<String>) -> Vec<RemoveDirState> {
         .map(|path| {
             let p = std::path::Path::new(path);
             if !p.exists() {
-                return RemoveDirState { path: path.clone(), ok: true, error: None };
+                return RemoveDirState {
+                    path: path.clone(),
+                    ok: true,
+                    error: None,
+                };
             }
             match remove_path(p) {
-                Ok(()) => RemoveDirState { path: path.clone(), ok: true, error: None },
-                Err(err) => RemoveDirState { path: path.clone(), ok: false, error: Some(err.to_string()) },
+                Ok(()) => RemoveDirState {
+                    path: path.clone(),
+                    ok: true,
+                    error: None,
+                },
+                Err(err) => RemoveDirState {
+                    path: path.clone(),
+                    ok: false,
+                    error: Some(err.to_string()),
+                },
             }
         })
         .collect();
@@ -609,10 +646,16 @@ fn classify_one(normalized: &str, matcher: &Matcher) -> bool {
         "segment" => normalized.split('/').any(|part| part == matcher.value),
         "segment_ci" => {
             let wanted = matcher.value.to_lowercase();
-            normalized.split('/').any(|part| part.to_lowercase() == wanted)
+            normalized
+                .split('/')
+                .any(|part| part.to_lowercase() == wanted)
         }
-        "contains" => tail_segment(normalized).to_lowercase().contains(&matcher.value.to_lowercase()),
-        "suffix" => normalized.to_lowercase().ends_with(&matcher.value.to_lowercase()),
+        "contains" => tail_segment(normalized)
+            .to_lowercase()
+            .contains(&matcher.value.to_lowercase()),
+        "suffix" => normalized
+            .to_lowercase()
+            .ends_with(&matcher.value.to_lowercase()),
         _ => false,
     }
 }
@@ -636,6 +679,7 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[allow(dead_code)]
     fn fixture_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("gmm-fsops-{name}"));
         let _ = fs::remove_dir_all(&dir);
@@ -654,7 +698,10 @@ mod tests {
         let payload: Vec<u8> = (0..1_048_576).map(|i| (i % 251) as u8).collect();
         fs::write(&big, &payload).unwrap();
         let expected = format!("{:x}", md5::compute(&payload));
-        assert_eq!(fs_file_hash(big.to_string_lossy().into_owned()).unwrap(), expected);
+        assert_eq!(
+            fs_file_hash(big.to_string_lossy().into_owned()).unwrap(),
+            expected
+        );
         assert!(fs_file_hash(dir.join("不存在.txt").to_string_lossy().into_owned()).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -679,7 +726,11 @@ mod tests {
         let sub = with_dirs.iter().find(|entry| entry.rel == "sub").unwrap();
         assert!(sub.is_dir && sub.size == 0);
         // 不存在目录回空表（对齐 !fileExists → []）
-        assert!(fs_walk(dir.join("nope").to_string_lossy().into_owned(), true, false).unwrap().is_empty());
+        assert!(
+            fs_walk(dir.join("nope").to_string_lossy().into_owned(), true, false)
+                .unwrap()
+                .is_empty()
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -743,11 +794,24 @@ mod batch_tests {
         fs::write(src.join("a.txt"), "new").unwrap();
         fs::write(dst.join("a.txt"), "old").unwrap();
         let roots = roots_for(&src, &dst);
-        let state = apply_item(&item("a.txt", &src.join("a.txt"), &dst.join("a.txt"), "copy", "gmmback"), &roots, false);
+        let state = apply_item(
+            &item(
+                "a.txt",
+                &src.join("a.txt"),
+                &dst.join("a.txt"),
+                "copy",
+                "gmmback",
+            ),
+            &roots,
+            false,
+        );
         assert!(state.ok);
         // 目标被覆盖，旧内容进 .gmmback（对齐 copyFile）
         assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "new");
-        assert_eq!(fs::read_to_string(dst.join("a.txt.gmmback")).unwrap(), "old");
+        assert_eq!(
+            fs::read_to_string(dst.join("a.txt.gmmback")).unwrap(),
+            "old"
+        );
     }
 
     #[test]
@@ -760,7 +824,17 @@ mod batch_tests {
         fs::write(dst.join("a.txt.gmmback"), "original").unwrap();
         let roots = roots_for(&src, &dst);
         // 对齐 deleteFile：删 dst + .gmmback 迁回
-        let state = apply_item(&item("a.txt", &src.join("a.txt"), &dst.join("a.txt"), "remove", "gmmback"), &roots, false);
+        let state = apply_item(
+            &item(
+                "a.txt",
+                &src.join("a.txt"),
+                &dst.join("a.txt"),
+                "remove",
+                "gmmback",
+            ),
+            &roots,
+            false,
+        );
         assert!(state.ok);
         assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "original");
         assert!(!dst.join("a.txt.gmmback").exists());
@@ -774,18 +848,54 @@ mod batch_tests {
         fs::write(src.join("folder").join("inner.txt"), "y").unwrap();
         let roots = roots_for(&src, &dst);
         // 文件建链无特权（os error 1314）时按 fallback_copy 退化拷贝
-        let state = apply_item(&item("f.txt", &src.join("f.txt"), &dst.join("f.txt"), "link", "linkback"), &roots, true);
+        let state = apply_item(
+            &item(
+                "f.txt",
+                &src.join("f.txt"),
+                &dst.join("f.txt"),
+                "link",
+                "linkback",
+            ),
+            &roots,
+            true,
+        );
         assert!(state.ok, "{:?}", state.error);
         assert_eq!(fs::read_to_string(dst.join("f.txt")).unwrap(), "x");
         // 目录建链：原生 symlink 无特权则走 Junction（免特权），内容可见
-        let state = apply_item(&item("folder", &src.join("folder"), &dst.join("folder"), "link", "linkback"), &roots, false);
+        let state = apply_item(
+            &item(
+                "folder",
+                &src.join("folder"),
+                &dst.join("folder"),
+                "link",
+                "linkback",
+            ),
+            &roots,
+            false,
+        );
         assert!(state.ok, "{:?}", state.error);
-        assert_eq!(fs::read_to_string(dst.join("folder").join("inner.txt")).unwrap(), "y");
+        assert_eq!(
+            fs::read_to_string(dst.join("folder").join("inner.txt")).unwrap(),
+            "y"
+        );
         // remove + linkback：删链本体（不跟随，源目录内容保留），无 _back 则结束
-        let state = apply_item(&item("folder", &src.join("folder"), &dst.join("folder"), "remove", "linkback"), &roots, false);
+        let state = apply_item(
+            &item(
+                "folder",
+                &src.join("folder"),
+                &dst.join("folder"),
+                "remove",
+                "linkback",
+            ),
+            &roots,
+            false,
+        );
         assert!(state.ok, "{:?}", state.error);
         assert!(!dst.join("folder").exists());
-        assert_eq!(fs::read_to_string(src.join("folder").join("inner.txt")).unwrap(), "y");
+        assert_eq!(
+            fs::read_to_string(src.join("folder").join("inner.txt")).unwrap(),
+            "y"
+        );
     }
 
     #[test]
@@ -794,12 +904,32 @@ mod batch_tests {
         fs::write(src.join("a.txt"), "x").unwrap();
         let roots = vec![lexical(&dst.to_string_lossy())];
         // src 在根外 → 该项 ok=false；本项校验覆盖 src 与 dst
-        let state = apply_item(&item("a.txt", &src.join("a.txt"), &dst.join("a.txt"), "copy", "none"), &roots, false);
+        let state = apply_item(
+            &item(
+                "a.txt",
+                &src.join("a.txt"),
+                &dst.join("a.txt"),
+                "copy",
+                "none",
+            ),
+            &roots,
+            false,
+        );
         assert!(!state.ok);
         assert!(state.error.unwrap().starts_with("路径越界"));
         // .. 穿越同样拒绝
         let evil = format!("{}/../evil.txt", dst.to_string_lossy());
-        let state = apply_item(&item("e", &src.join("a.txt"), &PathBuf::from(evil), "copy", "none"), &roots, false);
+        let state = apply_item(
+            &item(
+                "e",
+                &src.join("a.txt"),
+                &PathBuf::from(evil),
+                "copy",
+                "none",
+            ),
+            &roots,
+            false,
+        );
         assert!(!state.ok);
     }
 
@@ -820,7 +950,17 @@ mod batch_tests {
     fn missing_source_is_item_error() {
         let (src, dst) = batch_dir("missing");
         let roots = roots_for(&src, &dst);
-        let state = apply_item(&item("m.txt", &src.join("m.txt"), &dst.join("m.txt"), "copy", "gmmback"), &roots, false);
+        let state = apply_item(
+            &item(
+                "m.txt",
+                &src.join("m.txt"),
+                &dst.join("m.txt"),
+                "copy",
+                "gmmback",
+            ),
+            &roots,
+            false,
+        );
         assert!(!state.ok);
     }
     #[test]
@@ -834,10 +974,20 @@ mod batch_tests {
         let count = copy_dir_native(&src.to_string_lossy(), &target.to_string_lossy()).unwrap();
         assert_eq!(count, 3);
         assert_eq!(fs::read_to_string(target.join("a.txt")).unwrap(), "a");
-        assert_eq!(fs::read_to_string(target.join("sub").join("b.txt")).unwrap(), "b");
-        assert_eq!(fs::read_to_string(target.join("sub").join("deep").join("c.txt")).unwrap(), "c");
+        assert_eq!(
+            fs::read_to_string(target.join("sub").join("b.txt")).unwrap(),
+            "b"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("sub").join("deep").join("c.txt")).unwrap(),
+            "c"
+        );
         // 源缺失 → Err（对齐 copyFolder 抛错分支）
-        assert!(copy_dir_native(&src.join("nope").to_string_lossy(), &target.to_string_lossy()).is_err());
+        assert!(copy_dir_native(
+            &src.join("nope").to_string_lossy(),
+            &target.to_string_lossy()
+        )
+        .is_err());
     }
 }
 
@@ -866,18 +1016,43 @@ mod classify_tests {
     fn unreal_priority_and_case() {
         // ue4ss > pak > mods > scripts；大小写混杂
         let rules = vec![
-            rule(2, &[("basename", "ue4ss.dll"), ("basename", "dwmapi.dll"), ("basename", "xinput1_3.dll")]),
+            rule(
+                2,
+                &[
+                    ("basename", "ue4ss.dll"),
+                    ("basename", "dwmapi.dll"),
+                    ("basename", "xinput1_3.dll"),
+                ],
+            ),
             rule(1, &[("ext", "pak")]),
             rule(3, &[("basename", "Enabled.txt")]),
             rule(5, &[("segment", "Scripts")]),
         ];
-        assert_eq!(mod_classify(files(&["a/XINPUT1_3.DLL", "b/c.pak"]), rules.clone(), 99).unwrap(), 2);
-        assert_eq!(mod_classify(files(&["b/C.PAK"]), rules.clone(), 99).unwrap(), 1);
-        assert_eq!(mod_classify(files(&["x/enabled.txt"]), rules.clone(), 99).unwrap(), 3);
-        assert_eq!(mod_classify(files(&["ue4ss/Mods/Scripts/a.lua"]), rules.clone(), 99).unwrap(), 5);
+        assert_eq!(
+            mod_classify(files(&["a/XINPUT1_3.DLL", "b/c.pak"]), rules.clone(), 99).unwrap(),
+            2
+        );
+        assert_eq!(
+            mod_classify(files(&["b/C.PAK"]), rules.clone(), 99).unwrap(),
+            1
+        );
+        assert_eq!(
+            mod_classify(files(&["x/enabled.txt"]), rules.clone(), 99).unwrap(),
+            3
+        );
+        assert_eq!(
+            mod_classify(files(&["ue4ss/Mods/Scripts/a.lua"]), rules.clone(), 99).unwrap(),
+            5
+        );
         // Scripts 大小写敏感：小写 scripts 不命中
-        assert_eq!(mod_classify(files(&["ue4ss/mods/scripts/a.lua"]), rules.clone(), 99).unwrap(), 99);
-        assert_eq!(mod_classify(files(&["readme.txt"]), rules.clone(), 99).unwrap(), 99);
+        assert_eq!(
+            mod_classify(files(&["ue4ss/mods/scripts/a.lua"]), rules.clone(), 99).unwrap(),
+            99
+        );
+        assert_eq!(
+            mod_classify(files(&["readme.txt"]), rules.clone(), 99).unwrap(),
+            99
+        );
     }
 
     #[test]
@@ -886,11 +1061,23 @@ mod classify_tests {
             rule(1, &[("basename", "winhttp.dll")]),
             rule(2, &[("ext", "dll"), ("contains", "plugins")]),
         ];
-        assert_eq!(mod_classify(files(&["WINHTTP.DLL"]), rules.clone(), 99).unwrap(), 1);
+        assert_eq!(
+            mod_classify(files(&["WINHTTP.DLL"]), rules.clone(), 99).unwrap(),
+            1
+        );
         // contains 查尾段小写子串（对齐 basename(item).includes）：中间段不算
-        assert_eq!(mod_classify(files(&["BepInEx/MyPlugins/x.txt"]), rules.clone(), 99).unwrap(), 99);
-        assert_eq!(mod_classify(files(&["tools/myplugins_backup.zip"]), rules.clone(), 99).unwrap(), 2);
-        assert_eq!(mod_classify(files(&["a/b.dll"]), rules.clone(), 99).unwrap(), 2);
+        assert_eq!(
+            mod_classify(files(&["BepInEx/MyPlugins/x.txt"]), rules.clone(), 99).unwrap(),
+            99
+        );
+        assert_eq!(
+            mod_classify(files(&["tools/myplugins_backup.zip"]), rules.clone(), 99).unwrap(),
+            2
+        );
+        assert_eq!(
+            mod_classify(files(&["a/b.dll"]), rules.clone(), 99).unwrap(),
+            2
+        );
     }
 
     #[test]
@@ -904,20 +1091,41 @@ mod classify_tests {
             rule(3, &[("segment_ci", "natives")]),
             rule(6, &[("ext", "pak")]),
         ];
-        assert_eq!(mod_classify(files(&["DINPUT8.DLL"]), rules.clone(), 99).unwrap(), 2);
-        assert_eq!(mod_classify(files(&["ReFrameWork/Autorun/x.lua"]), rules.clone(), 99).unwrap(), 7);
-        assert_eq!(mod_classify(files(&["Natives\\x.pak"]), rules.clone(), 99).unwrap(), 3);
-        assert_eq!(mod_classify(files(&["data.pak"]), rules.clone(), 99).unwrap(), 6);
+        assert_eq!(
+            mod_classify(files(&["DINPUT8.DLL"]), rules.clone(), 99).unwrap(),
+            2
+        );
+        assert_eq!(
+            mod_classify(files(&["ReFrameWork/Autorun/x.lua"]), rules.clone(), 99).unwrap(),
+            7
+        );
+        assert_eq!(
+            mod_classify(files(&["Natives\\x.pak"]), rules.clone(), 99).unwrap(),
+            3
+        );
+        assert_eq!(
+            mod_classify(files(&["data.pak"]), rules.clone(), 99).unwrap(),
+            6
+        );
     }
 
     #[test]
     fn ext_edge_cases_match_get_file_extension() {
         let rules = vec![rule(1, &[("ext", "pak")])];
         // 无点 / 首点 / 尾点皆不命中（对齐 getFileExtension 兜底空串）
-        assert_eq!(mod_classify(files(&["pak"]), rules.clone(), 99).unwrap(), 99);
-        assert_eq!(mod_classify(files(&[".pak"]), rules.clone(), 99).unwrap(), 99);
+        assert_eq!(
+            mod_classify(files(&["pak"]), rules.clone(), 99).unwrap(),
+            99
+        );
+        assert_eq!(
+            mod_classify(files(&[".pak"]), rules.clone(), 99).unwrap(),
+            99
+        );
         assert_eq!(mod_classify(files(&["a."]), rules.clone(), 99).unwrap(), 99);
-        assert_eq!(mod_classify(files(&["a.PAK"]), rules.clone(), 99).unwrap(), 1);
+        assert_eq!(
+            mod_classify(files(&["a.PAK"]), rules.clone(), 99).unwrap(),
+            1
+        );
     }
 }
 
@@ -925,275 +1133,287 @@ mod classify_tests {
 #[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CfgEntry {
- section: String,
- key: String,
- value: String,
- #[serde(default)]
- remove: bool,
+    section: String,
+    key: String,
+    value: String,
+    #[serde(default)]
+    remove: bool,
 }
 
 /// 跨进程排他锁 + 同目录 tmp 写后 rename：锁防并发丢条目，rename 防半截文件。
 fn lock_and_write(path: &std::path::Path, content: &str) -> Result<(), String> {
- if let Some(parent) = path.parent() {
- if !parent.as_os_str().is_empty() {
- std::fs::create_dir_all(parent).map_err(|error| format!("创建目录失败:{error}"))?;
- }
- }
- let lock_path = path.with_extension("gmm-lock");
- let lock_file = std::fs::OpenOptions::new()
- .create(true)
- .write(true)
- .open(&lock_path)
- .map_err(|error| format!("配置文件加锁失败:{error}"))?;
- use fs2::FileExt;
- lock_file
- .lock_exclusive()
- .map_err(|error| format!("配置文件加锁失败:{error}"))?;
- let tmp = path.with_extension("gmmtmp");
- let result = std::fs::write(&tmp, content)
- .map_err(|error| format!("写入文件失败:{error}"))
- .and_then(|()| std::fs::rename(&tmp, path).map_err(|error| format!("写入文件失败:{error}")));
- let _ = lock_file.unlock();
- let _ = std::fs::remove_file(&lock_path);
- result
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|error| format!("创建目录失败:{error}"))?;
+        }
+    }
+    let lock_path = path.with_extension("gmm-lock");
+    // 锁文件仅用于 fs2 排他锁，内容无关：存在即复用，不截断。
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| format!("配置文件加锁失败:{error}"))?;
+    use fs2::FileExt;
+    lock_file
+        .lock_exclusive()
+        .map_err(|error| format!("配置文件加锁失败:{error}"))?;
+    let tmp = path.with_extension("gmmtmp");
+    let result = std::fs::write(&tmp, content)
+        .map_err(|error| format!("写入文件失败:{error}"))
+        .and_then(|()| {
+            std::fs::rename(&tmp, path).map_err(|error| format!("写入文件失败:{error}"))
+        });
+    let _ = lock_file.unlock();
+    let _ = std::fs::remove_file(&lock_path);
+    result
 }
 
 fn ini_section_of(line: &str) -> Option<String> {
- let trimmed = line.trim();
- if trimmed.len() >= 2 && trimmed.starts_with('[') && trimmed.ends_with(']') {
- return Some(trimmed[1..trimmed.len() - 1].trim().to_string());
- }
- None
+    let trimmed = line.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('[') && trimmed.ends_with(']') {
+        return Some(trimmed[1..trimmed.len() - 1].trim().to_string());
+    }
+    None
 }
 
 fn ini_key_of(line: &str) -> Option<(String, usize)> {
- let eq = line.find('=')?;
- Some((line[..eq].trim().to_string(), eq))
+    let eq = line.find('=')?;
+    Some((line[..eq].trim().to_string(), eq))
 }
 
 /// 行保留 ini 合并：只碰命中的 key 行（保留原 `key=` 前缀），缺 section/key 追加。
 fn ini_upsert(current: &str, entries: &[CfgEntry]) -> String {
- let mut lines: Vec<String> = current.split('\n').map(|line| line.to_string()).collect();
- // split 永不为空，但空文件会产出 [""]，先归一为空表。
- if lines.len() == 1 && lines[0].trim().is_empty() {
- lines.clear();
- }
- for entry in entries {
- let mut section_at: Option<usize> = None;
- let mut key_at: Option<usize> = None;
- let mut section_end = lines.len();
- for (index, line) in lines.iter().enumerate() {
- if let Some(name) = ini_section_of(line) {
- if section_at.is_some() {
- section_end = index;
- break;
- }
- if name == entry.section {
- section_at = Some(index);
- section_end = lines.len();
- }
- } else if section_at.is_some() {
- if let Some((key, _)) = ini_key_of(line) {
- if key == entry.key {
- key_at = Some(index);
- break;
- }
- }
- }
- }
- if entry.remove {
- if let Some(at) = key_at {
- lines.remove(at);
- }
- continue;
- }
- if let Some(at) = key_at {
- let eq = lines[at].find('=').unwrap_or(0);
- lines[at] = format!("{}={}", &lines[at][..eq], entry.value);
- } else if let Some(_head) = section_at {
- lines.insert(section_end, format!("{}={}", entry.key, entry.value));
- } else {
- if !lines.is_empty() && !lines.last().map(|line| line.trim().is_empty()).unwrap_or(true) {
- lines.push(String::new());
- }
- lines.push(format!("[{}]", entry.section));
- lines.push(format!("{}={}", entry.key, entry.value));
- }
- }
- lines.join("\n")
+    let mut lines: Vec<String> = current.split('\n').map(|line| line.to_string()).collect();
+    // split 永不为空，但空文件会产出 [""]，先归一为空表。
+    if lines.len() == 1 && lines[0].trim().is_empty() {
+        lines.clear();
+    }
+    for entry in entries {
+        let mut section_at: Option<usize> = None;
+        let mut key_at: Option<usize> = None;
+        let mut section_end = lines.len();
+        for (index, line) in lines.iter().enumerate() {
+            if let Some(name) = ini_section_of(line) {
+                if section_at.is_some() {
+                    section_end = index;
+                    break;
+                }
+                if name == entry.section {
+                    section_at = Some(index);
+                    section_end = lines.len();
+                }
+            } else if section_at.is_some() {
+                if let Some((key, _)) = ini_key_of(line) {
+                    if key == entry.key {
+                        key_at = Some(index);
+                        break;
+                    }
+                }
+            }
+        }
+        if entry.remove {
+            if let Some(at) = key_at {
+                lines.remove(at);
+            }
+            continue;
+        }
+        if let Some(at) = key_at {
+            let eq = lines[at].find('=').unwrap_or(0);
+            lines[at] = format!("{}={}", &lines[at][..eq], entry.value);
+        } else if let Some(_head) = section_at {
+            lines.insert(section_end, format!("{}={}", entry.key, entry.value));
+        } else {
+            if !lines.is_empty()
+                && !lines
+                    .last()
+                    .map(|line| line.trim().is_empty())
+                    .unwrap_or(true)
+            {
+                lines.push(String::new());
+            }
+            lines.push(format!("[{}]", entry.section));
+            lines.push(format!("{}={}", entry.key, entry.value));
+        }
+    }
+    lines.join("\n")
 }
 
 /// kind: "ini"（行保留合并）| "raw"（content 整包原子写，由调用方组装 ini/xml 文本）。
 #[tauri::command]
 pub fn cfg_upsert(
- path: String,
- kind: String,
- entries: Vec<CfgEntry>,
- content: Option<String>,
+    path: String,
+    kind: String,
+    entries: Vec<CfgEntry>,
+    content: Option<String>,
 ) -> Result<(), String> {
- let target = std::path::PathBuf::from(&path);
- match kind.as_str() {
- "ini" => {
- let current = std::fs::read_to_string(&target).unwrap_or_default();
- lock_and_write(&target, &ini_upsert(&current, &entries))
- }
- "raw" => {
- let body = content.unwrap_or_default();
- lock_and_write(&target, &body)
- }
- _ => Err("未知配置类型".to_string()),
- }
+    let target = std::path::PathBuf::from(&path);
+    match kind.as_str() {
+        "ini" => {
+            let current = std::fs::read_to_string(&target).unwrap_or_default();
+            lock_and_write(&target, &ini_upsert(&current, &entries))
+        }
+        "raw" => {
+            let body = content.unwrap_or_default();
+            lock_and_write(&target, &body)
+        }
+        _ => Err("未知配置类型".to_string()),
+    }
 }
 
 #[cfg(test)]
 mod cfg_tests {
- use super::*;
+    use super::*;
 
- fn entry(section: &str, key: &str, value: &str) -> CfgEntry {
- CfgEntry {
- section: section.to_string(),
- key: key.to_string(),
- value: value.to_string(),
- remove: false,
- }
- }
+    fn entry(section: &str, key: &str, value: &str) -> CfgEntry {
+        CfgEntry {
+            section: section.to_string(),
+            key: key.to_string(),
+            value: value.to_string(),
+            remove: false,
+        }
+    }
 
- #[test]
- fn ini_set_and_append_and_remove() {
- // 改现存 key：只换值，注释行与空行原样保留。
- let out = ini_upsert("[Archive]\nbInvalidateOlderFiles=0\n; comment\n", &[entry(
- "Archive",
- "bInvalidateOlderFiles",
- "1",
- )]);
- assert!(out.contains("bInvalidateOlderFiles=1"));
- assert!(out.contains("; comment"));
- // 同 section 追 key：落在 section 内、下一 section 之前。
- let out = ini_upsert("[A]\nx=1\n[B]\ny=2\n", &[entry("A", "z", "3")]);
- assert!(out.contains("[A]\nx=1\nz=3\n[B]"));
- // 新 section 追加。
- let out = ini_upsert("[A]\nx=1\n", &[entry("General", "sTestFile1", "foo.esp")]);
- assert!(out.contains("[General]\nsTestFile1=foo.esp"));
- // 删除。
- let out = ini_upsert(
- "[General]\nsTestFile1=foo.esp\nsTestFile2=bar.esp\n",
- &[CfgEntry {
- section: "General".to_string(),
- key: "sTestFile1".to_string(),
- value: String::new(),
- remove: true,
- }],
- );
- assert!(!out.contains("sTestFile1"));
- assert!(out.contains("sTestFile2=bar.esp"));
- // 空文件起建。
- let out = ini_upsert("", &[entry("Archive", "bInvalidateOlderFiles", "1")]);
- assert_eq!(out, "[Archive]\nbInvalidateOlderFiles=1");
- }
+    #[test]
+    fn ini_set_and_append_and_remove() {
+        // 改现存 key：只换值，注释行与空行原样保留。
+        let out = ini_upsert(
+            "[Archive]\nbInvalidateOlderFiles=0\n; comment\n",
+            &[entry("Archive", "bInvalidateOlderFiles", "1")],
+        );
+        assert!(out.contains("bInvalidateOlderFiles=1"));
+        assert!(out.contains("; comment"));
+        // 同 section 追 key：落在 section 内、下一 section 之前。
+        let out = ini_upsert("[A]\nx=1\n[B]\ny=2\n", &[entry("A", "z", "3")]);
+        assert!(out.contains("[A]\nx=1\nz=3\n[B]"));
+        // 新 section 追加。
+        let out = ini_upsert("[A]\nx=1\n", &[entry("General", "sTestFile1", "foo.esp")]);
+        assert!(out.contains("[General]\nsTestFile1=foo.esp"));
+        // 删除。
+        let out = ini_upsert(
+            "[General]\nsTestFile1=foo.esp\nsTestFile2=bar.esp\n",
+            &[CfgEntry {
+                section: "General".to_string(),
+                key: "sTestFile1".to_string(),
+                value: String::new(),
+                remove: true,
+            }],
+        );
+        assert!(!out.contains("sTestFile1"));
+        assert!(out.contains("sTestFile2=bar.esp"));
+        // 空文件起建。
+        let out = ini_upsert("", &[entry("Archive", "bInvalidateOlderFiles", "1")]);
+        assert_eq!(out, "[Archive]\nbInvalidateOlderFiles=1");
+    }
 
- #[test]
- fn raw_write_roundtrip() {
- let dir = std::env::temp_dir().join("gmm-cfg-raw");
- let _ = std::fs::remove_dir_all(&dir);
- let path = dir.join("sub").join("mods.xml");
- let body = "<?xml version=\"1.0\"?>\n<Mods />\n";
- cfg_upsert(
- path.to_string_lossy().to_string(),
- "raw".to_string(),
- vec![],
- Some(body.to_string()),
- )
- .unwrap();
- assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
- assert!(!path.with_extension("gmmtmp").exists());
- let _ = std::fs::remove_dir_all(&dir);
- }
+    #[test]
+    fn raw_write_roundtrip() {
+        let dir = std::env::temp_dir().join("gmm-cfg-raw");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("sub").join("mods.xml");
+        let body = "<?xml version=\"1.0\"?>\n<Mods />\n";
+        cfg_upsert(
+            path.to_string_lossy().to_string(),
+            "raw".to_string(),
+            vec![],
+            Some(body.to_string()),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), body);
+        assert!(!path.with_extension("gmmtmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// 单链直调（替代 powershell New-Item）：原生 symlink，目录失败回退 Junction。
 /// backup=true 即 `_back` 语义；失败已在内部回滚，调用方按 bool 记态。
 #[tauri::command]
 pub fn fs_link(src: String, dst: String, backup: bool) -> Result<bool, String> {
- let item = InstallItem {
- file: dst.clone(),
- src,
- dst,
- op: "link".to_string(),
- backup: if backup { "linkback".to_string() } else { "none".to_string() },
- content: None,
- };
- match op_link(&item, false) {
- Ok(()) => Ok(true),
- Err(error) => Err(error),
- }
+    let item = InstallItem {
+        file: dst.clone(),
+        src,
+        dst,
+        op: "link".to_string(),
+        backup: if backup {
+            "linkback".to_string()
+        } else {
+            "none".to_string()
+        },
+        content: None,
+    };
+    match op_link(&item, false) {
+        Ok(()) => Ok(true),
+        Err(error) => Err(error),
+    }
 }
 
 /// 极简 VDF 值：字符串或嵌套表（libraryfolders/loginusers 只需此子集）。
 enum Vdf {
- Str(String),
- Map(std::collections::HashMap<String, Vdf>),
+    Str(String),
+    Map(std::collections::HashMap<String, Vdf>),
 }
 
 fn vdf_tokens(text: &str) -> Vec<String> {
- let mut tokens = Vec::new();
- let mut chars = text.chars().peekable();
- while let Some(char) = chars.next() {
- if char == '"' {
- let mut buf = String::new();
- loop {
- match chars.next() {
- Some('\\') => {
- if let Some(escaped) = chars.next() {
- buf.push(escaped);
- }
- }
- Some('"') | None => break,
- Some(char) => buf.push(char),
- }
- }
- tokens.push(buf);
- } else if char == '{' || char == '}' {
- tokens.push(char.to_string());
- }
- }
- tokens
+    let mut tokens = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(char) = chars.next() {
+        if char == '"' {
+            let mut buf = String::new();
+            loop {
+                match chars.next() {
+                    Some('\\') => {
+                        if let Some(escaped) = chars.next() {
+                            buf.push(escaped);
+                        }
+                    }
+                    Some('"') | None => break,
+                    Some(char) => buf.push(char),
+                }
+            }
+            tokens.push(buf);
+        } else if char == '{' || char == '}' {
+            tokens.push(char.to_string());
+        }
+    }
+    tokens
 }
 
 fn vdf_parse_map(tokens: &[String], pos: &mut usize) -> std::collections::HashMap<String, Vdf> {
- let mut map = std::collections::HashMap::new();
- while *pos < tokens.len() {
- if tokens[*pos] == "}" {
- break;
- }
- let key = tokens[*pos].clone();
- *pos += 1;
- if *pos < tokens.len() && tokens[*pos] == "{" {
- *pos += 1;
- let inner = vdf_parse_map(tokens, pos);
- if *pos < tokens.len() && tokens[*pos] == "}" {
- *pos += 1;
- }
- map.insert(key, Vdf::Map(inner));
- } else if *pos < tokens.len() {
- let value = tokens[*pos].clone();
- *pos += 1;
- map.insert(key, Vdf::Str(value));
- }
- }
- map
+    let mut map = std::collections::HashMap::new();
+    while *pos < tokens.len() {
+        if tokens[*pos] == "}" {
+            break;
+        }
+        let key = tokens[*pos].clone();
+        *pos += 1;
+        if *pos < tokens.len() && tokens[*pos] == "{" {
+            *pos += 1;
+            let inner = vdf_parse_map(tokens, pos);
+            if *pos < tokens.len() && tokens[*pos] == "}" {
+                *pos += 1;
+            }
+            map.insert(key, Vdf::Map(inner));
+        } else if *pos < tokens.len() {
+            let value = tokens[*pos].clone();
+            *pos += 1;
+            map.insert(key, Vdf::Str(value));
+        }
+    }
+    map
 }
 
 fn vdf_parse(text: &str) -> std::collections::HashMap<String, Vdf> {
- let tokens = vdf_tokens(text);
- let mut pos = 0;
- vdf_parse_map(&tokens, &mut pos)
+    let tokens = vdf_tokens(text);
+    let mut pos = 0;
+    vdf_parse_map(&tokens, &mut pos)
 }
 
 fn vdf_str<'a>(map: &'a std::collections::HashMap<String, Vdf>, key: &str) -> Option<&'a str> {
- match map.get(key) {
- Some(Vdf::Str(value)) => Some(value),
- _ => None,
- }
+    match map.get(key) {
+        Some(Vdf::Str(value)) => Some(value),
+        _ => None,
+    }
 }
 
 #[cfg(windows)]
@@ -1213,167 +1433,169 @@ fn windows_steam_path() -> Option<String> {
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
     let output = command.output().ok()?;
- if !output.status.success() {
- return None;
- }
- let stdout = String::from_utf8_lossy(&output.stdout);
- for line in stdout.lines() {
- let mut parts = line.split_whitespace();
- if parts.next() == Some("InstallPath")
- && parts.next() == Some("REG_SZ")
- {
- return Some(parts.collect::<Vec<_>>().join(" "));
- }
- }
- None
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let mut parts = line.split_whitespace();
+        if parts.next() == Some("InstallPath") && parts.next() == Some("REG_SZ") {
+            return Some(parts.collect::<Vec<_>>().join(" "));
+        }
+    }
+    None
 }
 
 fn valid_steam_dir(dir: &std::path::Path) -> bool {
- dir.join("steamapps").join("libraryfolders.vdf").exists()
- || dir.join("config").join("loginusers.vdf").exists()
+    dir.join("steamapps").join("libraryfolders.vdf").exists()
+        || dir.join("config").join("loginusers.vdf").exists()
 }
 
 /// Steam 安装目录：Windows 一次 reg 查询；其余平台按候选目录探测。
 #[tauri::command]
 pub fn scan_steam_install_path() -> Result<Option<String>, String> {
- #[cfg(windows)]
- if let Some(path) = windows_steam_path() {
- if valid_steam_dir(std::path::Path::new(&path)) {
- return Ok(Some(path));
- }
- }
- #[cfg(not(windows))]
- if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
- let candidates = [
- "Library/Application Support/Steam",
- ".local/share/Steam",
- ".steam/steam",
- ".steam/root",
- ".steam/debian-installation",
- ".var/app/com.valvesoftware.Steam/.local/share/Steam",
- ];
- for candidate in candidates {
- let dir = home.join(candidate);
- if valid_steam_dir(&dir) {
- return Ok(Some(dir.to_string_lossy().to_string()));
- }
- }
- }
- Ok(None)
+    #[cfg(windows)]
+    if let Some(path) = windows_steam_path() {
+        if valid_steam_dir(std::path::Path::new(&path)) {
+            return Ok(Some(path));
+        }
+    }
+    #[cfg(not(windows))]
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        let candidates = [
+            "Library/Application Support/Steam",
+            ".local/share/Steam",
+            ".steam/steam",
+            ".steam/root",
+            ".steam/debian-installation",
+            ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+        ];
+        for candidate in candidates {
+            let dir = home.join(candidate);
+            if valid_steam_dir(&dir) {
+                return Ok(Some(dir.to_string_lossy().to_string()));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn library_game_root(steam_path: &str, app_id: u32) -> Option<String> {
- let vdf_path = std::path::Path::new(steam_path)
- .join("steamapps")
- .join("libraryfolders.vdf");
- let text = std::fs::read_to_string(&vdf_path).ok()?;
- let root = vdf_parse(&text);
- let needle = app_id.to_string();
- let folders = match root.get("libraryfolders") {
- Some(Vdf::Map(folders)) => folders,
- _ => return None,
- };
- for folder in folders.values() {
- let Vdf::Map(folder) = folder else { continue };
- let apps = match folder.get("apps") {
- Some(Vdf::Map(apps)) => apps,
- _ => continue,
- };
- if apps.contains_key(&needle) {
- return vdf_str(folder, "path").map(|path| path.to_string());
- }
- }
- None
+    let vdf_path = std::path::Path::new(steam_path)
+        .join("steamapps")
+        .join("libraryfolders.vdf");
+    let text = std::fs::read_to_string(&vdf_path).ok()?;
+    let root = vdf_parse(&text);
+    let needle = app_id.to_string();
+    let folders = match root.get("libraryfolders") {
+        Some(Vdf::Map(folders)) => folders,
+        _ => return None,
+    };
+    for folder in folders.values() {
+        let Vdf::Map(folder) = folder else { continue };
+        let apps = match folder.get("apps") {
+            Some(Vdf::Map(apps)) => apps,
+            _ => continue,
+        };
+        if apps.contains_key(&needle) {
+            return vdf_str(folder, "path").map(|path| path.to_string());
+        }
+    }
+    None
 }
 
 /// 单次查询某 AppID 的游戏目录（一次 reg + 一次 VDF 解析，无 console 噪音）。
 #[tauri::command]
 pub fn scan_steam_game(app_id: u32, installdir: String) -> Result<Option<String>, String> {
- let steam_path = match scan_steam_install_path()? {
- Some(path) => path,
- None => return Ok(None),
- };
- let root = match library_game_root(&steam_path, app_id) {
- Some(root) => root,
- None => return Ok(None),
- };
- let mut game = std::path::PathBuf::from(root);
- game.push("steamapps");
- game.push("common");
- if !installdir.is_empty() {
- game.push(&installdir);
- }
- Ok(Some(game.to_string_lossy().to_string()))
+    let steam_path = match scan_steam_install_path()? {
+        Some(path) => path,
+        None => return Ok(None),
+    };
+    let root = match library_game_root(&steam_path, app_id) {
+        Some(root) => root,
+        None => return Ok(None),
+    };
+    let mut game = std::path::PathBuf::from(root);
+    game.push("steamapps");
+    game.push("common");
+    if !installdir.is_empty() {
+        game.push(&installdir);
+    }
+    Ok(Some(game.to_string_lossy().to_string()))
 }
 
 /// 最近登录 Steam 用户的 32 位 ID（loginusers.vdf 取 Timestamp 最大者）。
 #[tauri::command]
 pub fn scan_steam_last_user() -> Result<String, String> {
- const BASE: u64 = 76561197960265728;
- let steam_path = match scan_steam_install_path()? {
- Some(path) => path,
- None => return Ok(String::new()),
- };
- let vdf_path = std::path::Path::new(&steam_path)
- .join("config")
- .join("loginusers.vdf");
- let text = std::fs::read_to_string(&vdf_path).unwrap_or_default();
- let root = vdf_parse(&text);
- let users = match root.get("users") {
- Some(Vdf::Map(users)) => users,
- _ => return Ok(String::new()),
- };
- let mut best: Option<(u64, u64)> = None;
- for (id, item) in users {
- let Vdf::Map(item) = item else { continue };
- let timestamp: u64 = vdf_str(item, "Timestamp").and_then(|value| value.parse().ok()).unwrap_or(0);
- let id64: u64 = match id.parse() {
- Ok(id) => id,
- Err(_) => continue,
- };
- if best.map(|(_, stamp)| timestamp > stamp).unwrap_or(true) {
- best = Some((id64, timestamp));
- }
- }
- match best {
- Some((id64, _)) if id64 >= BASE => Ok((id64 - BASE).to_string()),
- _ => Ok(String::new()),
- }
+    const BASE: u64 = 76561197960265728;
+    let steam_path = match scan_steam_install_path()? {
+        Some(path) => path,
+        None => return Ok(String::new()),
+    };
+    let vdf_path = std::path::Path::new(&steam_path)
+        .join("config")
+        .join("loginusers.vdf");
+    let text = std::fs::read_to_string(&vdf_path).unwrap_or_default();
+    let root = vdf_parse(&text);
+    let users = match root.get("users") {
+        Some(Vdf::Map(users)) => users,
+        _ => return Ok(String::new()),
+    };
+    let mut best: Option<(u64, u64)> = None;
+    for (id, item) in users {
+        let Vdf::Map(item) = item else { continue };
+        let timestamp: u64 = vdf_str(item, "Timestamp")
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        let id64: u64 = match id.parse() {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
+        if best.map(|(_, stamp)| timestamp > stamp).unwrap_or(true) {
+            best = Some((id64, timestamp));
+        }
+    }
+    match best {
+        Some((id64, _)) if id64 >= BASE => Ok((id64 - BASE).to_string()),
+        _ => Ok(String::new()),
+    }
 }
 
 #[cfg(test)]
 mod scan_tests {
- use super::*;
+    use super::*;
 
- #[test]
- fn vdf_library_lookup() {
- let text = "\"libraryfolders\"\n{\n\"0\"\n{\n\"path\"\t\t\"C:\\\\Steam\"\n\"apps\"\n{\n\"228980\"\t\t\"12345\"\n}\n}\n}\n";
- let root = vdf_parse(text);
- let folders = match &root["libraryfolders"] {
- Vdf::Map(folders) => folders,
- _ => panic!("folders"),
- };
- assert!(folders.contains_key("0"));
- }
+    #[test]
+    fn vdf_library_lookup() {
+        let text = "\"libraryfolders\"\n{\n\"0\"\n{\n\"path\"\t\t\"C:\\\\Steam\"\n\"apps\"\n{\n\"228980\"\t\t\"12345\"\n}\n}\n}\n";
+        let root = vdf_parse(text);
+        let folders = match &root["libraryfolders"] {
+            Vdf::Map(folders) => folders,
+            _ => panic!("folders"),
+        };
+        assert!(folders.contains_key("0"));
+    }
 
- #[test]
- fn vdf_last_user_picks_max_timestamp() {
- let text = "\"users\"\n{\n\"76561197960265729\"\n{\n\"Timestamp\"\t\t\"100\"\n}\n\"76561197960265730\"\n{\n\"Timestamp\"\t\t\"200\"\n}\n}\n";
- let root = vdf_parse(text);
- let users = match &root["users"] {
- Vdf::Map(users) => users,
- _ => panic!("users"),
- };
- let mut best = (0u64, 0u64);
- for (id, item) in users {
- if let Vdf::Map(item) = item {
- let stamp: u64 = vdf_str(item, "Timestamp").and_then(|v| v.parse().ok()).unwrap_or(0);
- let id64: u64 = id.parse().unwrap();
- if stamp >= best.1 {
- best = (id64, stamp);
- }
- }
- }
- assert_eq!(best.0 - 76561197960265728, 2);
- }
+    #[test]
+    fn vdf_last_user_picks_max_timestamp() {
+        let text = "\"users\"\n{\n\"76561197960265729\"\n{\n\"Timestamp\"\t\t\"100\"\n}\n\"76561197960265730\"\n{\n\"Timestamp\"\t\t\"200\"\n}\n}\n";
+        let root = vdf_parse(text);
+        let users = match &root["users"] {
+            Vdf::Map(users) => users,
+            _ => panic!("users"),
+        };
+        let mut best = (0u64, 0u64);
+        for (id, item) in users {
+            if let Vdf::Map(item) = item {
+                let stamp: u64 = vdf_str(item, "Timestamp")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                let id64: u64 = id.parse().unwrap();
+                if stamp >= best.1 {
+                    best = (id64, stamp);
+                }
+            }
+        }
+        assert_eq!(best.0 - 76561197960265728, 2);
+    }
 }

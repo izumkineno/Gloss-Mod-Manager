@@ -102,6 +102,12 @@ pub struct DownloaderState {
     inner: std::sync::Arc<Mutex<Inner>>,
     app: std::sync::Arc<Mutex<Option<tauri::AppHandle>>>,
 }
+/// 批量清理目标：(gid, 文件路径, 任务名)。
+type PurgeTarget = (String, String, String);
+/// 批量清理失败明细：(gid, 原因)。
+type PurgeFailure = (String, String);
+/// 游览页判重索引：url/文件名 → (gid, status, progress)。
+type ExploreIndexMap = HashMap<String, (String, String, u8)>;
 
 /// 进度增量（前端收到后拉一次快照；事件只做触发器，不做数据源）。
 #[derive(Serialize, Clone)]
@@ -169,7 +175,12 @@ impl DownloaderState {
             .inner
             .lock()
             .ok()
-            .and_then(|inner| inner.tasks.get(gid).map(|e| (e.retry_count, e.next_retry_at_ms)))
+            .and_then(|inner| {
+                inner
+                    .tasks
+                    .get(gid)
+                    .map(|e| (e.retry_count, e.next_retry_at_ms))
+            })
             .unwrap_or((0, 0));
         self.emit_changed(gid, status, retry_count, next_retry_at_ms);
     }
@@ -180,19 +191,19 @@ impl DownloaderState {
             .inner
             .lock()
             .ok()
-            .and_then(|inner| inner.tasks.get(gid).map(|e| (e.retry_count, e.next_retry_at_ms)))
+            .and_then(|inner| {
+                inner
+                    .tasks
+                    .get(gid)
+                    .map(|e| (e.retry_count, e.next_retry_at_ms))
+            })
             .unwrap_or((0, 0));
         self.emit_changed(gid, status.as_status_str(), retry_count, next_retry_at_ms);
     }
     /// 游览页判重索引：一次锁内建 url 精确索引 + 文件名索引。
     /// 返回 (url -> (gid, status, progress), normalizedFileName -> (gid, status, progress))。
     /// removed 状态不入索引；error/complete 保留（前端展示失败/重下）。
-    pub(crate) fn explore_index(
-        &self,
-    ) -> (
-        std::collections::HashMap<String, (String, String, u8)>,
-        std::collections::HashMap<String, (String, String, u8)>,
-    ) {
+    pub(crate) fn explore_index(&self) -> (ExploreIndexMap, ExploreIndexMap) {
         let mut url_index = std::collections::HashMap::new();
         let mut name_index = std::collections::HashMap::new();
         let Ok(inner) = self.inner.lock() else {
@@ -294,10 +305,8 @@ fn spawn_task(state: DownloaderState, gid: String) {
             .resume(true)
             .headers(headers)
             .client_builder(move || {
-                let mut client =
-                    simple_downloader::reqwest::ClientBuilder::new().connect_timeout(
-                        std::time::Duration::from_secs(10),
-                    );
+                let mut client = simple_downloader::reqwest::ClientBuilder::new()
+                    .connect_timeout(std::time::Duration::from_secs(10));
                 if let Some(proxy_url) = proxy_for_builder.as_deref() {
                     if let Ok(proxy) = simple_downloader::reqwest::Proxy::all(proxy_url) {
                         client = client.proxy(proxy);
@@ -306,29 +315,21 @@ fn spawn_task(state: DownloaderState, gid: String) {
                 client
             });
 
-
         let state_for_progress = state.clone();
         let gid_for_progress = gid.clone();
         let result = builder
             .run(|total_size, mut info_rx| async move {
                 // 块级落盘累加：MonitorUpdate 默认 0.5s 一跳，小文件零 Tick 照样有进度；
                 // ChunkProgress.downloaded 为单块累计（非增量），按块 id 取最大后求和。
-                let mut chunk_downloaded: HashMap<simple_downloader::ChunkId, u64> =
-                    HashMap::new();
+                let mut chunk_downloaded: HashMap<simple_downloader::ChunkId, u64> = HashMap::new();
                 {
-                    let mut inner = state_for_progress
-                        .inner
-                        .lock()
-                        .expect("downloader lock");
+                    let mut inner = state_for_progress.inner.lock().expect("downloader lock");
                     if let Some(entry) = inner.tasks.get_mut(&gid_for_progress) {
                         entry.total = total_size;
                     }
                 }
                 while let Ok(info) = info_rx.recv().await {
-                    let mut inner = state_for_progress
-                        .inner
-                        .lock()
-                        .expect("downloader lock");
+                    let mut inner = state_for_progress.inner.lock().expect("downloader lock");
                     let Some(entry) = inner.tasks.get_mut(&gid_for_progress) else {
                         break;
                     };
@@ -363,9 +364,7 @@ fn spawn_task(state: DownloaderState, gid: String) {
                             }
                         }
                         simple_downloader::DownloadInfo::ChunkProgress {
-                            id,
-                            downloaded,
-                            ..
+                            id, downloaded, ..
                         } => {
                             let slot = chunk_downloaded.entry(id).or_insert(0);
                             *slot = (*slot).max(downloaded);
@@ -381,7 +380,10 @@ fn spawn_task(state: DownloaderState, gid: String) {
         // 终局判定（锁内只读结果，状态变更走 set_status）。
         enum Terminal {
             Complete,
-            AutoRetry { retry_count: u32, next_retry_at_ms: u64 },
+            AutoRetry {
+                retry_count: u32,
+                next_retry_at_ms: u64,
+            },
             ErrorFinal,
             None,
         }
@@ -573,6 +575,7 @@ fn pump(state: DownloaderState) {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn dl_enqueue(
     state: tauri::State<DownloaderState>,
     url: String,
@@ -595,7 +598,10 @@ pub fn dl_enqueue(
     // 命中后按任务真实状态发事件：暂停闸开着时复用命中不能把 paused 任务伪报成 waiting，
     // 否则前端投影机会把已暂停的行迁回 waiting，破坏状态机单一真相。
     let existing = {
-        let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         inner
             .tasks
             .iter()
@@ -615,7 +621,10 @@ pub fn dl_enqueue(
     tracing::info!(target: "gmm::dl", "[uuid-trace] dl_enqueue new gid={} file_name={} dir={} url_head={} collection={:?}", gid, file_name, dir, &url[..url.len().min(80)], collection_id);
     let header_vec: Vec<(String, String)> = headers.into_iter().collect();
     let gated = {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         let gated = inner.paused_all
             || collection_id
                 .as_ref()
@@ -638,7 +647,11 @@ pub fn dl_enqueue(
                     }
                 }),
                 // 被闸住的任务直接 Paused，不进 pending；闸解除后由 resume 显式恢复。
-                status: if gated { TaskStatus::Paused } else { TaskStatus::Waiting },
+                status: if gated {
+                    TaskStatus::Paused
+                } else {
+                    TaskStatus::Waiting
+                },
                 retry_count: 0,
                 next_retry_at_ms: 0,
                 total: 0,
@@ -669,7 +682,10 @@ pub fn dl_enqueue(
 #[tauri::command]
 pub fn dl_pause_all(state: tauri::State<DownloaderState>) -> Result<usize, String> {
     let gids: Vec<String> = {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         inner.paused_all = true;
         let ids: Vec<String> = inner
             .tasks
@@ -711,12 +727,14 @@ pub fn dl_pause_all(state: tauri::State<DownloaderState>) -> Result<usize, Strin
 }
 
 /// 全局暂停闸解除：paused 的任务全部回 waiting，不受 collection 闸限制。
-
 /// 下载页“继续全部”是最高优先级恢复入口，一并清空 paused_collections。
 #[tauri::command]
 pub fn dl_resume_all(state: tauri::State<DownloaderState>) -> Result<usize, String> {
     let gids: Vec<String> = {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         inner.paused_all = false;
         inner.paused_collections.clear();
         let ids: Vec<String> = inner
@@ -752,7 +770,10 @@ pub fn dl_pause_collection(
     collection_id: String,
 ) -> Result<usize, String> {
     let gids: Vec<String> = {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         inner.paused_collections.insert(collection_id.clone());
         let ids: Vec<String> = inner
             .tasks
@@ -799,7 +820,10 @@ pub fn dl_resume_collection(
     collection_id: String,
 ) -> Result<usize, String> {
     let gids: Vec<String> = {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         inner.paused_collections.remove(&collection_id);
         if inner.paused_all {
             return Ok(0);
@@ -904,7 +928,10 @@ fn abort_entry(entry: &mut TaskEntry) {
 pub fn dl_pause(state: tauri::State<DownloaderState>, gid: String) -> Result<(), String> {
     // Active 先中止传输（保留 sidecar 断点），再经唯一入口冻结。
     {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         let Some(entry) = inner.tasks.get_mut(&gid) else {
             return Err(format!("任务不存在：{gid}"));
         };
@@ -921,7 +948,10 @@ pub fn dl_pause(state: tauri::State<DownloaderState>, gid: String) -> Result<(),
         entry.next_retry_at_ms = 0;
     }
     {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         set_status(&mut inner, &gid, TaskStatus::Paused)?;
     }
     // 腾出槽位后泵出等待队列。
@@ -935,7 +965,10 @@ pub fn dl_pause(state: tauri::State<DownloaderState>, gid: String) -> Result<(),
 #[tauri::command]
 pub fn dl_retry(state: tauri::State<DownloaderState>, gid: String) -> Result<(), String> {
     let (retry_count, next_retry_at_ms) = {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         {
             let Some(entry) = inner.tasks.get(&gid) else {
                 return Err(format!("任务不存在：{gid}"));
@@ -965,11 +998,20 @@ pub fn dl_retry(state: tauri::State<DownloaderState>, gid: String) -> Result<(),
 pub fn dl_resume(state: tauri::State<DownloaderState>, gid: String) -> Result<(), String> {
     // 先快照闸状态，再拿 entry 可变借用，避免双重借用 inner。
     let (paused_all, paused_collections): (bool, std::collections::HashSet<String>) = {
-        let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
-        (inner.paused_all, inner.paused_collections.iter().cloned().collect())
+        let inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
+        (
+            inner.paused_all,
+            inner.paused_collections.iter().cloned().collect(),
+        )
     };
     {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         let Some(entry) = inner.tasks.get_mut(&gid) else {
             return Err(format!("任务不存在：{gid}"));
         };
@@ -981,7 +1023,10 @@ pub fn dl_resume(state: tauri::State<DownloaderState>, gid: String) -> Result<()
         }
         // 闸开着时 resume 直接拒绝，避免前端自动恢复把暂停顶掉。
         if paused_all
-            || entry.collection_id.as_ref().is_some_and(|id| paused_collections.contains(id))
+            || entry
+                .collection_id
+                .as_ref()
+                .is_some_and(|id| paused_collections.contains(id))
         {
             return Err("已暂停全部/该 Collection，无法继续任务。".to_string());
         }
@@ -1003,7 +1048,10 @@ pub fn dl_cancel(
     delete_file: bool,
 ) -> Result<(), String> {
     let output = {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         let Some(mut entry) = inner.tasks.remove(&gid) else {
             return Ok(());
         };
@@ -1024,13 +1072,22 @@ pub fn dl_cancel(
 #[tauri::command]
 pub fn dl_forget(state: tauri::State<DownloaderState>, gid: String) -> Result<(), String> {
     let (status, in_pending) = {
-        let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
-        let status = inner.tasks.get(&gid).map(|e| e.status.as_status_str().to_string());
+        let inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
+        let status = inner
+            .tasks
+            .get(&gid)
+            .map(|e| e.status.as_status_str().to_string());
         let in_pending = inner.pending.iter().any(|p| p == &gid);
         (status, in_pending)
     };
     tracing::info!(target: "gmm::dl", "[purge] dl_forget start gid={} status={} in_pending={}", gid, status.as_deref().unwrap_or("ghost"), in_pending);
-    let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "下载注册表锁异常".to_string())?;
     if let Some(entry) = inner.tasks.get(&gid) {
         if entry.status == TaskStatus::Active || entry.status == TaskStatus::Waiting {
             tracing::warn!(target: "gmm::dl", "[purge] dl_forget reject gid={} status={:?} 任务尚未终局", gid, entry.status);
@@ -1049,9 +1106,12 @@ pub fn dl_purge_stopped(
     state: tauri::State<DownloaderState>,
     gids: Vec<String>,
     delete_file: bool,
-) -> Result<(usize, Vec<(String, String)>), String> {
-    let (targets, failed): (Vec<(String, String, String)>, Vec<(String, String)>) = {
-        let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+) -> Result<(usize, Vec<PurgeFailure>), String> {
+    let (targets, failed): (Vec<PurgeTarget>, Vec<PurgeFailure>) = {
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "下载注册表锁异常".to_string())?;
         let mut targets = Vec::with_capacity(gids.len());
         let mut failed = Vec::new();
         let mut ghost = 0usize;
@@ -1073,7 +1133,9 @@ pub fn dl_purge_stopped(
             abort_entry(&mut entry);
             targets.push((gid.clone(), status, entry.output_path()));
         }
-        inner.pending.retain(|pending| !targets.iter().any(|(gid, _, _)| gid == pending));
+        inner
+            .pending
+            .retain(|pending| !targets.iter().any(|(gid, _, _)| gid == pending));
         tracing::info!(target: "gmm::dl", "[purge] dl_purge_stopped classified total={} delete_file={} targets={} skipped_active={} ghost={}", gids.len(), delete_file, targets.len(), failed.len(), ghost);
         for (gid, status, _) in &targets {
             tracing::debug!(target: "gmm::dl", "[purge] dl_purge_stopped target gid={} status={}", gid, status);
@@ -1089,7 +1151,8 @@ pub fn dl_purge_stopped(
         if delete_file {
             // remove_file 返回 Err 即记失败明细返回前端（旧逻辑静默吞错是排查黑洞）。
             let main = std::fs::remove_file(output).map_err(|e| e.to_string());
-            let bitcode = std::fs::remove_file(format!("{output}.download.bitcode")).map_err(|e| e.to_string());
+            let bitcode = std::fs::remove_file(format!("{output}.download.bitcode"))
+                .map_err(|e| e.to_string());
             match (&main, &bitcode) {
                 (Ok(()), Ok(())) | (Ok(()), Err(_)) | (Err(_), Ok(())) => {
                     // 至少删掉一个：断点/主文件其一本就不存在属正常，不记失败。
@@ -1098,8 +1161,12 @@ pub fn dl_purge_stopped(
                 }
                 (Err(m), Err(b)) => {
                     // 两者皆不存在也视为已删干净（NotFound 不算失败）；其余记失败。
-                    let m_nf = m.contains("系统找不到指定的文件") || m.contains("No such file") || m.contains("os error 2");
-                    let b_nf = b.contains("系统找不到指定的文件") || b.contains("No such file") || b.contains("os error 2");
+                    let m_nf = m.contains("系统找不到指定的文件")
+                        || m.contains("No such file")
+                        || m.contains("os error 2");
+                    let b_nf = b.contains("系统找不到指定的文件")
+                        || b.contains("No such file")
+                        || b.contains("os error 2");
                     if m_nf && b_nf {
                         file_ok += 1;
                         tracing::info!(target: "gmm::dl", "[purge] dl_purge_stopped file gid={} status={} output={} already_gone", gid, status, output);
@@ -1129,8 +1196,13 @@ pub fn dl_delete_files(paths: Vec<String>) -> Result<(usize, Vec<(String, String
     let mut failed = Vec::new();
     for output in &paths {
         let main = std::fs::remove_file(output).map_err(|e| e.to_string());
-        let bitcode = std::fs::remove_file(format!("{output}.download.bitcode")).map_err(|e| e.to_string());
-        let is_nf = |m: &str| m.contains("系统找不到指定的文件") || m.contains("No such file") || m.contains("os error 2");
+        let bitcode =
+            std::fs::remove_file(format!("{output}.download.bitcode")).map_err(|e| e.to_string());
+        let is_nf = |m: &str| {
+            m.contains("系统找不到指定的文件")
+                || m.contains("No such file")
+                || m.contains("os error 2")
+        };
         match (&main, &bitcode) {
             (Ok(()), _) | (_, Ok(())) => {
                 ok += 1;
@@ -1159,7 +1231,10 @@ pub fn dl_change_option(
     workers: u64,
     proxy: Option<String>,
 ) -> Result<(), String> {
-    let mut inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+    let mut inner = state
+        .inner
+        .lock()
+        .map_err(|_| "下载注册表锁异常".to_string())?;
     let Some(entry) = inner.tasks.get_mut(&gid) else {
         return Err(format!("任务不存在：{gid}"));
     };
@@ -1219,7 +1294,12 @@ fn watchdog_settle_finished(state: DownloaderState) {
         state.emit_snapshot_str(&gid, "complete");
         tracing::info!(target: "gmm::dl", "[watchdog] on-disk full, force complete gid={}", gid);
     }
-    if !state.inner.lock().map(|inner| inner.pending.is_empty()).unwrap_or(true) {
+    if !state
+        .inner
+        .lock()
+        .map(|inner| inner.pending.is_empty())
+        .unwrap_or(true)
+    {
         pump(state.clone());
     }
 }
@@ -1230,7 +1310,10 @@ pub fn dl_tell_status(
     gid: String,
 ) -> Result<TaskSnapshot, String> {
     watchdog_settle_finished((*state).clone());
-    let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "下载注册表锁异常".to_string())?;
     inner
         .tasks
         .get(&gid)
@@ -1243,7 +1326,10 @@ pub fn dl_tell_status(
 #[tauri::command]
 pub fn dl_list(state: tauri::State<DownloaderState>) -> Result<Vec<TaskSnapshot>, String> {
     watchdog_settle_finished((*state).clone());
-    let inner = state.inner.lock().map_err(|_| "下载注册表锁异常".to_string())?;
+    let inner = state
+        .inner
+        .lock()
+        .map_err(|_| "下载注册表锁异常".to_string())?;
     Ok(inner.tasks.values().map(snapshot_of).collect())
 }
 
@@ -1311,9 +1397,28 @@ fn sanitize_file_name(name: &str) -> String {
     let stem = upper.split('.').next().unwrap_or("");
     if matches!(
         stem,
-        "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6"
-            | "COM7" | "COM8" | "COM9" | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6"
-            | "LPT7" | "LPT8" | "LPT9"
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
     ) {
         s = format!("_{s}");
     }
@@ -1361,7 +1466,14 @@ fn filename_from_disposition(value: &str) -> Option<String> {
 }
 
 fn ext_for_mime(mime: &str) -> Option<&'static str> {
-    match mime.split(';').next().unwrap_or("").trim().to_ascii_lowercase().as_str() {
+    match mime
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "application/pdf" => Some("pdf"),
         "application/zip" | "application/x-zip-compressed" => Some("zip"),
         "application/gzip" | "application/x-gzip" => Some("gz"),
@@ -1391,7 +1503,14 @@ fn ext_for_magic(head: &[u8]) -> Option<&'static str> {
     if head.len() >= 4 && head[0] == b'P' && head[1] == b'K' && head[2] == 0x03 && head[3] == 0x04 {
         return Some("zip");
     }
-    if head.len() >= 6 && head[0] == b'7' && head[1] == b'z' && head[2] == 0xBC && head[3] == 0xAF && head[4] == 0x27 && head[5] == 0x1C {
+    if head.len() >= 6
+        && head[0] == b'7'
+        && head[1] == b'z'
+        && head[2] == 0xBC
+        && head[3] == 0xAF
+        && head[4] == 0x27
+        && head[5] == 0x1C
+    {
         return Some("7z");
     }
     if head.len() >= 4 && head[0] == b'R' && head[1] == b'a' && head[2] == b'r' && head[3] == b'!' {
@@ -1440,7 +1559,10 @@ fn name_from_query(url: &str) -> Option<String> {
     let q = url.split('?').nth(1)?.split('#').next().unwrap_or("");
     for kv in q.split('&') {
         let (k, v) = kv.split_once('=')?;
-        if !k.trim().eq_ignore_ascii_case("response-content-disposition") {
+        if !k
+            .trim()
+            .eq_ignore_ascii_case("response-content-disposition")
+        {
             continue;
         }
         let disp = percent_decode(&v.replace('+', " "));
@@ -1513,11 +1635,16 @@ fn probe_client(
         .http1_only()
         .connect_timeout(Duration::from_secs(10));
     // 探测默认浏览器 UA：部分站点无 UA 直接拒绝。
-    let has_ua = headers.iter().any(|(k, _)| k.trim().eq_ignore_ascii_case("user-agent"));
+    let has_ua = headers
+        .iter()
+        .any(|(k, _)| k.trim().eq_ignore_ascii_case("user-agent"));
     if !has_ua {
         b = b.user_agent(PROBE_UA);
     }
-    if headers.iter().any(|(k, _)| k.trim().eq_ignore_ascii_case("referer")) {
+    if headers
+        .iter()
+        .any(|(k, _)| k.trim().eq_ignore_ascii_case("referer"))
+    {
         // 用户显式 Referer 优先，不注入 origin。
     } else if let Some(origin) = origin_referer(url) {
         b = b.default_headers({
@@ -1532,9 +1659,10 @@ fn probe_client(
         use simple_downloader::reqwest::header::{HeaderName, HeaderValue};
         let mut m = simple_downloader::reqwest::header::HeaderMap::new();
         for (k, v) in headers {
-            if let (Ok(name), Ok(value)) =
-                (HeaderName::from_bytes(k.trim().as_bytes()), HeaderValue::from_str(v.trim()))
-            {
+            if let (Ok(name), Ok(value)) = (
+                HeaderName::from_bytes(k.trim().as_bytes()),
+                HeaderValue::from_str(v.trim()),
+            ) {
                 m.insert(name, value);
             }
         }
@@ -1559,7 +1687,7 @@ fn origin_referer(url: &str) -> Option<String> {
         return None;
     }
     let rest = &s[scheme_end + 3..];
-    let end = rest.find(|c| c == '/' || c == '?' || c == '#').unwrap_or(rest.len());
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = rest[..end].trim();
     if authority.is_empty() || authority.contains(char::is_whitespace) {
         return None;
@@ -1581,10 +1709,16 @@ async fn probe_filename_inner(
             let final_url = resp.url().as_str().to_string();
             let (name, ctype) = suggest_from_headers(resp.headers(), &final_url);
             if let Some(n) = name {
-                let is_header = resp.headers().contains_key(simple_downloader::reqwest::header::CONTENT_DISPOSITION);
+                let is_header = resp
+                    .headers()
+                    .contains_key(simple_downloader::reqwest::header::CONTENT_DISPOSITION);
                 return Ok(ProbeFilename {
                     name: n,
-                    source: if is_header { "header".to_string() } else { "url".to_string() },
+                    source: if is_header {
+                        "header".to_string()
+                    } else {
+                        "url".to_string()
+                    },
                     content_type: ctype,
                     total_bytes: total_from_headers(resp.headers()),
                 });
@@ -1603,11 +1737,16 @@ async fn probe_filename_inner(
             let head: Vec<u8> = resp.bytes().await.unwrap_or_default().into_iter().collect();
             let (name, ctype) = suggest_from_headers(&headers, &final_url);
             if let Some(n) = name {
-                let is_header = headers.contains_key(simple_downloader::reqwest::header::CONTENT_DISPOSITION);
+                let is_header =
+                    headers.contains_key(simple_downloader::reqwest::header::CONTENT_DISPOSITION);
                 let fixed = ensure_extension_by_magic(&n, &head).unwrap_or(n);
                 return Ok(ProbeFilename {
                     name: fixed,
-                    source: if is_header { "header".to_string() } else { "url".to_string() },
+                    source: if is_header {
+                        "header".to_string()
+                    } else {
+                        "url".to_string()
+                    },
                     content_type: ctype,
                     total_bytes: total,
                 });
@@ -1639,7 +1778,9 @@ pub async fn dl_probe_filename(
     proxy: Option<String>,
 ) -> Result<ProbeFilename, String> {
     let header_vec: Vec<(String, String)> = headers.into_iter().collect();
-    let proxy_str = proxy.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let proxy_str = proxy
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     // 探测客户端自带 8s 超时（probe_client 内置），无需额外 tokio 依赖。
     probe_filename_inner(&url, &header_vec, proxy_str.as_deref()).await
 }
@@ -1680,7 +1821,9 @@ pub async fn nexus_resolve_direct(
             builder = builder.proxy(p);
         }
     }
-    let client = builder.build().map_err(|_| "无法创建下载请求。".to_string())?;
+    let client = builder
+        .build()
+        .map_err(|_| "无法创建下载请求。".to_string())?;
     // 站内直链接口：fid=文件 id，game_id=数字 id，nmm=1 走 Mod Manager 通道。
     let nmm_flag = if is_nmm.unwrap_or(false) { "1" } else { "0" };
     let body = format!("fid={}&game_id={}&nmm={}", file_id, game_id, nmm_flag);
@@ -1689,16 +1832,30 @@ pub async fn nexus_resolve_direct(
         game_domain,
         mod_id,
         file_id,
-        if is_nmm.unwrap_or(false) { "&nmm=1" } else { "" }
+        if is_nmm.unwrap_or(false) {
+            "&nmm=1"
+        } else {
+            ""
+        }
     );
     let resp = client
         .post("https://www.nexusmods.com/Core/Libs/Common/Managers/Downloads?GenerateDownloadUrl")
-        .header(COOKIE, HeaderValue::from_str(&cookie).map_err(|_| "Cookie 格式非法。".to_string())?)
+        .header(
+            COOKIE,
+            HeaderValue::from_str(&cookie).map_err(|_| "Cookie 格式非法。".to_string())?,
+        )
         .header(USER_AGENT, PROBE_UA)
-        .header(REFERER, HeaderValue::from_str(&page_url).unwrap_or(HeaderValue::from_static("https://www.nexusmods.com/")))
+        .header(
+            REFERER,
+            HeaderValue::from_str(&page_url)
+                .unwrap_or(HeaderValue::from_static("https://www.nexusmods.com/")),
+        )
         .header(ORIGIN, "https://www.nexusmods.com")
         .header("X-Requested-With", "XMLHttpRequest")
-        .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+        .header(
+            "Content-Type",
+            "application/x-www-form-urlencoded; charset=UTF-8",
+        )
         .body(body)
         .send()
         .await
@@ -1708,9 +1865,15 @@ pub async fn nexus_resolve_direct(
         return Err("Cookie 已失效，请重新登录 NexusMods 后更新 Cookie。".to_string());
     }
     if !resp.status().is_success() {
-        return Err(format!("NexusMods 返回异常（{}），请稍后重试。", resp.status().as_u16()));
+        return Err(format!(
+            "NexusMods 返回异常（{}），请稍后重试。",
+            resp.status().as_u16()
+        ));
     }
-    let text = resp.text().await.map_err(|e| format!("读取直链响应失败：{e}"))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取直链响应失败：{e}"))?;
     // 响应为 JSON 或 HTML 片段，统一正则提取可用直链（nxm/CDN/api/files 均可）。
     for pat in [
         "https://filedelivery.nexus-cdn.com",
@@ -1729,7 +1892,12 @@ pub async fn nexus_resolve_direct(
     }
     // JSON 形态 {"url": "..."} 兜底。
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-        if let Some(u) = v.get("url").and_then(|x| x.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(u) = v
+            .get("url")
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             return Ok(u.to_string());
         }
     }
@@ -1741,7 +1909,7 @@ fn extract_url_with_prefix(text: &str, prefix: &str) -> Option<String> {
     let start = text.find(prefix)?;
     let rest = &text[start..];
     let end = rest
-        .find(|c| c == '"' || c == '\'' || c == '\\' || c == ' ' || c == '<' || c == '>')
+        .find(['"', '\'', '\\', ' ', '<', '>'])
         .unwrap_or(rest.len());
     let mut url = rest[..end].replace("\\/", "/").replace("&amp;", "&");
     // JSON 转义的 \u0026 等只处理最常见的 &。
@@ -1797,7 +1965,10 @@ async fn nexus_game_id_via_api(
         }
     }
     let client = builder.build().ok()?;
-    let mut req = client.get(format!("https://api.nexusmods.com/v1/games/{}.json", domain));
+    let mut req = client.get(format!(
+        "https://api.nexusmods.com/v1/games/{}.json",
+        domain
+    ));
     let key = api_key.trim();
     if !key.is_empty() {
         if let Ok(v) = HeaderValue::from_str(key) {
@@ -1815,7 +1986,10 @@ async fn nexus_game_id_via_api(
         return None;
     }
     let value: serde_json::Value = resp.json().await.ok()?;
-    value.get("id").and_then(|id| id.as_u64()).map(|id| id.to_string())
+    value
+        .get("id")
+        .and_then(|id| id.as_u64())
+        .map(|id| id.to_string())
 }
 
 /// 回退路径：抓 www Mod 页解析 data-game-id（可能撞 Cloudflare 验证，失败即报错）。
@@ -1834,7 +2008,9 @@ async fn nexus_game_id_via_page(
             builder = builder.proxy(p);
         }
     }
-    let client = builder.build().map_err(|_| "无法创建下载请求。".to_string())?;
+    let client = builder
+        .build()
+        .map_err(|_| "无法创建下载请求。".to_string())?;
     let url = format!("https://www.nexusmods.com/{}/mods/1", game_domain);
     let mut req = client.get(&url);
     if let Ok(v) = HeaderValue::from_str(cookie) {
@@ -1845,14 +2021,22 @@ async fn nexus_game_id_via_page(
         .await
         .map_err(|e| format!("获取游戏信息失败：{e}"))?;
     if !resp.status().is_success() {
-        return Err(format!("游戏页面返回异常（{}），请稍后重试。", resp.status().as_u16()));
+        return Err(format!(
+            "游戏页面返回异常（{}），请稍后重试。",
+            resp.status().as_u16()
+        ));
     }
     let text = resp
         .text()
         .await
         .map_err(|e| format!("读取游戏页面失败：{e}"))?;
     // data-game-id="3333" / game_id: 3333 / "game_id":3333 多形态兜底。
-    for marker in ["data-game-id=\"", "data-game-id='", "\"game_id\":", "game_id:"] {
+    for marker in [
+        "data-game-id=\"",
+        "data-game-id='",
+        "\"game_id\":",
+        "game_id:",
+    ] {
         if let Some(pos) = text.find(marker) {
             let rest = text[pos + marker.len()..].trim_start_matches(['"', '\'', ' ', ':']);
             let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -1900,7 +2084,7 @@ mod tests {
 
     #[test]
     fn retry_same_gid() {
-        // error → retrying 同一 gid，retry_count 递增，next_retry_at 按退避 1s 落点。
+        // error → retrying 同一 gid，retry_count 递增，next_retry_at 按退避 10s 落点。
         let state = mem_state();
         let mut inner = state.inner.lock().unwrap();
         insert_task(&mut inner, "g1", TaskStatus::Error);
@@ -1921,10 +2105,10 @@ mod tests {
         let entry = inner.tasks.get("g1").unwrap();
         assert_eq!(entry.gid, "g1");
         assert_eq!(entry.status, TaskStatus::Waiting);
-        // 退避档位断言：1s/2s/4s。
-        assert_eq!(backoff_ms(1), 1000);
-        assert_eq!(backoff_ms(2), 2000);
-        assert_eq!(backoff_ms(3), 4000);
+        // 退避档位断言：10s/20s/40s（对齐 RETRY_BACKOFF_MS）。
+        assert_eq!(backoff_ms(1), 10000);
+        assert_eq!(backoff_ms(2), 20000);
+        assert_eq!(backoff_ms(3), 40000);
     }
 
     #[test]

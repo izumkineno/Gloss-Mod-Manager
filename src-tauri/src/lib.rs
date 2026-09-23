@@ -173,9 +173,9 @@ fn resolve_app_log_directory(bundle_identifier: &str) -> io::Result<PathBuf> {
             )
         })?;
 
-        return Ok(PathBuf::from(local_app_data)
+        Ok(PathBuf::from(local_app_data)
             .join(bundle_identifier)
-            .join("logs"));
+            .join("logs"))
     }
 
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
