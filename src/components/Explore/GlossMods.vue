@@ -109,6 +109,8 @@ const props = withDefaults(
         aiBaseUrl?: string;
         aiApiKey?: string;
         aiModelId?: string;
+        // 独立小模型通道：true 时用一句话直译 prompt，不套 JSON 指令。
+        aiSimplePrompt?: boolean;
         manualTranslateToken?: number;
         cancelTranslateToken?: number;
     }>(),
@@ -119,6 +121,7 @@ const props = withDefaults(
         aiBaseUrl: "",
         aiApiKey: "",
         aiModelId: "",
+        aiSimplePrompt: false,
         manualTranslateToken: 0,
         cancelTranslateToken: 0,
     },
@@ -1259,6 +1262,12 @@ async function refreshTranslations(mode: TranslationRefreshMode) {
     translationAbortController = abortController;
 
     try {
+        console.debug("[翻译取证] GlossMods 发送", {
+            mode,
+            source: "GlossMod",
+            count: mods.value.length,
+            firstIds: mods.value.slice(0, 3).map((item) => String(item.id)),
+        });
         const translatedMap = await translateExploreItems({
             baseUrl: props.aiBaseUrl,
             apiKey: props.aiApiKey,
@@ -1267,8 +1276,16 @@ async function refreshTranslations(mode: TranslationRefreshMode) {
             source: "GlossMod",
             items: mods.value.map(buildTranslationSourceItem),
             abortSignal: abortController.signal,
+            simplePrompt: props.aiSimplePrompt,
+            // 边译边显：字段/条目一出即写入响应式 map，卡片逐个变中文。
+            onEntry: (id, entry) => {
+                if (currentRequestSequence !== translationRequestSequence) {
+                    return;
+                }
+                translationMap.value = { ...translationMap.value, [id]: entry };
+                manualTranslationVisible.value = true;
+            },
         });
-
         if (currentRequestSequence !== translationRequestSequence) {
             return;
         }

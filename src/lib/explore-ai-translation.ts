@@ -9,7 +9,6 @@ import { z } from "zod";
 import { languageOptions, type AppLocale } from "@/lang/locales";
 import { AiChat } from "@/lib/AiChat";
 
-const TRANSLATION_CHUNK_SIZE = 12;
 const MAX_DESCRIPTION_LENGTH = 12000;
 const TRANSLATION_PROMPT_VERSION = 2;
 
@@ -43,6 +42,10 @@ export interface IExploreTranslationRequest {
     source: string;
     items: IExploreTranslationSourceItem[];
     abortSignal?: AbortSignal;
+    // 独立小模型通道：用极简 prompt 逐字段直译，不套复杂 JSON 指令。
+    simplePrompt?: boolean;
+    // 流式输出：每译完一条（独立通道为每字段）即回调，调用方写入响应式 map 边译边显。
+    onEntry?: (id: string, entry: IExploreTranslationEntry) => void;
 }
 
 interface IPreparedTranslationItem extends IExploreTranslationEntry {
@@ -221,15 +224,6 @@ function getTargetLanguage(locale: AppLocale) {
     );
 }
 
-function chunkItems<T>(items: T[], size: number) {
-    const chunks: T[][] = [];
-
-    for (let index = 0; index < items.length; index += size) {
-        chunks.push(items.slice(index, index + size));
-    }
-
-    return chunks;
-}
 
 async function resolveModel(baseUrl: string, apiKey: string, modelId?: string) {
     const service = new AiChat(baseUrl, apiKey);
@@ -285,7 +279,35 @@ function buildTranslationPrompt(
     ].join("\n");
 }
 
-async function translateChunk(
+// 部分自建/聚合通道（如 hy-mt2）不支持 responseFormat+structuredOutputs，
+// Output.object 会直接 NoObjectGeneratedError。这里先走结构化，失败则回退纯文本 + 本地解析。
+function parseTranslationText(
+    text: string,
+): z.infer<typeof translationEntrySchema>[] | null {
+    const candidates: string[] = [text];
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/iu);
+    if (fenced?.[1]) {
+        candidates.unshift(fenced[1]);
+    }
+    const firstBrace = text.indexOf("{");
+    const lastBrace = text.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+        candidates.unshift(text.slice(firstBrace, lastBrace + 1));
+    }
+    for (const candidate of candidates) {
+        try {
+            const parsed: unknown = JSON.parse(candidate);
+            const normalized = translationResultSchema.parse(parsed);
+            return normalized.items;
+        } catch {
+            continue;
+        }
+    }
+    return null;
+}
+// 极简通道（独立小模型）：逐字段一句话直译，不套 JSON schema 指令。
+// 字段为空/纯专有名词/已是目标语言时要求原样返回；返回原文即视为未译。
+async function translateChunkSimple(
     request: IExploreTranslationRequest,
     items: IPreparedTranslationItem[],
 ) {
@@ -294,32 +316,141 @@ async function translateChunk(
         request.apiKey,
         request.modelId,
     );
-    const model = wrapLanguageModel({
-        model: service.Agent.chatModel(modelId),
-        middleware: extractJsonMiddleware(),
-    });
-    const result = await generateText({
-        model,
-        output: Output.object({
-            name: "ExploreModTranslations",
-            description: "Translated display-only text for mod browsing cards.",
-            schema: translationResultSchema,
-        }),
-        instructions:
-            "你是 Gloss Mod Manager 的 Mod 元数据翻译器。只返回符合 schema 的 JSON，不要改写任何功能字段。",
-        prompt: buildTranslationPrompt(
-            request.source,
-            request.targetLocale,
-            items,
-        ),
-        temperature: 0,
-        maxRetries: 1,
-        timeout: 60000,
-        abortSignal: request.abortSignal,
-    });
-    const resultItems = result.output.items;
+    const targetLanguage = getTargetLanguage(request.targetLocale);
+    const chatModel = service.Agent.chatModel(modelId);
+    const out: Record<string, IExploreTranslationEntry> = {};
+    for (const item of items) {
+        if (request.abortSignal?.aborted) {
+            break;
+        }
+        const translated: IExploreTranslationEntry = { ...item };
+        const textFields = [
+            "title",
+            "summary",
+            "description",
+            "typeName",
+            "resourceName",
+        ] as const;
+        for (const field of textFields) {
+            const original = item[field];
+            if (!original.trim()) {
+                continue;
+            }
+            const { text } = await generateText({
+                model: chatModel,
+                instructions: `将以下文本翻译为${targetLanguage.nativeName}，注意只需要输出翻译后的结果，不要额外解释：`,
+                prompt: original,
+                temperature: 0,
+                maxRetries: 1,
+                timeout: 60000,
+                abortSignal: request.abortSignal,
+            });
+            const cleaned = text.trim();
+            // 原样返回/空返回视为未译，保留原文。
+            if (cleaned && cleaned !== original.trim()) {
+                translated[field] = cleaned;
+                // 边译边显：字段一出即回调，卡片标题先变中文。
+                request.onEntry?.(item.id, { ...translated });
+            }
+        }
+        for (const field of ["categories", "tags"] as const) {
+            const list = item[field];
+            if (list.length === 0) {
+                continue;
+            }
+            const { text } = await generateText({
+                model: chatModel,
+                instructions: `将以下文本翻译为${targetLanguage.nativeName}，注意只需要输出翻译后的结果，不要额外解释：`,
+                prompt: list.join("\n"),
+                temperature: 0,
+                maxRetries: 1,
+                timeout: 60000,
+                abortSignal: request.abortSignal,
+            });
+            const lines = text
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean);
+            if (lines.length === list.length) {
+                translated[field] = lines;
+                request.onEntry?.(item.id, { ...translated });
+            }
+        }
+        translationCache.set(item.cacheKey, translated);
+        out[item.id] = translated;
+        request.onEntry?.(item.id, { ...translated });
+    }
+    return out;
+}
+async function translateChunk(
+    request: IExploreTranslationRequest,
+    items: IPreparedTranslationItem[],
+) {
+    // 极简通道：逐字段直译，返回原文 key→译文的扁平对象，小模型照做即可。
+    if (request.simplePrompt) {
+        return translateChunkSimple(request, items);
+    }
+    const { service, modelId } = await resolveModel(
+        request.baseUrl,
+        request.apiKey,
+        request.modelId,
+    );
+    const prompt = buildTranslationPrompt(
+        request.source,
+        request.targetLocale,
+        items,
+    );
+    const instructions =
+        "你是 Gloss Mod Manager 的 Mod 元数据翻译器。只返回符合 schema 的 JSON，不要改写任何功能字段。";
+    let resultItems: z.infer<typeof translationEntrySchema>[];
+    try {
+        const model = wrapLanguageModel({
+            model: service.Agent.chatModel(modelId),
+            middleware: extractJsonMiddleware(),
+        });
+        const result = await generateText({
+            model,
+            output: Output.object({
+                name: "ExploreModTranslations",
+                description:
+                    "Translated display-only text for mod browsing cards.",
+                schema: translationResultSchema,
+            }),
+            instructions,
+            prompt,
+            temperature: 0,
+            maxRetries: 1,
+            timeout: 60000,
+            abortSignal: request.abortSignal,
+        });
+        resultItems = result.output.items;
+    } catch (error) {
+        console.debug("[翻译取证] 结构化失败，进回退", {
+            isNoObject: NoObjectGeneratedError.isInstance(error),
+            message: error instanceof Error ? error.message.slice(0, 200) : String(error),
+        });
+        // 结构化通道失败（如 responseFormat 不支持）时回退纯文本。
+        if (!NoObjectGeneratedError.isInstance(error)) {
+            throw error;
+        }
+        const fallback = await generateText({
+            model: service.Agent.chatModel(modelId),
+            instructions,
+            prompt,
+            temperature: 0,
+            maxRetries: 1,
+            timeout: 60000,
+            abortSignal: request.abortSignal,
+        });
+        console.debug("[翻译取证] 纯文本回退原文", fallback.text.slice(0, 500));
+        const parsed = parseTranslationText(fallback.text);
+        console.debug("[翻译取证] 回退解析", { ok: Boolean(parsed), count: parsed?.length ?? 0 });
+        if (!parsed) {
+            throw error;
+        }
+        resultItems = parsed;
+    }
     const resultMap = new Map(resultItems.map((item) => [item.id, item]));
-
     return Object.fromEntries(
         items.map((item, index) => {
             const translated = normalizeTranslatedEntry(
@@ -338,9 +469,9 @@ export async function translateExploreItems(
     request: IExploreTranslationRequest,
 ) {
     const normalizedBaseUrl = request.baseUrl.trim();
-    const normalizedApiKey = request.apiKey.trim();
 
-    if (!normalizedBaseUrl || !normalizedApiKey) {
+    // key 可空：本地无鉴权通道（如 Ollama）仅需 Base Url。
+    if (!normalizedBaseUrl) {
         throw new Error("请先在设置页完成 AI 配置。");
     }
 
@@ -363,8 +494,20 @@ export async function translateExploreItems(
         pendingItems.push(item);
     }
 
-    for (const chunk of chunkItems(pendingItems, TRANSLATION_CHUNK_SIZE)) {
-        Object.assign(translatedMap, await translateChunk(request, chunk));
+    // 逐条发送：弱模型一次只译一条，避免批量 JSON 被截断/错位；单条失败只丢该条。
+    for (const item of pendingItems) {
+        if (request.abortSignal?.aborted) {
+            break;
+        }
+        try {
+            Object.assign(translatedMap, await translateChunk(request, [item]));
+        } catch (error) {
+            console.debug("[翻译取证] 单条失败跳过", { id: item.id });
+            if (request.abortSignal?.aborted) {
+                break;
+            }
+            throw error;
+        }
     }
 
     return translatedMap;

@@ -175,6 +175,23 @@ export const useSettings = defineStore("Settings", () => {
     const baseUrl = PersistentStore.useValue<string>("agentbaseUrl", "");
     // AI API Key 与 GlossMod Key 属于凭据，从明文配置迁移到加密存储。
     const apiKey = SecretStore.useValue("agentApiKey", "agentApiKey");
+    // 独立 AI 翻译通道：开关打开时翻译走独立 url/key/模型，否则回落主 AI 配置。
+    const translationUseIndependent = PersistentStore.useValue<boolean>(
+        "translationUseIndependent",
+        false,
+    );
+    const translationBaseUrl = PersistentStore.useValue<string>(
+        "translationBaseUrl",
+        "",
+    );
+    const translationApiKey = SecretStore.useValue(
+        "translationApiKey",
+        "translationApiKey",
+    );
+    const translationModelId = PersistentStore.useValue<string>(
+        "translationModelId",
+        "",
+    );
 
     const glossModKey = SecretStore.useValue("glossModKey", "glossModKey");
 
@@ -195,6 +212,7 @@ export const useSettings = defineStore("Settings", () => {
             "glossModKey",
             "nexusModsToken",
             "nexusModsCookie",
+            "translationApiKey",
         );
     }
 
@@ -407,6 +425,10 @@ export const useSettings = defineStore("Settings", () => {
         settingsStartPageOptions,
         baseUrl,
         apiKey,
+        translationUseIndependent,
+        translationBaseUrl,
+        translationApiKey,
+        translationModelId,
         glossModKey,
         selectStoragePath,
         loginNexusModsUser,

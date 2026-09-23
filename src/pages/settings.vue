@@ -34,6 +34,10 @@ const {
     theme,
     baseUrl,
     apiKey,
+    translationUseIndependent,
+    translationBaseUrl,
+    translationApiKey,
+    translationModelId,
     glossModKey,
 } = storeToRefs(settings);
 const themeModel = computed<ThemeMode>({
@@ -97,6 +101,47 @@ async function openNexusModsProfile() {
     }
 }
 
+const translationModelsLoading = ref(false);
+// 下拉候选项：拉取成功后缓存，供模型输入框 datalist 联想；手填 ID 仍保留。
+const translationModelList = ref<string[]>([]);
+
+// 独立翻译通道模型拉取：用独立 url/key 建临时 AiChat，只读 /models，不碰主对话会话。
+async function refreshTranslationModels() {
+    // key 可空：本地无鉴权通道仅需 Base Url 即可拉 /models。
+    if (!translationBaseUrl.value.trim()) {
+        ElMessage.warning(t("settings.translationModelNeedsChannel"));
+        return;
+    }
+    translationModelsLoading.value = true;
+    try {
+        const { AiChat } = await import("@/lib/AiChat");
+        const service = new AiChat(
+            translationBaseUrl.value,
+            translationApiKey.value,
+        );
+        const models = await service.getModels();
+        translationModelList.value = models.map((model) => model.id);
+        if (models.length === 0) {
+            ElMessage.warning(t("settings.translationModelEmpty"));
+            return;
+        }
+        if (!models.some((model) => model.id === translationModelId.value.trim())) {
+            translationModelId.value = models[0].id;
+        }
+        ElMessage.success(
+            t("settings.translationModelRefreshed", { count: models.length }),
+        );
+    } catch (error: unknown) {
+        console.error(error);
+        ElMessage.error(
+            error instanceof Error
+                ? error.message
+                : t("settings.translationModelFailed"),
+        );
+    } finally {
+        translationModelsLoading.value = false;
+    }
+}
 watch(
     () => route.query.nexusAuthAction,
     (action) => {
@@ -360,6 +405,85 @@ watch(
                                     >
                                         使用教程 <icon-external-link />
                                     </a>
+                                </Button>
+                            </div>
+                        </div>
+                        <!-- 独立 AI 翻译通道：打开后翻译走独立 url/key/模型 -->
+                        <div class="flex w-full items-center justify-between gap-2">
+                            <Label
+                                for="translation-use-independent"
+                                class="text-sm font-medium"
+                                >{{
+                                    t("settings.translationUseIndependent")
+                                }}</Label
+                            >
+                            <Switch
+                                id="translation-use-independent"
+                                v-model="translationUseIndependent"
+                            />
+                        </div>
+                        <div
+                            v-if="translationUseIndependent"
+                            class="grid grid-cols-1 items-center gap-4 lg:grid-cols-3"
+                        >
+                            <div class="flex min-w-0 items-center">
+                                <InputGroup>
+                                    <InputGroupInput
+                                        type="text"
+                                        :placeholder="
+                                            t('settings.translationBaseUrl')
+                                        "
+                                        v-model="translationBaseUrl"
+                                    />
+                                    <InputGroupAddon>
+                                        <icon-link />
+                                    </InputGroupAddon>
+                                </InputGroup>
+                            </div>
+                            <div class="flex min-w-0 items-center">
+                                <InputGroup>
+                                    <InputGroupInput
+                                        type="password"
+                                        placeholder="API Key"
+                                        v-model="translationApiKey"
+                                    />
+                                    <InputGroupAddon>
+                                        <icon-key-square />
+                                    </InputGroupAddon>
+                                </InputGroup>
+                            </div>
+                            <div class="flex min-w-0 items-center gap-2">
+                                <InputGroup class="min-w-0 flex-1">
+                                    <!-- 下拉+手填两用：list 指向拉取缓存的 datalist -->
+                                    <InputGroupInput
+                                        type="text"
+                                        list="translation-model-options"
+                                        :placeholder="
+                                            t('settings.translationModelId')
+                                        "
+                                        v-model="translationModelId"
+                                    />
+                                    <InputGroupAddon>
+                                        <icon-link />
+                                    </InputGroupAddon>
+                                </InputGroup>
+                                <datalist id="translation-model-options">
+                                    <option
+                                        v-for="modelId in translationModelList"
+                                        :key="modelId"
+                                        :value="modelId"
+                                    />
+                                </datalist>
+                                <Button
+                                    variant="outline"
+                                    :disabled="translationModelsLoading"
+                                    @click="refreshTranslationModels"
+                                >
+                                    {{
+                                        translationModelsLoading
+                                            ? t("settings.translationModelLoading")
+                                            : t("settings.translationModelRefresh")
+                                    }}
                                 </Button>
                             </div>
                         </div>

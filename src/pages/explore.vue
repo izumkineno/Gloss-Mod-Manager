@@ -43,8 +43,26 @@ const cancelTranslateToken = ref(0);
 const translationBusy = ref(false);
 
 const currentGame = computed(() => manager.managerGame);
+// 独立翻译通道：开关打开时翻译走独立 url/key，模型为空则沿用主模型选择。
+const translationCredentials = computed(() => {
+    if (settings.translationUseIndependent) {
+        return {
+            baseUrl: settings.translationBaseUrl,
+            apiKey: settings.translationApiKey,
+            modelId:
+                settings.translationModelId.trim() ||
+                selectedAiModelId.value,
+        };
+    }
+    return {
+        baseUrl: settings.baseUrl,
+        apiKey: settings.apiKey,
+        modelId: selectedAiModelId.value,
+    };
+});
 const hasAiConfiguration = computed(() => {
-    return Boolean(settings.baseUrl.trim() && settings.apiKey.trim());
+    // key 可空（本地无鉴权通道如 Ollama），仅要求 baseUrl 非空。
+    return Boolean(translationCredentials.value.baseUrl.trim());
 });
 const effectiveAutoTranslate = computed(() => {
     return autoTranslate.value && hasAiConfiguration.value;
@@ -350,15 +368,15 @@ function handleTranslationLoadingChange(loading: boolean) {
                 {{ item.label }}
             </button>
         </nav>
-
         <GlossMods
             v-if="activeProvider === 'GlossMod'"
             :auto-translate="effectiveAutoTranslate"
             :translation-locale="translationLocaleModel"
             :show-original="showOriginal"
-            :ai-base-url="settings.baseUrl"
-            :ai-api-key="settings.apiKey"
-            :ai-model-id="selectedAiModelId"
+            :ai-base-url="translationCredentials.baseUrl"
+            :ai-api-key="translationCredentials.apiKey"
+            :ai-model-id="translationCredentials.modelId"
+            :ai-simple-prompt="settings.translationUseIndependent"
             :manual-translate-token="manualTranslateToken"
             :cancel-translate-token="cancelTranslateToken"
             @translation-loading-change="handleTranslationLoadingChange"
@@ -369,9 +387,10 @@ function handleTranslationLoadingChange(loading: boolean) {
             :auto-translate="effectiveAutoTranslate"
             :translation-locale="translationLocaleModel"
             :show-original="showOriginal"
-            :ai-base-url="settings.baseUrl"
-            :ai-api-key="settings.apiKey"
-            :ai-model-id="selectedAiModelId"
+            :ai-base-url="translationCredentials.baseUrl"
+            :ai-api-key="translationCredentials.apiKey"
+            :ai-model-id="translationCredentials.modelId"
+            :ai-simple-prompt="settings.translationUseIndependent"
             :manual-translate-token="manualTranslateToken"
             :cancel-translate-token="cancelTranslateToken"
             @translation-loading-change="handleTranslationLoadingChange"
