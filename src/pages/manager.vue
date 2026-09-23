@@ -60,6 +60,31 @@ const disableSymlinkInstall = PersistentStore.useValue<boolean>(
     "disableSymlinkInstall",
     false,
 );
+// 详情栏宽：px，持久化；拖拽分隔条时更新，夹紧 288~640。
+const detailPanelWidth = PersistentStore.useValue<number>("managerDetailWidth", 416);
+const detailResizing = ref(false);
+function clampDetailWidth(value: number) {
+    return Math.min(640, Math.max(288, Math.round(value)));
+}
+function startDetailResize(event: MouseEvent) {
+    if (!manager.detailPanelOpen) {
+        return;
+    }
+    event.preventDefault();
+    detailResizing.value = true;
+    const startX = event.clientX;
+    const startWidth = detailPanelWidth.value;
+    const onMove = (moveEvent: MouseEvent) => {
+        detailPanelWidth.value = clampDetailWidth(startWidth - (moveEvent.clientX - startX));
+    };
+    const onUp = () => {
+        detailResizing.value = false;
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+}
 const importLoading = ref(false);
 const actioningIds = ref<number[]>([]);
 const updateChecking = ref(false);
@@ -1009,7 +1034,21 @@ function openGamesPage() {
                         </div>
                     </div>
                 </div>
-                <ModDetailPanel />
+                <!-- 列表/详情分隔条：左右拖拽调整详情栏占比 -->
+                <div
+                    v-if="manager.detailPanelOpen"
+                    class="w-2 shrink-0 cursor-col-resize self-stretch rounded-full transition-colors"
+                    :class="detailResizing ? 'bg-primary/50' : 'bg-transparent hover:bg-primary/30'"
+                    title="拖拽调整详情栏宽度"
+                    @mousedown="startDetailResize"
+                />
+                <div
+                    v-if="manager.detailPanelOpen"
+                    class="min-h-0 shrink-0 self-stretch"
+                    :style="{ width: `${detailPanelWidth}px` }"
+                >
+                    <ModDetailPanel class="h-full" />
+                </div>
             </div>
             <Card v-if="manager.loadError">
                 <CardContent class="flex items-center justify-between gap-4 py-6">

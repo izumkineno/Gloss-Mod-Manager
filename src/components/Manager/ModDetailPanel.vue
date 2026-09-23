@@ -6,6 +6,7 @@ import RichModDesc from "@/components/common/RichModDesc.vue";
 import { fetchNexusModsModMeta } from "@/lib/third-party-mod-api";
 import { useSettings } from "@/stores/settings";
 import { useManager } from "@/stores/manager";
+import { PersistentStore } from "@/lib/persistent-store";
 
 const MANAGER_FALLBACK_COVER = "/imgs/logo.png";
 
@@ -24,6 +25,110 @@ const detailMod = computed(() => {
 // 在线懒加载：老数据本地介绍/封面为空时，现取线上并写回本地。
 // 触发条件：Nexus 来源 + 有 webId + 介绍或封面缺失；失败静默，保持本地展示。
 const settings = useSettings();
+// AI 翻译：复用独立/主翻译通道，对名称+介绍做一句话直译；原文保留，一键切换。
+const detailTranslating = ref(false);
+const detailTranslated = ref<{ modName: string; modDesc: string } | null>(null);
+const detailTranslateError = ref("");
+const detailTranslationLocale = computed(() => settings.language);
+const translationChannel = computed(() => {
+    if (settings.translationUseIndependent) {
+        return {
+            baseUrl: settings.translationBaseUrl,
+            apiKey: settings.translationApiKey,
+            simplePrompt: true as const,
+        };
+    }
+    return {
+        baseUrl: settings.baseUrl,
+        apiKey: settings.apiKey,
+        simplePrompt: false as const,
+    };
+});
+const canTranslateDetail = computed(() => Boolean(translationChannel.value.baseUrl.trim()));
+const showTranslatedDetail = ref(false);
+// 介绍区高：px，持久化；拖拽下边缘手柄调整，夹紧 120~800。
+const descHeight = PersistentStore.useValue<number>("managerDetailDescHeight", 240);
+const descResizing = ref(false);
+function clampDescHeight(value: number) {
+    return Math.min(800, Math.max(120, Math.round(value)));
+}
+function startDescResize(event: MouseEvent) {
+    event.preventDefault();
+    descResizing.value = true;
+    const startY = event.clientY;
+    const startHeight = descHeight.value;
+    const onMove = (moveEvent: MouseEvent) => {
+        descHeight.value = clampDescHeight(startHeight + (moveEvent.clientY - startY));
+    };
+    const onUp = () => {
+        descResizing.value = false;
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+}
+watch(selectedDetailModId, () => {
+    detailTranslated.value = null;
+    detailTranslateError.value = "";
+    showTranslatedDetail.value = false;
+});
+async function translateDetail() {
+    const mod = detailMod.value;
+    if (!mod || detailTranslating.value) {
+        return;
+    }
+    if (showTranslatedDetail.value && detailTranslated.value) {
+        showTranslatedDetail.value = false;
+        return;
+    }
+    if (detailTranslated.value) {
+        showTranslatedDetail.value = true;
+        return;
+    }
+    if (!canTranslateDetail.value) {
+        detailTranslateError.value = "请先在设置页完成 AI 配置。";
+        return;
+    }
+    detailTranslating.value = true;
+    detailTranslateError.value = "";
+    try {
+        const { translateExploreItems } = await import("@/lib/explore-ai-translation");
+        const channel = translationChannel.value;
+        const result = await translateExploreItems({
+            baseUrl: channel.baseUrl,
+            apiKey: channel.apiKey,
+            targetLocale: detailTranslationLocale.value,
+            source: "Manager",
+            items: [
+                {
+                    id: String(mod.id),
+                    title: mod.modName ?? "",
+                    summary: "",
+                    description: descSource.value ?? "",
+                },
+            ],
+            simplePrompt: channel.simplePrompt,
+        });
+        const entry = result[String(mod.id)];
+        if (!entry) {
+            throw new Error("AI 翻译失败。");
+        }
+        detailTranslated.value = {
+            modName: entry.title || mod.modName,
+            modDesc: entry.description || descSource.value,
+        };
+        showTranslatedDetail.value = true;
+    } catch (error: unknown) {
+        console.error("管理页详情 AI 翻译失败");
+        console.error(error);
+        detailTranslateError.value = error instanceof Error ? error.message : "AI 翻译失败。";
+    } finally {
+        detailTranslating.value = false;
+    }
+}
+// 在线懒加载：老数据本地介绍/封面为空时，现取线上并写回本地。
+// 触发条件：Nexus 来源 + 有 webId + 介绍或封面缺失；失败静默，保持本地展示。
 const onlineDesc = ref("");
 const onlineCover = ref("");
 const onlineLoading = ref(false);
@@ -175,14 +280,23 @@ function getCoverSrc(item: IModInfo) {
 </script>
 <template>
     <Card
-        v-if="detailPanelOpen"
-        class="hidden max-h-full w-[26rem] shrink-0 self-stretch overflow-y-auto lg:block"
+        class="hidden max-h-full w-full shrink-0 self-stretch overflow-y-auto lg:block"
     >
         <CardHeader class="flex flex-row items-center justify-between gap-2">
             <CardTitle class="text-base">Mod 详情</CardTitle>
-            <Button variant="ghost" size="icon" @click="closePanel">
-                <PanelRightClose class="h-4 w-4" />
-            </Button>
+            <div class="flex items-center gap-1">
+                <Button
+                    variant="ghost"
+                    size="sm"
+                    :disabled="detailTranslating || !canTranslateDetail"
+                    @click="translateDetail"
+                >
+                    {{ detailTranslating ? "翻译中…" : showTranslatedDetail ? "原文" : "翻译" }}
+                </Button>
+                <Button variant="ghost" size="icon" @click="closePanel">
+                    <PanelRightClose class="h-4 w-4" />
+                </Button>
+            </div>
         </CardHeader>
         <CardContent v-if="detailMod" class="flex flex-col gap-4">
             <!-- 封面 -->
@@ -198,7 +312,7 @@ function getCoverSrc(item: IModInfo) {
             <!-- 名称/版本/作者 -->
             <div class="space-y-1">
                 <div class="font-medium leading-tight">
-                    {{ detailMod.modName }}
+                    {{ showTranslatedDetail && detailTranslated ? detailTranslated.modName : detailMod.modName }}
                 </div>
                 <div class="text-xs text-muted-foreground">
                     {{ detailMod.modVersion || "未知版本" }}
@@ -229,8 +343,20 @@ function getCoverSrc(item: IModInfo) {
                 <div class="text-xs font-medium text-muted-foreground">
                     介绍
                 </div>
-                <RichModDesc :source="descSource" compact />
+                <div class="overflow-y-auto rounded-md" :style="{ height: `${descHeight}px` }">
+                    <RichModDesc :source="showTranslatedDetail && detailTranslated ? detailTranslated.modDesc : descSource" compact />
+                </div>
+                <p v-if="detailTranslateError" class="text-xs text-destructive">{{ detailTranslateError }}</p>
                 <p v-if="onlineLoading" class="text-xs text-muted-foreground">正在加载在线介绍…</p>
+                <!-- 下边缘拖拽手柄：上下拉调整介绍区高度 -->
+                <div
+                    class="flex h-3 cursor-row-resize items-center justify-center rounded-full transition-colors"
+                    :class="descResizing ? 'bg-primary/50' : 'bg-transparent hover:bg-primary/30'"
+                    title="拖拽调整介绍高度"
+                    @mousedown="startDescResize"
+                >
+                    <div class="h-1 w-10 rounded-full bg-muted-foreground/40" />
+                </div>
             </div>
             <!-- 官网 -->
             <Button

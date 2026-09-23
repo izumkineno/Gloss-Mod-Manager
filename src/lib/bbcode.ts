@@ -10,11 +10,13 @@ export function bbcodeToHtml(source: string): string {
     // 先整体转义,再把白名单 BBCode 换回标签 — 未知标签保持转义态,天然防注入。
     let out = escapeHtmlText(source);
 
-    // 换行:纯文本换行与残留 <br />(已被转义)统一成 <br />
+    // 换行:纯文本换行、残留 <br />（已被转义）与非法 [br] 统一成 <br />
     out = out
         .replace(/&lt;br\s*\/?&gt;/gi, "<br />")
+        .replace(/\[br\s*\/?\]/gi, "<br />")
         .replace(/\r\n|\r|\n/g, "<br />");
-
+    // 非法闭合 [/*]：Nexus 列表项常用，先清掉再分项。
+    out = out.replace(/\[\/\*\]/gi, "");
     // url: [url=href]text[/url] 与 [url]href[/url]
     out = out.replace(
         /\[url=([^\]]+)\]([\s\S]*?)\[\/url\]/gi,
@@ -46,8 +48,43 @@ export function bbcodeToHtml(source: string): string {
         (_m, color: string, text: string) =>
             `<font color="${color}">${text}</font>`,
     );
-
-    // size: [size=N]text[/size] -> <font size>, 仅放行 1-7 数字
+    // img: [img]src[/img] 与 [img=src]；仅 http(s) 放行，其余整个标签丢弃防注入。
+    const toSafeImg = (src: string) => {
+        const url = src.trim().replace(/^["']|["']$/g, "").replace(/<br\s*\/?>/gi, "").trim();
+        if (!/^https?:\/\/[^\s"'<>]+$/i.test(url)) {
+            return "";
+        }
+        return `<img src="${url}" loading="lazy" />`;
+    };
+    out = out.replace(/\[img=([^\]]+)\]/gi, (_m, src: string) => toSafeImg(src));
+    out = out.replace(/\[img\]([\s\S]*?)\[\/img\]/gi, (_m, src: string) => toSafeImg(src));
+    for (const align of ["center", "left", "right", "justify"]) {
+        out = out.replace(
+            new RegExp(`\\[${align}\\]([\\s\\S]*?)\\[\\/${align}\\]`, "gi"),
+            `<div style="text-align:${align};">$1</div>`,
+        );
+    }
+    out = out.replace(/\[quote\]([\s\S]*?)\[\/quote\]/gi, "<blockquote>$1</blockquote>");
+    out = out.replace(
+        /\[quote=([^\]]+)\]([\s\S]*?)\[\/quote\]/gi,
+        "<blockquote><p>$1</p>$2</blockquote>",
+    );
+    // list: [list][*]项[/*][/list] -> ul/li；孤立 [*] 按换行分隔的 li 处理。
+    out = out.replace(/\[list(?:=[^\]]+)?\]([\s\S]*?)\[\/list\]/gi, (_m, body: string) => {
+        const items = body
+            .split(/\[\*\]/gi)
+            .map((chunk) => chunk.replace(/\[\/*\]/g, "").trim())
+            .map((chunk) => chunk.replace(/^(<br\s*\/?>\s*)+/i, "").replace(/(\s*<br\s*\/?>)+$/i, ""))
+            .filter(Boolean);
+        if (items.length === 0) {
+            return "";
+        }
+        return `<ul>${items.map((item) => `<li>${item}</li>`).join("")}</ul>`;
+    });
+    out = out.replace(/\[\*\]/gi, "<br />• ");
+    // font: Nexus 源 HTML 里残留的 <font> 已被转义，还原为 span（只保留 color）。
+    out = out.replace(/&lt;font\s+color=(?:"([^"]*)"|'([^']*)'|([^\s&;]+))&gt;/gi, "<span style=\"color:$1$2$3;\">");
+    out = out.replace(/&lt;\/font&gt;/gi, "</span>");
     out = out.replace(
         /\[size=([^\]]+)\]([\s\S]*?)\[\/size\]/gi,
         (_m, size: string, text: string) => {

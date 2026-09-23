@@ -12,7 +12,7 @@ import {
     startManagerModDrag,
 } from "@/lib/manager-internal-drag";
 import { useSettings } from "@/stores/settings";
-
+import { PersistentStore } from "@/lib/persistent-store";
 const MANAGER_FALLBACK_COVER = "/imgs/logo.png";
 
 interface IEditModForm {
@@ -28,6 +28,92 @@ interface IEditModForm {
 const manager = useManager();
 const settings = useSettings();
 const { managerGridEnabled } = storeToRefs(settings);
+// 自定义表头：列显隐 + 顺序，存 PersistentStore；key 稳定，行单元格按可见列渲染。
+type ManagerColumnKey = "index" | "name" | "version" | "type" | "status" | "preview" | "actions";
+const MANAGER_COLUMN_META: { key: ManagerColumnKey; label: string; width?: string }[] = [
+    { key: "index", label: "序号", width: "w-14" },
+    { key: "name", label: "名称" },
+    { key: "version", label: "版本", width: "w-30" },
+    { key: "type", label: "类型", width: "w-30" },
+    { key: "status", label: "状态", width: "w-30" },
+    { key: "preview", label: "预览", width: "w-30" },
+    { key: "actions", label: "操作", width: "w-30" },
+];
+const managerColumns = PersistentStore.useValue<ManagerColumnKey[]>("managerTableColumns", [
+    "index",
+    "name",
+    "version",
+    "type",
+    "status",
+    "preview",
+    "actions",
+]);
+// 旧存量/手改容错：去重 + 踢掉未知 key；不自动补齐，否则隐藏失效。
+// 新列由弹窗未选区加入（MANAGER_COLUMN_META 全集）。
+const visibleColumns = computed(() => {
+    const seen = new Set<ManagerColumnKey>();
+    const ordered: ManagerColumnKey[] = [];
+    for (const key of managerColumns.value) {
+        if (MANAGER_COLUMN_META.some((meta) => meta.key === key) && !seen.has(key)) {
+            seen.add(key);
+            ordered.push(key);
+        }
+    }
+    // 全关兜底：至少显示名称，避免空表。
+    const effective = ordered.length > 0 ? ordered : (["name"] as ManagerColumnKey[]);
+    return effective.map((key) => MANAGER_COLUMN_META.find((meta) => meta.key === key)!);
+});
+const showColumnDialog = ref(false);
+const columnDraft = ref<ManagerColumnKey[]>([]);
+function openColumnDialog() {
+    columnDraft.value = [...managerColumns.value];
+}
+function moveColumnDraft(index: number, delta: -1 | 1) {
+    const next = [...columnDraft.value];
+    const target = index + delta;
+    if (target < 0 || target >= next.length) {
+        return;
+    }
+    [next[index], next[target]] = [next[target], next[index]];
+    columnDraft.value = next;
+}
+// 弹窗内拖拽排序：Tauri webview 对 HTML5 DnD 支持残缺，改走项目既有 pointer 方案
+//（表格 Mod 拖拽同理）：手柄/行 pointerdown 记录源序号，pointerenter 实时插入移动。
+const dragColumnIndex = ref<number | null>(null);
+const columnPointerDown = ref(false);
+function onColumnDraftPointerDown(event: PointerEvent, index: number) {
+    if (event.button !== 0) {
+        return;
+    }
+    columnPointerDown.value = true;
+    dragColumnIndex.value = index;
+    window.addEventListener("pointerup", onColumnDraftPointerUp, { once: true });
+}
+function onColumnDraftPointerEnter(index: number) {
+    const from = dragColumnIndex.value;
+    if (!columnPointerDown.value || from === null || from === index) {
+        return;
+    }
+    const next = [...columnDraft.value];
+    const [moved] = next.splice(from, 1);
+    next.splice(index, 0, moved);
+    columnDraft.value = next;
+    dragColumnIndex.value = index;
+}
+function onColumnDraftPointerUp() {
+    columnPointerDown.value = false;
+    dragColumnIndex.value = null;
+}
+function toggleColumnDraft(key: ManagerColumnKey) {
+    columnDraft.value = columnDraft.value.includes(key)
+        ? columnDraft.value.filter((item) => item !== key)
+        : [...columnDraft.value, key];
+}
+function confirmColumnDialog() {
+    // 全关时回退默认，避免空表。
+    managerColumns.value = columnDraft.value.length > 0 ? [...columnDraft.value] : ["index", "name"];
+    showColumnDialog.value = false;
+}
 const showEditDialog = ref(false);
 const showDeleteDialog = ref(false);
 const showSortDialog = ref(false);
@@ -730,13 +816,15 @@ watch(showSortDialog, (opened) => {
             </div>
             <span class="shrink-0">共 {{ totalItems }} 个，第 {{ currentPage }} / {{ totalPages }} 页</span>
             <div class="flex items-center gap-1.5">
+                <Button
+                    v-if="!managerGridEnabled"
+                    variant="outline"
+                    size="sm"
+                    @click="openColumnDialog(); showColumnDialog = true"
+                >
+                    表头
+                </Button>
                 <Button variant="outline" size="sm" :disabled="currentPage <= 1" @click="goPage(1)">首页</Button>
-                <Button variant="outline" size="sm" :disabled="currentPage <= 1"
-                    @click="goPage(currentPage - 1)">上一页</Button>
-                <Button variant="outline" size="sm" :disabled="currentPage >= totalPages"
-                    @click="goPage(currentPage + 1)">下一页</Button>
-                <Button variant="outline" size="sm" :disabled="currentPage >= totalPages"
-                    @click="goPage(totalPages)">末页</Button>
             </div>
         </div>
         <ContextMenu>
@@ -748,13 +836,13 @@ watch(showSortDialog, (opened) => {
                                 <TableHead v-if="manager.selectionMode" class="w-12">
                                     选择
                                 </TableHead>
-                                <TableHead class="w-14">序号</TableHead>
-                                <TableHead>名称</TableHead>
-                                <TableHead class="w-30">版本</TableHead>
-                                <TableHead class="w-30">类型</TableHead>
-                                <TableHead class="w-30">状态</TableHead>
-                                <TableHead class="w-30">预览</TableHead>
-                                <TableHead class="w-30">操作</TableHead>
+                                <TableHead
+                                    v-for="column in visibleColumns"
+                                    :key="column.key"
+                                    :class="column.width"
+                                >
+                                    {{ column.label }}
+                                </TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -767,9 +855,10 @@ watch(showSortDialog, (opened) => {
                                     <input type="checkbox" class="h-4 w-4 accent-primary" :checked="manager.selectionIds.includes(item.id)
                                         " @change="handleSelectionChange($event, item.id)" />
                                 </TableCell>
-                                <TableCell class="text-muted-foreground tabular-nums">{{ (currentPage - 1) * pageSize +
+                                <template v-for="column in visibleColumns" :key="column.key">
+                                <TableCell v-if="column.key === 'index'" class="text-muted-foreground tabular-nums">{{ (currentPage - 1) * pageSize +
                                     index + 1 }}</TableCell>
-                                <TableCell>
+                                <TableCell v-if="column.key === 'name'">
                                     <div class="flex items-center gap-2">
                                         <span v-if="!manager.selectionMode"
                                             class="inline-flex cursor-grab text-muted-foreground active:cursor-grabbing"
@@ -792,8 +881,8 @@ watch(showSortDialog, (opened) => {
                                         </Badge>
                                     </div>
                                 </TableCell>
-                                <TableCell>{{ item.modVersion }}</TableCell>
-                                <TableCell>
+                                <TableCell v-if="column.key === 'version'">{{ item.modVersion }}</TableCell>
+                                <TableCell v-if="column.key === 'type'">
                                     <Select :model-value="item.modType" :disabled="item.isInstalled || isOperating(item.id)
                                         " @update:model-value="
                                                 updateModType(item, $event)
@@ -809,7 +898,7 @@ watch(showSortDialog, (opened) => {
                                         </SelectContent>
                                     </Select>
                                 </TableCell>
-                                <TableCell>
+                                <TableCell v-if="column.key === 'status'">
                                     <div class="flex items-center gap-2">
                                         <Switch :id="`is-installed-${item.id}`" :model-value="item.isInstalled"
                                             :disabled="isOperating(item.id)" @update:model-value="
@@ -826,7 +915,7 @@ watch(showSortDialog, (opened) => {
                                         </Label>
                                     </div>
                                 </TableCell>
-                                <TableCell>
+                                <TableCell v-if="column.key === 'preview'">
                                     <HoverCard>
                                         <HoverCardTrigger as-child>
                                             <Button variant="ghost" size="icon">
@@ -840,7 +929,7 @@ watch(showSortDialog, (opened) => {
                                         </HoverCardContent>
                                     </HoverCard>
                                 </TableCell>
-                                <TableCell>
+                                <TableCell v-if="column.key === 'actions'">
                                     <DropdownMenu>
                                         <DropdownMenuTrigger as-child>
                                             <Button variant="ghost" size="icon" :disabled="deletingModId === item.id ||
@@ -905,6 +994,7 @@ watch(showSortDialog, (opened) => {
                                         </DropdownMenuContent>
                                     </DropdownMenu>
                                 </TableCell>
+                                </template>
                             </TableRow>
                         </TableBody>
                     </Table>
@@ -1257,6 +1347,61 @@ watch(showSortDialog, (opened) => {
                     " @click="confirmSortMove">
                     确认调整
                 </Button>
+            </DialogFooter>
+        </DialogContent>
+    </Dialog>
+    <Dialog v-model:open="showColumnDialog" modal>
+        <DialogContent class="sm:max-w-md">
+            <DialogHeader>
+                <DialogTitle>自定义表头</DialogTitle>
+                <DialogDescription>
+                    勾选显示的列，可调整顺序；至少保留一列。
+                </DialogDescription>
+            </DialogHeader>
+            <div class="grid gap-1 py-2">
+                <!-- 已选列：按当前顺序，可上下移动 -->
+                <div
+                    v-for="(key, index) in columnDraft"
+                    :key="`selected-${key}`"
+                    class="flex items-center gap-2 rounded-md bg-muted/40 px-2 py-1.5"
+                    :class="dragColumnIndex === index ? 'opacity-50 ring-1 ring-primary' : ''"
+                    @pointerdown="onColumnDraftPointerDown($event, index)"
+                    @pointerenter="onColumnDraftPointerEnter(index)"
+                >
+                    <span
+                        class="inline-flex cursor-grab touch-none select-none text-muted-foreground active:cursor-grabbing"
+                        title="按住拖动排序"
+                    >
+                        <IconGripVertical class="h-4 w-4" />
+                    </span>
+                    <span class="min-w-0 flex-1 text-sm">
+                        {{ MANAGER_COLUMN_META.find((meta) => meta.key === key)!.label }}
+                    </span>
+                    <Button variant="ghost" size="icon" class="h-6 w-6" :disabled="index === 0" @click="moveColumnDraft(index, -1)">
+                        ↑
+                    </Button>
+                    <Button variant="ghost" size="icon" class="h-6 w-6" :disabled="index === columnDraft.length - 1" @click="moveColumnDraft(index, 1)">
+                        ↓
+                    </Button>
+                    <Button variant="ghost" size="icon" class="h-6 w-6" @click="toggleColumnDraft(key)">
+                        ×
+                    </Button>
+                </div>
+                <!-- 未选列：点加号加入末尾 -->
+                <div
+                    v-for="meta in MANAGER_COLUMN_META.filter((meta) => !columnDraft.includes(meta.key))"
+                    :key="`unselected-${meta.key}`"
+                    class="flex items-center gap-2 rounded-md px-2 py-1.5 text-muted-foreground hover:bg-muted/60"
+                >
+                    <span class="min-w-0 flex-1 text-sm">{{ meta.label }}</span>
+                    <Button variant="ghost" size="icon" class="h-6 w-6" @click="toggleColumnDraft(meta.key)">
+                        +
+                    </Button>
+                </div>
+            </div>
+            <DialogFooter>
+                <Button variant="outline" @click="showColumnDialog = false">取消</Button>
+                <Button @click="confirmColumnDialog">确定</Button>
             </DialogFooter>
         </DialogContent>
     </Dialog>
