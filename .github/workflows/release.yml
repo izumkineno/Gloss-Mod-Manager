@@ -86,6 +86,9 @@ jobs:
 
             - name: Install frontend dependencies
               run: bun install --frozen-lockfile
+
+            - name: Verify release version
+              shell: bash
               run: |
                   node <<'NODE'
                   const fs = require("node:fs");
